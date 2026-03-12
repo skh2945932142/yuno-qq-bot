@@ -3,7 +3,13 @@ import axios from 'axios';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { withRetry } from './retry.js';
-import { extractTopics, inferIntent, inferSentiment, safeJsonParse, stripCqCodes } from './utils.js';
+import {
+  extractTopics,
+  inferIntent,
+  inferSentiment,
+  safeJsonParse,
+  stripCqCodes,
+} from './utils.js';
 
 const client = new OpenAI({
   apiKey: config.siliconflowApiKey,
@@ -11,14 +17,19 @@ const client = new OpenAI({
 });
 
 async function createChatCompletion(messages, options = {}) {
+  const payload = {
+    model: 'Pro/MiniMax/MiniMax-Text-01',
+    messages,
+    temperature: options.temperature ?? 0.7,
+    max_tokens: options.maxTokens ?? 256,
+  };
+
+  if (options.responseFormat) {
+    payload.response_format = options.responseFormat;
+  }
+
   return withRetry(
-    () => client.chat.completions.create({
-      model: 'Pro/MiniMax/MiniMax-Text-01',
-      messages,
-      temperature: options.temperature ?? 0.7,
-      max_tokens: options.maxTokens ?? 256,
-      response_format: options.responseFormat,
-    }),
+    () => client.chat.completions.create(payload),
     {
       retries: config.retryAttempts,
       delayMs: config.retryDelayMs,
@@ -29,13 +40,23 @@ async function createChatCompletion(messages, options = {}) {
   );
 }
 
-export async function chat(messages, systemPrompt) {
-  const response = await createChatCompletion([
+export async function chat(messages, systemPrompt, userMessage = null) {
+  const conversation = [
     { role: 'system', content: systemPrompt },
     ...messages.slice(-20),
-  ]);
+  ];
 
-  return response.choices[0]?.message?.content?.trim() || '……';
+  if (userMessage) {
+    conversation.push({ role: 'user', content: userMessage });
+  } else if (conversation.length === 1) {
+    conversation.push({
+      role: 'user',
+      content: '请基于上面的设定直接生成一条自然、简短的回复。',
+    });
+  }
+
+  const response = await createChatCompletion(conversation);
+  return response.choices[0]?.message?.content?.trim() || '...';
 }
 
 function fallbackAnalysis(text) {
@@ -64,8 +85,7 @@ export async function analyzeMessage(text, context = {}) {
   }
 
   const prompt = [
-    'You are a classifier for a roleplay QQ bot.',
-    'Return strict JSON only.',
+    'Return JSON only.',
     'Fields: intent, sentiment, relevance, confidence, shouldReply, reason, topics, replyStyle.',
     'intent in [help, query, social, challenge, chat, identity, ignore].',
     'sentiment in [positive, neutral, negative].',
@@ -83,29 +103,43 @@ export async function analyzeMessage(text, context = {}) {
 
   try {
     const response = await createChatCompletion([
-      { role: 'system', content: prompt },
+      {
+        role: 'system',
+        content: 'You are a classifier for a QQ bot. Output compact JSON only.',
+      },
+      {
+        role: 'user',
+        content: prompt,
+      },
     ], {
       temperature: 0.2,
       maxTokens: 180,
-      responseFormat: { type: 'json_object' },
     });
 
     const raw = response.choices[0]?.message?.content || '{}';
     const parsed = safeJsonParse(raw);
-    if (!parsed) return fallbackAnalysis(text);
+    if (!parsed) {
+      return fallbackAnalysis(text);
+    }
 
     return {
       intent: parsed.intent || inferIntent(sanitized),
       sentiment: parsed.sentiment || inferSentiment(sanitized),
       relevance: Number(parsed.relevance) || 0.4,
       confidence: Number(parsed.confidence) || 0.5,
-      shouldReply: Boolean(parsed.shouldReply),
+      shouldReply: typeof parsed.shouldReply === 'boolean'
+        ? parsed.shouldReply
+        : Number(parsed.relevance) >= 0.45,
       reason: parsed.reason || 'llm-analysis',
       topics: Array.isArray(parsed.topics) ? parsed.topics.slice(0, 5) : extractTopics(sanitized),
       replyStyle: parsed.replyStyle || 'calm',
     };
   } catch (error) {
-    logger.warn('model', 'Message analysis fell back to heuristics', { message: error.message });
+    logger.warn('model', 'Message analysis fell back to heuristics', {
+      message: error.message,
+      status: error.status || error.response?.status,
+      code: error.code,
+    });
     return fallbackAnalysis(text);
   }
 }

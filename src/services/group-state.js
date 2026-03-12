@@ -13,7 +13,7 @@ export async function ensureGroupState(groupId) {
   return GroupState.findOneAndUpdate(
     { groupId },
     { $setOnInsert: { groupId } },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
 }
 
@@ -76,7 +76,7 @@ export async function updateGroupStateFromAnalysis({
     if (topicSet.length >= 5) break;
   }
 
-  const state = await GroupState.findOneAndUpdate(
+  return GroupState.findOneAndUpdate(
     { groupId },
     {
       mood: nextMood,
@@ -87,17 +87,15 @@ export async function updateGroupStateFromAnalysis({
       lastActiveWindowAt: nextActivity >= 60 ? now : existing.lastActiveWindowAt,
       lastInteractionSummary: summary || existing.lastInteractionSummary,
     },
-    { new: true, upsert: true }
+    { upsert: true, returnDocument: 'after' }
   );
-
-  return state;
 }
 
 export async function markProactiveSent(groupId, now = new Date()) {
   return GroupState.findOneAndUpdate(
     { groupId },
     { lastProactiveAt: now },
-    { new: true, upsert: true }
+    { upsert: true, returnDocument: 'after' }
   );
 }
 
@@ -107,8 +105,12 @@ export function planScheduledInteraction({ groupState, recentEvents, dateContext
   }
 
   const now = new Date(dateContext);
-  const msSinceLastMessage = groupState.lastMessageAt ? now - new Date(groupState.lastMessageAt) : Number.MAX_SAFE_INTEGER;
-  const msSinceLastProactive = groupState.lastProactiveAt ? now - new Date(groupState.lastProactiveAt) : Number.MAX_SAFE_INTEGER;
+  const msSinceLastMessage = groupState.lastMessageAt
+    ? now - new Date(groupState.lastMessageAt)
+    : Number.MAX_SAFE_INTEGER;
+  const msSinceLastProactive = groupState.lastProactiveAt
+    ? now - new Date(groupState.lastProactiveAt)
+    : Number.MAX_SAFE_INTEGER;
 
   if (msSinceLastProactive < 6 * 60 * 60 * 1000) {
     return { shouldSend: false, reason: 'recent-proactive' };
@@ -129,14 +131,14 @@ export function planScheduledInteraction({ groupState, recentEvents, dateContext
     topic = 'tension';
     tone = 'sharp';
     textHint = topEvent
-      ? `围绕“${topEvent.summary}”发起带压迫感但不失控的追问。`
-      : '提醒大家别太乱来，并点名让群里给出近况。';
+      ? `围绕“${topEvent.summary}”发起带压迫感但不过火的追问。`
+      : '提醒大家别太乱来，并点名让群里交代近况。';
   } else if (groupState.activityLevel < 30) {
     topic = 'ice-breaker';
     tone = 'affectionate';
     textHint = isWeekend
       ? '周末氛围下抛一个轻松但有角色感的话题。'
-      : '群里太安静时，主动挑起一个让人愿意接话的轻量话题。';
+      : '群里太安静时，主动挑起一个容易接话的轻量话题。';
   } else if (topEvent) {
     topic = 'follow-up';
     tone = 'observant';

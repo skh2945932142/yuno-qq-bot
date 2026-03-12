@@ -27,7 +27,11 @@ async function runScheduledInteraction(groupId) {
       return;
     }
 
-    const text = await chat([], buildScheduledPrompt({ groupState, recentEvents, plan }));
+    const text = await chat(
+      [],
+      buildScheduledPrompt({ groupState, recentEvents, plan }),
+      '请现在发送一条适合当前群氛围的主动互动消息。'
+    );
     await sendText(groupId, text);
     await markProactiveSent(groupId);
     logger.info('scheduler', 'Proactive group message sent', { groupId, topic: plan.topic, tone: plan.tone });

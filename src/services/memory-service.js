@@ -4,12 +4,15 @@ import { clamp, extractPreferences, uniqueCompact } from '../utils.js';
 
 function buildMemorySummary(relation) {
   const segments = [];
+
   if (relation.preferences?.length) {
     segments.push(`偏好:${relation.preferences.join('、')}`);
   }
+
   if (relation.favoriteTopics?.length) {
     segments.push(`常聊:${relation.favoriteTopics.join('、')}`);
   }
+
   segments.push(`活跃度:${Math.round(relation.activeScore || 0)}`);
   return segments.join('；');
 }
@@ -25,7 +28,7 @@ export async function ensureRelation(groupId, userId) {
         affection: baseAffection,
       },
     },
-    { new: true, upsert: true }
+    { upsert: true, returnDocument: 'after' }
   );
 }
 
@@ -38,7 +41,7 @@ export async function ensureUserState(groupId, userId) {
         userId,
       },
     },
-    { new: true, upsert: true }
+    { upsert: true, returnDocument: 'after' }
   );
 }
 
@@ -51,7 +54,7 @@ export async function saveHistory(groupId, userId, messages) {
   return History.findOneAndUpdate(
     { groupId, userId },
     { messages: messages.slice(-40) },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
 }
 

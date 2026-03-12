@@ -127,7 +127,8 @@ export async function handleMessage(event, precomputed = null) {
 
   const replyText = await chat(
     history.map((item) => ({ role: item.role, content: item.content })),
-    systemPrompt
+    systemPrompt,
+    stripCqCodes(text)
   );
 
   const nextMessages = [
