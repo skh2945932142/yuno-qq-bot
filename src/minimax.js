@@ -18,7 +18,7 @@ const client = new OpenAI({
 
 async function createChatCompletion(messages, options = {}) {
   const payload = {
-    model: 'Pro/MiniMax/MiniMax-Text-01',
+    model: 'Pro/MiniMaxAI/MiniMax-M2.5',
     messages,
     temperature: options.temperature ?? 0.7,
     max_tokens: options.maxTokens ?? 256,
