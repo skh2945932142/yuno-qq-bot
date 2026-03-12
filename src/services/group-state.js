@@ -3,6 +3,29 @@ import { logger } from '../logger.js';
 import { GroupEvent, GroupState } from '../models.js';
 import { clamp } from '../utils.js';
 
+const GROUP_STATE_CACHE_TTL_MS = 15_000;
+const RECENT_EVENTS_CACHE_TTL_MS = 10_000;
+const groupStateCache = new Map();
+const recentEventsCache = new Map();
+
+function getCached(map, key) {
+  const cached = map.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt < Date.now()) {
+    map.delete(key);
+    return null;
+  }
+  return cached.value;
+}
+
+function setCached(map, key, value, ttlMs) {
+  map.set(key, {
+    value,
+    expiresAt: Date.now() + ttlMs,
+  });
+  return value;
+}
+
 function sentimentToMood(sentiment, currentMood) {
   if (sentiment === 'negative') return currentMood === 'ANGRY' ? 'ANGRY' : 'WARN';
   if (sentiment === 'positive') return currentMood === 'PROTECTIVE' ? 'PROTECTIVE' : 'AFFECTIONATE';
@@ -10,15 +33,28 @@ function sentimentToMood(sentiment, currentMood) {
 }
 
 export async function ensureGroupState(groupId) {
-  return GroupState.findOneAndUpdate(
+  const cached = getCached(groupStateCache, groupId);
+  if (cached) {
+    return cached;
+  }
+
+  const state = await GroupState.findOneAndUpdate(
     { groupId },
     { $setOnInsert: { groupId } },
     { upsert: true, returnDocument: 'after' }
   );
+  return setCached(groupStateCache, groupId, state, GROUP_STATE_CACHE_TTL_MS);
 }
 
 export async function getRecentEvents(groupId, limit = 5) {
-  return GroupEvent.find({ groupId }).sort({ createdAt: -1 }).limit(limit);
+  const cacheKey = `${groupId}:${limit}`;
+  const cached = getCached(recentEventsCache, cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const events = await GroupEvent.find({ groupId }).sort({ createdAt: -1 }).limit(limit);
+  return setCached(recentEventsCache, cacheKey, events, RECENT_EVENTS_CACHE_TTL_MS);
 }
 
 export async function recordGroupEvent({
@@ -51,6 +87,7 @@ export async function recordGroupEvent({
     await GroupEvent.deleteMany({ _id: { $in: staleEvents.map((item) => item._id) } });
   }
 
+  recentEventsCache.clear();
   return event;
 }
 
@@ -76,7 +113,7 @@ export async function updateGroupStateFromAnalysis({
     if (topicSet.length >= 5) break;
   }
 
-  return GroupState.findOneAndUpdate(
+  const state = await GroupState.findOneAndUpdate(
     { groupId },
     {
       mood: nextMood,
@@ -89,14 +126,16 @@ export async function updateGroupStateFromAnalysis({
     },
     { upsert: true, returnDocument: 'after' }
   );
+  return setCached(groupStateCache, groupId, state, GROUP_STATE_CACHE_TTL_MS);
 }
 
 export async function markProactiveSent(groupId, now = new Date()) {
-  return GroupState.findOneAndUpdate(
+  const state = await GroupState.findOneAndUpdate(
     { groupId },
     { lastProactiveAt: now },
     { upsert: true, returnDocument: 'after' }
   );
+  return setCached(groupStateCache, groupId, state, GROUP_STATE_CACHE_TTL_MS);
 }
 
 export function planScheduledInteraction({ groupState, recentEvents, dateContext = new Date() }) {

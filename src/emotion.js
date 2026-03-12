@@ -32,11 +32,11 @@ function summarizeIncomingMessage(username, text) {
 async function buildContext(event) {
   const groupId = String(event.group_id);
   const userId = String(event.user_id);
-  const relation = await ensureRelation(groupId, userId);
-  const userState = await ensureUserState(groupId, userId);
-  const groupState = canUseAdvancedGroupFeatures(groupId)
-    ? await ensureGroupState(groupId)
-    : null;
+  const [relation, userState, groupState] = await Promise.all([
+    ensureRelation(groupId, userId),
+    ensureUserState(groupId, userId),
+    canUseAdvancedGroupFeatures(groupId) ? ensureGroupState(groupId) : Promise.resolve(null),
+  ]);
 
   return {
     groupId,
@@ -56,6 +56,7 @@ export async function shouldRespond(event) {
 }
 
 export async function handleMessage(event, precomputed = null) {
+  const startedAt = Date.now();
   const context = precomputed || await shouldRespond(event);
   const { groupId, userId, relation, userState } = context;
   const username = event.sender?.nickname || event.sender?.card || '陌生人';
@@ -72,29 +73,12 @@ export async function handleMessage(event, precomputed = null) {
     return null;
   }
 
-  const summary = summarizeIncomingMessage(username, text);
-  if (summary) {
-    await recordGroupEvent({
-      groupId,
-      userId,
-      username,
-      summary,
-      sentiment: analysis.sentiment,
-      topics: analysis.topics,
-    });
-  }
-
-  const groupState = context.isAdvanced
-    ? await updateGroupStateFromAnalysis({ groupId, analysis, summary })
-    : context.groupState;
-  const recentEvents = context.isAdvanced ? await getRecentEvents(groupId, 5) : [];
-
   const command = parseCommand(text);
   if (command) {
     const commandText = buildCommandResponse(command, {
       relation,
       userState,
-      groupState,
+      groupState: context.groupState,
     });
 
     if (commandText) {
@@ -103,11 +87,15 @@ export async function handleMessage(event, precomputed = null) {
     }
   }
 
-  const history = await getHistory(groupId, userId);
+  const summary = summarizeIncomingMessage(username, text);
+  const [history, recentEvents] = await Promise.all([
+    getHistory(groupId, userId),
+    context.isAdvanced ? getRecentEvents(groupId, 5) : Promise.resolve([]),
+  ]);
   const emotionResult = resolveEmotion({
     relation,
     userState,
-    groupState,
+    groupState: context.groupState,
     messageAnalysis: analysis,
     isAdmin: context.isAdmin,
   });
@@ -115,7 +103,7 @@ export async function handleMessage(event, precomputed = null) {
   const systemPrompt = buildReplyContext({
     relation,
     userState,
-    groupState,
+    groupState: context.groupState,
     history,
     recentEvents,
     username,
@@ -137,11 +125,49 @@ export async function handleMessage(event, precomputed = null) {
     { role: 'assistant', content: replyText },
   ].slice(-40);
 
-  await saveHistory(groupId, userId, nextMessages);
-  await updateRelationProfile(relation, { text, analysis });
-  await updateUserState(userState, emotionResult, analysis);
-
   await sendText(groupId, replyText);
+
+  const postWriteTasks = [
+    saveHistory(groupId, userId, nextMessages),
+    updateRelationProfile(relation, { text, analysis }),
+    updateUserState(userState, emotionResult, analysis),
+  ];
+
+  if (summary) {
+    postWriteTasks.push(recordGroupEvent({
+      groupId,
+      userId,
+      username,
+      summary,
+      sentiment: analysis.sentiment,
+      topics: analysis.topics,
+    }));
+  }
+
+  if (context.isAdvanced) {
+    postWriteTasks.push(updateGroupStateFromAnalysis({
+      groupId,
+      analysis,
+      summary,
+    }));
+  }
+
+  const postWriteResults = await Promise.allSettled(postWriteTasks);
+  const postWriteErrors = postWriteResults.filter((item) => item.status === 'rejected');
+  if (postWriteErrors.length > 0) {
+    logger.warn('memory', 'Post-reply state updates partially failed', {
+      groupId,
+      userId,
+      failed: postWriteErrors.length,
+    });
+  }
+
+  logger.info('performance', 'Reply handled', {
+    groupId,
+    userId,
+    elapsedMs: Date.now() - startedAt,
+    usedAdvancedAnalysis: analysis.reason === 'llm-analysis',
+  });
 
   if (config.enableVoice && config.yunoVoiceUri && shouldSendVoiceForEmotion(emotionResult)) {
     try {

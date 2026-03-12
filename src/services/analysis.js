@@ -2,6 +2,30 @@ import { config, isAdvancedGroup } from '../config.js';
 import { analyzeMessage } from '../minimax.js';
 import { clamp, inferIntent, inferSentiment, stripCqCodes } from '../utils.js';
 
+function buildHeuristicResult({
+  shouldRespond,
+  confidence,
+  intent,
+  sentiment,
+  relevance,
+  reason,
+  ruleSignals,
+  replyStyle,
+  topics = [],
+}) {
+  return {
+    shouldRespond,
+    confidence,
+    intent,
+    sentiment,
+    relevance,
+    reason,
+    topics,
+    ruleSignals,
+    replyStyle,
+  };
+}
+
 function buildRuleSignals(event, context) {
   const message = event.raw_message || '';
   const normalized = stripCqCodes(message);
@@ -93,20 +117,69 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
 
   if (!isAdvancedGroup(groupId)) {
     const shouldRespond = rule.directMention || rule.nameMention || rule.score >= 0.55;
-    return {
+    return buildHeuristicResult({
       shouldRespond,
       confidence: rule.score,
       intent,
       sentiment,
       relevance: shouldRespond ? 0.7 : 0.25,
       reason: shouldRespond ? 'basic-rule-pass' : 'basic-rule-skip',
-      topics: context.topics || [],
       ruleSignals: rule.signals,
       replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
-    };
+      topics: context.topics || [],
+    });
   }
 
-  const needsDeepAnalysis = rule.score >= 0.18 || context.relation?.affection >= 75;
+  const strongRulePass = rule.directMention
+    || rule.keyword
+    || (rule.nameMention && (rule.question || rule.score >= 0.4))
+    || (rule.question && rule.score >= 0.45);
+
+  if (strongRulePass) {
+    return buildHeuristicResult({
+      shouldRespond: true,
+      confidence: clamp(Math.max(rule.score, 0.72), 0, 1),
+      intent,
+      sentiment,
+      relevance: clamp(Math.max(rule.score, 0.75), 0, 1),
+      reason: 'advanced-strong-rule-pass',
+      ruleSignals: rule.signals,
+      replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
+    });
+  }
+
+  const highAffinityShortcut = (context.relation?.affection || 0) >= 85
+    && (rule.nameMention || rule.question || rule.score >= 0.25);
+  if (highAffinityShortcut) {
+    return buildHeuristicResult({
+      shouldRespond: true,
+      confidence: clamp(Math.max(rule.score, 0.66), 0, 1),
+      intent,
+      sentiment,
+      relevance: 0.72,
+      reason: 'advanced-high-affection-pass',
+      ruleSignals: rule.signals,
+      replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
+    });
+  }
+
+  const ambiguousRuleWindow = rule.score >= 0.18 && rule.score < 0.55;
+  const affectionateAmbiguity = (context.relation?.affection || 0) >= 75 && rule.score >= 0.1;
+  const needsDeepAnalysis = ambiguousRuleWindow || affectionateAmbiguity;
+
+  if (!needsDeepAnalysis) {
+    return buildHeuristicResult({
+      shouldRespond: false,
+      confidence: clamp(rule.score, 0, 1),
+      intent,
+      sentiment,
+      relevance: 0.2,
+      reason: 'advanced-rule-fast-skip',
+      ruleSignals: rule.signals,
+      replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
+    });
+  }
+
   const messageAnalyzer = options.messageAnalyzer || analyzeMessage;
   const llm = needsDeepAnalysis
     ? await messageAnalyzer(message, {
@@ -134,7 +207,7 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
     || (llm.shouldReply && finalConfidence >= 0.55 && finalRelevance >= 0.45)
     || (context.relation?.affection >= 85 && finalRelevance >= 0.55);
 
-  return {
+  return buildHeuristicResult({
     shouldRespond,
     confidence: finalConfidence,
     intent: llm.intent || intent,
@@ -144,5 +217,5 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
     topics: llm.topics || [],
     ruleSignals: rule.signals,
     replyStyle: llm.replyStyle || 'calm',
-  };
+  });
 }

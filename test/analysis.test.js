@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeTrigger } from '../src/services/analysis.js';
+import { config } from '../src/config.js';
 
 function createEvent(overrides = {}) {
   return {
@@ -35,4 +36,34 @@ test('analyzeTrigger suppresses weak chatter in basic mode', async () => {
 
   assert.equal(result.shouldRespond, false);
   assert.equal(result.reason, 'basic-rule-skip');
+});
+
+test('analyzeTrigger skips llm analysis for strong advanced-group signals', async () => {
+  let analyzerCalls = 0;
+
+  const result = await analyzeTrigger(createEvent({
+    group_id: config.targetGroupId,
+    raw_message: '[CQ:at,qq=20002] 帮我看看状态',
+  }), {
+    relation: { affection: 40, activeScore: 15 },
+    groupState: { activityLevel: 20 },
+  }, {
+    messageAnalyzer: async () => {
+      analyzerCalls += 1;
+      return {
+        intent: 'help',
+        sentiment: 'neutral',
+        relevance: 1,
+        confidence: 1,
+        shouldReply: true,
+        reason: 'llm-analysis',
+        topics: [],
+        replyStyle: 'calm',
+      };
+    },
+  });
+
+  assert.equal(result.shouldRespond, true);
+  assert.equal(result.reason, 'advanced-strong-rule-pass');
+  assert.equal(analyzerCalls, 0);
 });
