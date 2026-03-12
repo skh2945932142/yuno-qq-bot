@@ -70,7 +70,7 @@ function buildRuleSignals(event, context) {
   };
 }
 
-export async function analyzeTrigger(event, context = {}) {
+export async function analyzeTrigger(event, context = {}, options = {}) {
   const groupId = String(event.group_id || '');
   const message = event.raw_message || '';
   const rule = buildRuleSignals(event, context);
@@ -107,8 +107,9 @@ export async function analyzeTrigger(event, context = {}) {
   }
 
   const needsDeepAnalysis = rule.score >= 0.18 || context.relation?.affection >= 75;
+  const messageAnalyzer = options.messageAnalyzer || analyzeMessage;
   const llm = needsDeepAnalysis
-    ? await analyzeMessage(message, {
+    ? await messageAnalyzer(message, {
         affection: context.relation?.affection,
         activeScore: context.relation?.activeScore,
         groupMood: context.groupState?.mood,
