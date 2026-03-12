@@ -5,7 +5,7 @@ dotenv.config();
 const NAPCAT = process.env.NAPCAT_API;
 const TOKEN  = process.env.NAPCAT_TOKEN;
 
-const headers = TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {};
+const headers = TOKEN ? { Authorization: TOKEN } : {};
 
 export async function sendText(groupId, text) {
   await axios.post(`${NAPCAT}/send_group_msg`, {
