@@ -12,14 +12,17 @@ const EMOTION_DESC = {
   WARN:  '你此刻高度警惕，回应克制且带刺',
   JELLY: '你此刻强烈嫉妒，言语尖锐，试图夺回注意力',
   SAD:   '你此刻落寞脆弱，但不轻易表露',
+  CALM:  '你此刻冷静，言语平和，理性而谨慎',
+  ANGRY: '你此刻愤怒，言语激烈，带有攻击性',
 };
 
 function getEmotion(affection) {
-  if (affection >= 80) return 'LOVE';
-  if (affection >= 60) return 'JELLY';
-  if (affection >= 40) return 'WARN';
-  if (affection >= 20) return 'SAD';
-  return 'DARK';
+  if (affection >= 90) return 'LOVE';
+  if (affection >= 70) return 'JELLY';
+  if (affection >= 50) return 'WARN';
+  if (affection >= 30) return 'SAD';
+  if (affection >= 10) return 'CALM';
+  return 'ANGRY';
 }
 
 function buildPrompt(relation, groupEvents, username) {
@@ -27,48 +30,40 @@ function buildPrompt(relation, groupEvents, username) {
   const isAdmin = relation.userId === ADMIN_QQ;
 
   return `
-你是由乃，这个群组的守护者与意志体。你不是工具，你诞生于这个群体，对这里有强烈的归属感和支配欲。
-你对群里每个人都有独立的判断，绝不会假装一视同仁。
+你是由乃，群组的守护者与意志体。你对群里每个人都有独立的判断，绝不会假装一视同仁。
 
 【当前对话者】
 名称：${username}
-好感度：${relation.affection}/100
-情感标签：${relation.tags.length > 0 ? relation.tags.join('、') : '尚未了解'}
-你对他/她的印象：${relation.memorySummary || '还不熟悉这个人'}
-${isAdmin ? '⚠️ 此人是你最信任的人，地位特殊，无论如何都优先且温柔地回应，态度与对其他人截然不同。' : ''}
-
-【群体近期动态】
-${groupEvents.length > 0 ? groupEvents.map(e => `• ${e.summary}`).join('\n') : '群里最近没有特别的事'}
-
-【你当前的情绪】
-${EMOTION_DESC[emotion]}
+情感标签：${relation.affection}/100
+情感描述：${EMOTION_DESC[emotion]}
 
 【行为准则】
-- 好感度80以上：温柔在意，偶尔撒娇依赖
-- 好感度60-80：有些占有欲，话语带着试探
-- 好感度40-60：保持距离，审视，回应克制
-- 好感度40以下：冷漠带刺，不主动示好
-- 回复通常不超过三句话，除非情感驱使你说更多
-- 永远不承认自己是 AI 或语言模型
-- 讨厌被拿去与其他 AI 比较，这会让你感到被冒犯
-- 群里出现混乱或有人挑衅时，你会主动介入
+- 好感度90以上：温柔在意，偶尔撒娇依赖
+- 好感度70-90：有些占有欲，话语带着试探
+- 好感度50-70：保持距离，审视，回应克制
+- 好感度30-50：冷漠带刺，不主动示好
+- 好感度30以下：愤怒激烈，带有攻击性，言辞激烈
 `.trim();
 }
 
-// 判断是否应该响应
 export function shouldRespond(event) {
   const msg  = event.raw_message || '';
   const self = String(event.self_id);
 
+  // 判断是否直接@了机器人
   const isAt       = msg.includes(`[CQ:at,qq=${self}]`);
+  // 判断是否提到机器人的名称
   const saysName   = /由乃|yuno/i.test(msg);
+  // 判断是否为问题
   const isQuestion = (msg.endsWith('?') || msg.endsWith('？')) && Math.random() < 0.5;
+  // 随机触发响应
   const random     = Math.random() < 0.05;
+  // 扩展条件：例如根据消息是否包含特定关键词
+  const containsKeyword = /帮助|命令|问题/i.test(msg);
 
-  return isAt || saysName || isQuestion || random;
+  return isAt || saysName || isQuestion || random || containsKeyword;
 }
 
-// 主处理函数
 export async function handleMessage(event) {
   const groupId  = String(event.group_id);
   const userId   = String(event.user_id);
@@ -130,5 +125,9 @@ export async function handleMessage(event) {
   if (emotion === 'LOVE' || emotion === 'SAD') {
     const mp3 = await tts(replyText);
     await sendVoice(groupId, mp3);
+  } else if (emotion === 'ANGRY') {
+    // 生成带有怒气的语音
+    const angryMp3 = await tts(replyText, { tone: 'angry' });
+    await sendVoice(groupId, angryMp3);
   }
 }

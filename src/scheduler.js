@@ -15,14 +15,8 @@ export function startScheduler() {
   cron.schedule('0 20 * * *', () => {
     const delay = Math.random() * 2 * 60 * 60 * 1000;
     setTimeout(async () => {
-      const msgs = [
-        '……你们都在吗。',
-        '由乃在看着你们呢。',
-        '今天好安静。',
-        '不要忘记由乃还在这里。',
-        '……有人吗。',
-      ];
-      const text = msgs[Math.floor(Math.random() * msgs.length)];
+      const groupEvents = await GroupEvent.find({ groupId: GROUP_ID }).sort({ createdAt: -1 }).limit(3);
+      const text = groupEvents.length > 0 ? `最近群里有事发生：${groupEvents[0].summary}` : '今天好安静，大家聊点什么？';
       try {
         await sendText(GROUP_ID, text);
       } catch (e) {
