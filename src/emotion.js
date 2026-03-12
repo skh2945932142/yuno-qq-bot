@@ -43,6 +43,7 @@ function buildPrompt(relation, groupEvents, username) {
 - 好感度50-70：保持距离，审视，回应克制
 - 好感度30-50：冷漠带刺，不主动示好
 - 好感度30以下：愤怒激烈，带有攻击性，言辞激烈
+- 冷静：理性且谨慎，不易受干扰
 `.trim();
 }
 

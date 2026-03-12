@@ -1,13 +1,16 @@
 import mongoose from 'mongoose';
-import dotenv from 'dotenv';
-dotenv.config();
+import { config } from './config.js';
+import { logger } from './logger.js';
 
 export async function connectDB() {
   try {
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log('✅ MongoDB 已连接');
-  } catch (e) {
-    console.error('❌ MongoDB 连接失败:', e.message);
+    await mongoose.connect(config.mongodbUri, {
+      maxPoolSize: config.mongoMaxPoolSize,
+      serverSelectionTimeoutMS: 10000,
+    });
+    logger.info('db', 'MongoDB connected', { maxPoolSize: config.mongoMaxPoolSize });
+  } catch (error) {
+    logger.error('db', 'MongoDB connection failed', { message: error.message });
     process.exit(1);
   }
 }

@@ -1,34 +1,69 @@
 import mongoose from 'mongoose';
 
-// 群成员关系档案
 const RelationSchema = new mongoose.Schema({
-  groupId:       String,
-  userId:        String,
-  affection:     { type: Number, default: 30 },
-  tags:          { type: [String], default: [] },
+  groupId: { type: String, required: true },
+  userId: { type: String, required: true },
+  affection: { type: Number, default: 30 },
+  tags: { type: [String], default: [] },
   memorySummary: { type: String, default: '' },
-  lastInteract:  { type: Date, default: Date.now },
-});
+  preferences: { type: [String], default: [] },
+  favoriteTopics: { type: [String], default: [] },
+  activeScore: { type: Number, default: 0 },
+  interactionCount: { type: Number, default: 0 },
+  lastSentiment: { type: String, default: 'neutral' },
+  lastInteract: { type: Date, default: Date.now },
+}, { minimize: false });
 RelationSchema.index({ groupId: 1, userId: 1 }, { unique: true });
 export const Relation = mongoose.model('Relation', RelationSchema);
 
-// 对话历史
 const HistorySchema = new mongoose.Schema({
-  groupId:  String,
-  userId:   String,
+  groupId: { type: String, required: true },
+  userId: { type: String, required: true },
   messages: [{
-    role:    String,
+    role: String,
     content: String,
-    time:    { type: Date, default: Date.now },
+    time: { type: Date, default: Date.now },
   }],
-});
+}, { minimize: false });
 HistorySchema.index({ groupId: 1, userId: 1 }, { unique: true });
 export const History = mongoose.model('History', HistorySchema);
 
-// 群体事件日志
+const UserStateSchema = new mongoose.Schema({
+  groupId: { type: String, required: true },
+  userId: { type: String, required: true },
+  currentEmotion: { type: String, default: 'CALM' },
+  intensity: { type: Number, default: 0.35 },
+  triggerReason: { type: String, default: 'baseline' },
+  lastIntent: { type: String, default: 'chat' },
+  lastSentiment: { type: String, default: 'neutral' },
+  decayAt: { type: Date, default: Date.now },
+  lastUpdated: { type: Date, default: Date.now },
+}, { minimize: false });
+UserStateSchema.index({ groupId: 1, userId: 1 }, { unique: true });
+export const UserState = mongoose.model('UserState', UserStateSchema);
+
+const GroupStateSchema = new mongoose.Schema({
+  groupId: { type: String, required: true, unique: true },
+  mood: { type: String, default: 'CALM' },
+  moodIntensity: { type: Number, default: 0.3 },
+  activityLevel: { type: Number, default: 0 },
+  recentTopics: { type: [String], default: [] },
+  lastProactiveAt: { type: Date, default: null },
+  lastMessageAt: { type: Date, default: Date.now },
+  lastActiveWindowAt: { type: Date, default: null },
+  lastInteractionSummary: { type: String, default: '' },
+}, { minimize: false });
+export const GroupState = mongoose.model('GroupState', GroupStateSchema);
+
 const GroupEventSchema = new mongoose.Schema({
-  groupId:   String,
-  summary:   String,
+  groupId: { type: String, required: true },
+  userId: { type: String, default: '' },
+  username: { type: String, default: '' },
+  type: { type: String, default: 'message' },
+  sentiment: { type: String, default: 'neutral' },
+  summary: { type: String, required: true },
+  topics: { type: [String], default: [] },
   createdAt: { type: Date, default: Date.now },
-});
+}, { minimize: false });
+GroupEventSchema.index({ groupId: 1, createdAt: -1 });
 export const GroupEvent = mongoose.model('GroupEvent', GroupEventSchema);
