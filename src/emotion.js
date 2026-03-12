@@ -143,7 +143,7 @@ export async function handleMessage(event, precomputed = null) {
 
   await sendText(groupId, replyText);
 
-  if (config.yunoVoiceUri && shouldSendVoiceForEmotion(emotionResult)) {
+  if (config.enableVoice && config.yunoVoiceUri && shouldSendVoiceForEmotion(emotionResult)) {
     try {
       const audio = await tts(replyText);
       await sendVoice(groupId, audio);

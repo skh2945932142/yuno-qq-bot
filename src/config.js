@@ -10,6 +10,16 @@ function readNumber(name, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function readBoolean(name, fallback) {
+  const value = process.env[name];
+  if (value === undefined) return fallback;
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+}
+
 export const config = Object.freeze({
   nodeEnv: process.env.NODE_ENV || 'development',
   port: readNumber('PORT', 3000),
@@ -21,6 +31,7 @@ export const config = Object.freeze({
   targetGroupId: process.env.TARGET_GROUP_ID ? String(process.env.TARGET_GROUP_ID) : '',
   adminQq: process.env.ADMIN_QQ ? String(process.env.ADMIN_QQ) : '',
   yunoVoiceUri: process.env.YUNO_VOICE_URI || '',
+  enableVoice: readBoolean('ENABLE_VOICE', true),
   ffmpegPath: process.env.FFMPEG_PATH || '',
   voiceSampleRate: readNumber('VOICE_SAMPLE_RATE', 24000),
   voiceBitrate: readNumber('VOICE_BITRATE', 24000),
