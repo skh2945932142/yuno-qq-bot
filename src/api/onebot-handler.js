@@ -3,7 +3,7 @@ import { validateGroupMessageEvent } from '../schemas/group-message-event.js';
 import { processGroupMessage, shouldRespondToEvent } from '../workflows/group-message-workflow.js';
 
 export async function handleOnebotWebhook(req, res) {
-  res.send('OK');
+  res.send();
 
   const validation = validateGroupMessageEvent(req.body);
   if (!validation.ok) {
