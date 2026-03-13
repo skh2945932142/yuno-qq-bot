@@ -24,7 +24,7 @@ import { createTraceContext, failTrace, finalizeTrace, withTraceSpan } from '../
 import { planIncomingTask } from '../agents/task-router.js';
 import { registerQueryTools } from '../tools/query-tools.js';
 import { toolRegistry } from '../tools/registry.js';
-import { stripCqCodes } from '../utils.js';
+import { extractAtTargets, stripCqCodes } from '../utils.js';
 import { parseCommand } from '../services/commands.js';
 
 registerQueryTools(toolRegistry);
@@ -108,6 +108,15 @@ async function buildContext(event, trace) {
   };
 }
 
+function hasDirectMention(event) {
+  const selfId = String(event.self_id || '');
+  if (!selfId) {
+    return false;
+  }
+
+  return extractAtTargets(event.raw_message || '').includes(selfId);
+}
+
 export async function shouldRespondToEvent(event, options = {}) {
   const trace = options.trace || createTraceContext('should-respond', {
     groupId: String(event.group_id || ''),
@@ -119,14 +128,14 @@ export async function shouldRespondToEvent(event, options = {}) {
     const command = parseCommand(event.raw_message || '');
     const analysis = command
       ? {
-          shouldRespond: true,
-          confidence: 1,
+          shouldRespond: hasDirectMention(event),
+          confidence: hasDirectMention(event) ? 1 : 0,
           intent: 'query',
           sentiment: 'neutral',
-          relevance: 1,
-          reason: 'deterministic-command',
+          relevance: hasDirectMention(event) ? 1 : 0.1,
+          reason: hasDirectMention(event) ? 'deterministic-command' : 'direct-mention-required',
           topics: [],
-          ruleSignals: ['command'],
+          ruleSignals: hasDirectMention(event) ? ['command', 'direct-mention'] : ['command'],
           replyStyle: 'calm',
         }
       : await withTraceSpan(trace, 'analyze-trigger', () => analyzeTrigger(event, context), {

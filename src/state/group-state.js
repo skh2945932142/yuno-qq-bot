@@ -5,8 +5,6 @@ import { clamp } from '../utils.js';
 
 const GROUP_STATE_CACHE_TTL_MS = 15_000;
 const RECENT_EVENTS_CACHE_TTL_MS = 10_000;
-// Sweep expired entries every 5 minutes to prevent unbounded Map growth
-// in long-running multi-group deployments.
 const CACHE_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 const groupStateCache = new Map();
@@ -30,7 +28,6 @@ function setCached(map, key, value, ttlMs) {
   return value;
 }
 
-// Proactively purge stale entries so the Maps don't grow forever.
 function sweepExpiredEntries() {
   const now = Date.now();
   for (const [key, entry] of groupStateCache) {
@@ -41,9 +38,6 @@ function sweepExpiredEntries() {
   }
 }
 
-// Only register the sweep timer when not in test/eval environments where
-// process.env.NODE_ENV is 'test', to keep test output clean and avoid
-// dangling timers that prevent the process from exiting.
 if (process.env.NODE_ENV !== 'test') {
   setInterval(sweepExpiredEntries, CACHE_SWEEP_INTERVAL_MS).unref();
 }
@@ -52,6 +46,17 @@ function sentimentToMood(sentiment, currentMood) {
   if (sentiment === 'negative') return currentMood === 'ANGRY' ? 'ANGRY' : 'WARN';
   if (sentiment === 'positive') return currentMood === 'PROTECTIVE' ? 'PROTECTIVE' : 'AFFECTIONATE';
   return currentMood || 'CALM';
+}
+
+function buildRecentEventSnippet(recentEvents) {
+  if (!recentEvents?.length) {
+    return '最近群里没什么动静。';
+  }
+
+  return recentEvents
+    .slice(0, 2)
+    .map((event) => event.summary)
+    .join('；');
 }
 
 export async function ensureGroupState(groupId) {
@@ -100,14 +105,10 @@ export async function recordGroupEvent({
     topics,
   });
 
-  // Delete documents beyond the 100-most-recent in a single atomic query.
-  // The previous two-step approach (find then delete) had a race window where
-  // a concurrent insert could shift the boundary and cause off-by-one deletes.
-  // Using a subquery with the _id of the 100th document avoids that window.
   const cutoff = await GroupEvent.findOne({ groupId })
     .sort({ createdAt: -1 })
     .skip(99)
-    .select('_id');
+    .select('_id createdAt');
 
   if (cutoff) {
     await GroupEvent.deleteMany({
@@ -173,47 +174,51 @@ export function planScheduledInteraction({ groupState, recentEvents, dateContext
   }
 
   const now = new Date(dateContext);
+  const hour = now.getHours();
   const msSinceLastMessage = groupState.lastMessageAt
     ? now - new Date(groupState.lastMessageAt)
     : Number.MAX_SAFE_INTEGER;
   const msSinceLastProactive = groupState.lastProactiveAt
     ? now - new Date(groupState.lastProactiveAt)
     : Number.MAX_SAFE_INTEGER;
+  const recentTopics = groupState.recentTopics?.join(' / ') || '暂无';
+  const recentEventSnippet = buildRecentEventSnippet(recentEvents);
 
-  if (msSinceLastProactive < 6 * 60 * 60 * 1000) {
+  if (![7, 23].includes(hour)) {
+    return { shouldSend: false, reason: 'unsupported-time-slot' };
+  }
+
+  if (msSinceLastProactive < 10 * 60 * 60 * 1000) {
     return { shouldSend: false, reason: 'recent-proactive' };
   }
 
-  if (groupState.activityLevel >= 70 && msSinceLastMessage < 45 * 60 * 1000) {
-    return { shouldSend: false, reason: 'group-already-active' };
+  if (hour === 7 && groupState.activityLevel >= 60 && msSinceLastMessage < 20 * 60 * 1000) {
+    return { shouldSend: false, reason: 'morning-group-already-active' };
   }
 
-  const isWeekend = [0, 6].includes(now.getDay());
-  const topEvent = recentEvents?.[0];
-
-  let topic = 'general';
-  let tone = 'curious';
-  let textHint = '问大家现在最在意的事，带一点轻微占有欲。';
-
-  if (groupState.mood === 'WARN' || groupState.mood === 'ANGRY') {
-    topic = 'tension';
-    tone = 'sharp';
-    textHint = topEvent
-      ? `围绕"${topEvent.summary}"发起带压迫感但不过火的追问。`
-      : '提醒大家别太乱来，并点名让群里交代近况。';
-  } else if (groupState.activityLevel < 30) {
-    topic = 'ice-breaker';
-    tone = 'affectionate';
-    textHint = isWeekend
-      ? '周末氛围下抛一个轻松但有角色感的话题。'
-      : '群里太安静时，主动挑起一个容易接话的轻量话题。';
-  } else if (topEvent) {
-    topic = 'follow-up';
-    tone = 'observant';
-    textHint = `结合最近事件"${topEvent.summary}"做角色化追问，推动群互动。`;
+  if (hour === 23 && groupState.activityLevel >= 50 && msSinceLastMessage < 30 * 60 * 1000) {
+    return { shouldSend: false, reason: 'night-group-still-active' };
   }
 
-  return { shouldSend: true, topic, tone, textHint };
+  if (hour === 7) {
+    return {
+      shouldSend: true,
+      slot: 'morning',
+      topic: 'wake-up',
+      tone: 'teasing-care',
+      maxLines: 2,
+      textHint: `用“讨厌起床/讨厌早八但还是得动起来”的口吻做一句早安提醒。最近群里在聊：${recentTopics}。可以轻轻提一下最近的聊天片段“${recentEventSnippet}”，但不要像总结。`,
+    };
+  }
+
+  return {
+    shouldSend: true,
+    slot: 'night',
+    topic: 'sleep-reminder',
+    tone: 'gentle-reminder',
+    maxLines: 2,
+    textHint: `用温和、不唠叨的方式提醒大家早点睡，强调健康作息。最近群里在聊：${recentTopics}。如果最近有人还在忙“${recentEventSnippet}”，就顺势提醒“今天先到这里”。`,
+  };
 }
 
 export function canUseAdvancedGroupFeatures(groupId) {

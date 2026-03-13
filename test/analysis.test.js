@@ -23,10 +23,11 @@ test('analyzeTrigger passes direct mention in basic mode', async () => {
 
   assert.equal(result.shouldRespond, true);
   assert.equal(result.intent, 'help');
+  assert.equal(result.reason, 'basic-direct-mention-pass');
   assert.match(result.ruleSignals.join(','), /direct-mention/);
 });
 
-test('analyzeTrigger suppresses weak chatter in basic mode', async () => {
+test('analyzeTrigger suppresses non-mentioned chatter in basic mode', async () => {
   const result = await analyzeTrigger(createEvent({
     raw_message: '今天天气一般',
   }), {
@@ -35,10 +36,10 @@ test('analyzeTrigger suppresses weak chatter in basic mode', async () => {
   });
 
   assert.equal(result.shouldRespond, false);
-  assert.equal(result.reason, 'basic-rule-skip');
+  assert.equal(result.reason, 'direct-mention-required');
 });
 
-test('analyzeTrigger skips llm analysis for strong advanced-group signals', async () => {
+test('analyzeTrigger skips llm analysis for direct mentions in advanced mode', async () => {
   let analyzerCalls = 0;
 
   const result = await analyzeTrigger(createEvent({
@@ -64,7 +65,7 @@ test('analyzeTrigger skips llm analysis for strong advanced-group signals', asyn
   });
 
   assert.equal(result.shouldRespond, true);
-  assert.equal(result.reason, 'advanced-strong-rule-pass');
+  assert.equal(result.reason, 'advanced-direct-mention-pass');
   assert.equal(analyzerCalls, 0);
 });
 
@@ -77,8 +78,7 @@ test('analyzeTrigger suppresses CQ conversations that mention only other users',
   });
 
   assert.equal(result.shouldRespond, false);
-  assert.equal(result.reason, 'other-user-conversation');
-  assert.match(result.ruleSignals.join(','), /other-user-mentioned/);
+  assert.equal(result.reason, 'direct-mention-required');
 });
 
 test('analyzeTrigger suppresses plain text @someone conversations', async () => {
@@ -90,10 +90,10 @@ test('analyzeTrigger suppresses plain text @someone conversations', async () => 
   });
 
   assert.equal(result.shouldRespond, false);
-  assert.equal(result.reason, 'other-user-conversation');
+  assert.equal(result.reason, 'direct-mention-required');
 });
 
-test('analyzeTrigger allows forced intervention only for scathach harm cues', async () => {
+test('analyzeTrigger suppresses scathach harm cues without direct mention', async () => {
   const result = await analyzeTrigger(createEvent({
     raw_message: '[CQ:at,qq=30003] 斯卡哈受伤了 快来帮忙',
   }), {
@@ -101,18 +101,6 @@ test('analyzeTrigger allows forced intervention only for scathach harm cues', as
     groupState: { activityLevel: 20 },
   });
 
-  assert.equal(result.shouldRespond, true);
-  assert.equal(result.reason, 'observer-forced-intervention');
-});
-
-test('analyzeTrigger ignores unrelated danger around other group members', async () => {
-  const result = await analyzeTrigger(createEvent({
-    raw_message: '[CQ:at,qq=30003] 小王有危险 快来',
-  }), {
-    relation: { affection: 35, activeScore: 10 },
-    groupState: { activityLevel: 20 },
-  });
-
   assert.equal(result.shouldRespond, false);
-  assert.equal(result.reason, 'other-user-conversation');
+  assert.equal(result.reason, 'direct-mention-required');
 });

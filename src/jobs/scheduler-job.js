@@ -76,12 +76,12 @@ export function startScheduler() {
     return;
   }
 
-  cron.schedule('0 20 * * *', () => {
-    const delay = Math.floor(Math.random() * 90 * 60 * 1000);
-    setTimeout(() => {
-      runScheduledInteraction(config.targetGroupId);
-    }, delay);
-  }, { timezone: 'Asia/Shanghai' });
+  const trigger = () => {
+    runScheduledInteraction(config.targetGroupId);
+  };
+
+  cron.schedule('0 7 * * *', trigger, { timezone: 'Asia/Shanghai' });
+  cron.schedule('0 23 * * *', trigger, { timezone: 'Asia/Shanghai' });
 
   logger.info('scheduler', 'Scheduler started', { groupId: config.targetGroupId });
 }
