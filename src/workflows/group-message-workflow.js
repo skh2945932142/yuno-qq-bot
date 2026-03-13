@@ -61,8 +61,10 @@ export function enforceEmojiBudget(text, emotionResult) {
   });
 
   return sanitized
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
     .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
+    .replace(/\n{2,}/g, '\n')
     .trim();
 }
 

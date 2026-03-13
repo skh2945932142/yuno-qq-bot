@@ -68,7 +68,7 @@ test('analyzeTrigger skips llm analysis for strong advanced-group signals', asyn
   assert.equal(analyzerCalls, 0);
 });
 
-test('analyzeTrigger suppresses conversations that only mention other users', async () => {
+test('analyzeTrigger suppresses CQ conversations that mention only other users', async () => {
   const result = await analyzeTrigger(createEvent({
     raw_message: '[CQ:at,qq=30003] 你们继续聊',
   }), {
@@ -79,6 +79,18 @@ test('analyzeTrigger suppresses conversations that only mention other users', as
   assert.equal(result.shouldRespond, false);
   assert.equal(result.reason, 'other-user-conversation');
   assert.match(result.ruleSignals.join(','), /other-user-mentioned/);
+});
+
+test('analyzeTrigger suppresses plain text @someone conversations', async () => {
+  const result = await analyzeTrigger(createEvent({
+    raw_message: '@小王 你先说',
+  }), {
+    relation: { affection: 50, activeScore: 10 },
+    groupState: { activityLevel: 20 },
+  });
+
+  assert.equal(result.shouldRespond, false);
+  assert.equal(result.reason, 'other-user-conversation');
 });
 
 test('analyzeTrigger allows forced intervention only for scathach harm cues', async () => {

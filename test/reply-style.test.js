@@ -19,3 +19,12 @@ test('enforceEmojiBudget keeps only one allowed soft emoji in affectionate mode'
 
   assert.equal(result, '你终于来了💕');
 });
+
+test('enforceEmojiBudget collapses blank lines into a single newline', () => {
+  const result = enforceEmojiBudget('第一句\n\n第二句\n\n\n第三句', {
+    emojiBudget: 0,
+    emojiStyle: 'none',
+  });
+
+  assert.equal(result, '第一句\n第二句\n第三句');
+});

@@ -27,6 +27,4 @@ export async function handleOnebotWebhook(req, res) {
       message: error.message,
     });
   }
-  const event1 = validation.value;
-console.log('raw_message:', JSON.stringify(event.raw_message)); // 加这行
 }

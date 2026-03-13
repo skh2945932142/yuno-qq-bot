@@ -32,22 +32,32 @@ function buildHeuristicResult({
   };
 }
 
+function extractPlainAtMentions(message) {
+  const matches = [];
+  for (const match of String(message || '').matchAll(/(^|\s)@([^\s@]{1,32})/gu)) {
+    const target = String(match[2] || '').trim();
+    if (!target || matches.includes(target)) continue;
+    matches.push(target);
+  }
+  return matches;
+}
+
 function buildRuleSignals(event, context, options = {}) {
   const message = event.raw_message || '';
   const normalized = stripCqCodes(message);
   const selfId = String(event.self_id || '');
   const groupId = String(event.group_id || '');
   const atTargets = extractAtTargets(message);
+  const plainAtMentions = extractPlainAtMentions(message);
   const isAdmin = String(event.user_id || '') === config.adminQq;
   const directMention = Boolean(selfId) && atTargets.includes(selfId);
   const otherMentions = atTargets.filter((qq) => qq !== selfId);
-  const mentionsOtherUser = otherMentions.length > 0;
+  const mentionsOtherUser = otherMentions.length > 0 || (plainAtMentions.length > 0 && !directMention);
 
   const nameMention = /由乃|yuno/i.test(normalized);
   const question = /[?？]$/.test(normalized) || /(怎么|如何|为什么|为啥|吗|么)\b/i.test(normalized);
   const keyword = /(帮助|命令|问题|状态|关系|好感|画像|群状态|情绪)/i.test(normalized);
 
-  // Forced intervention is now reserved for Scathach-only harm signals.
   const protectedTargetMention = /(斯卡哈|scathach)/i.test(normalized);
   const harmSignal = /(伤害|受伤|危险|威胁|欺负|攻击|动手|杀|救命|救救|保护|help)/i.test(normalized);
   const interventionKeyword = protectedTargetMention && harmSignal;
@@ -106,6 +116,7 @@ function buildRuleSignals(event, context, options = {}) {
     score: clamp(score, 0, 1),
     signals,
     atTargets,
+    plainAtMentions,
     directMention,
     mentionsOtherUser,
     interventionKeyword,
