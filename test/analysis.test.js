@@ -67,3 +67,40 @@ test('analyzeTrigger skips llm analysis for strong advanced-group signals', asyn
   assert.equal(result.reason, 'advanced-strong-rule-pass');
   assert.equal(analyzerCalls, 0);
 });
+
+test('analyzeTrigger suppresses conversations that only mention other users', async () => {
+  const result = await analyzeTrigger(createEvent({
+    raw_message: '[CQ:at,qq=30003] 你们继续聊',
+  }), {
+    relation: { affection: 50, activeScore: 10 },
+    groupState: { activityLevel: 20 },
+  });
+
+  assert.equal(result.shouldRespond, false);
+  assert.equal(result.reason, 'other-user-conversation');
+  assert.match(result.ruleSignals.join(','), /other-user-mentioned/);
+});
+
+test('analyzeTrigger allows forced intervention only for scathach harm cues', async () => {
+  const result = await analyzeTrigger(createEvent({
+    raw_message: '[CQ:at,qq=30003] 斯卡哈受伤了 快来帮忙',
+  }), {
+    relation: { affection: 35, activeScore: 10 },
+    groupState: { activityLevel: 20 },
+  });
+
+  assert.equal(result.shouldRespond, true);
+  assert.equal(result.reason, 'observer-forced-intervention');
+});
+
+test('analyzeTrigger ignores unrelated danger around other group members', async () => {
+  const result = await analyzeTrigger(createEvent({
+    raw_message: '[CQ:at,qq=30003] 小王有危险 快来',
+  }), {
+    relation: { affection: 35, activeScore: 10 },
+    groupState: { activityLevel: 20 },
+  });
+
+  assert.equal(result.shouldRespond, false);
+  assert.equal(result.reason, 'other-user-conversation');
+});

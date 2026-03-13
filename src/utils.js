@@ -25,6 +25,19 @@ export function stripCqCodes(value) {
   return normalizeWhitespace(String(value || '').replace(/\[CQ:[^\]]+\]/g, ' '));
 }
 
+export function extractAtTargets(value) {
+  const message = String(value || '');
+  const targets = [];
+
+  for (const match of message.matchAll(/\[CQ:at,qq=([^\],]+)[^\]]*\]/g)) {
+    const qq = String(match[1] || '').trim();
+    if (!qq || targets.includes(qq)) continue;
+    targets.push(qq);
+  }
+
+  return targets;
+}
+
 export function extractTopics(text) {
   const normalized = stripCqCodes(text);
   const asciiTopics = normalized
