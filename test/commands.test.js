@@ -4,6 +4,7 @@ import { buildCommandResponse, parseCommand } from '../src/services/commands.js'
 
 test('parseCommand recognizes relation query', () => {
   assert.deepEqual(parseCommand('/关系'), { type: 'relation' });
+  assert.deepEqual(parseCommand('/profile'), { type: 'profile' });
   assert.deepEqual(parseCommand('由乃 群状态'), { type: 'group' });
 });
 

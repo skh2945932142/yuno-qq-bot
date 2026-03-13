@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node test/run-tests.js"
+    "test": "node test/run-tests.js",
+    "eval": "node evals/run-evals.js"
   },
   "keywords": [],
   "author": "",

@@ -1,0 +1,76 @@
+[
+  {
+    "id": "direct-mention-chat",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "[CQ:at,qq=20002] help me check this issue",
+      "sender": { "nickname": "alice" }
+    },
+    "context": {
+      "relation": { "affection": 40, "activeScore": 20 },
+      "groupState": { "activityLevel": 20 }
+    },
+    "expected": {
+      "shouldRespond": true,
+      "taskType": "chat"
+    }
+  },
+  {
+    "id": "command-to-tool",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "/profile",
+      "sender": { "nickname": "alice" }
+    },
+    "context": {
+      "relation": { "affection": 80, "activeScore": 50 },
+      "groupState": { "activityLevel": 10 }
+    },
+    "expected": {
+      "shouldRespond": true,
+      "taskType": "tool"
+    }
+  },
+  {
+    "id": "weak-chatter-ignore",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "today is normal",
+      "sender": { "nickname": "alice" }
+    },
+    "context": {
+      "relation": { "affection": 20, "activeScore": 10 },
+      "groupState": { "activityLevel": 10 }
+    },
+    "expected": {
+      "shouldRespond": false,
+      "taskType": "ignore"
+    }
+  },
+  {
+    "id": "invalid-payload",
+    "type": "schema",
+    "event": {
+      "post_type": "notice",
+      "message_type": "private"
+    },
+    "expected": {
+      "valid": false
+    }
+  }
+]

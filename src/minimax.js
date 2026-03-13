@@ -17,6 +17,7 @@ const client = new OpenAI({
 });
 
 async function createChatCompletion(messages, options = {}) {
+  const startedAt = Date.now();
   const payload = {
     model: 'Pro/MiniMaxAI/MiniMax-M2.5',
     messages,
@@ -28,7 +29,7 @@ async function createChatCompletion(messages, options = {}) {
     payload.response_format = options.responseFormat;
   }
 
-  return withRetry(
+  const response = await withRetry(
     () => client.chat.completions.create(payload),
     {
       retries: config.retryAttempts,
@@ -38,9 +39,22 @@ async function createChatCompletion(messages, options = {}) {
       logger,
     }
   );
+
+  logger.info('model', 'Chat completion finished', {
+    traceId: options.traceContext?.traceId,
+    operation: options.operation || 'chat',
+    promptVersion: options.promptVersion,
+    model: payload.model,
+    elapsedMs: Date.now() - startedAt,
+    promptTokens: response.usage?.prompt_tokens,
+    completionTokens: response.usage?.completion_tokens,
+    totalTokens: response.usage?.total_tokens,
+  });
+
+  return response;
 }
 
-export async function chat(messages, systemPrompt, userMessage = null) {
+export async function chat(messages, systemPrompt, userMessage = null, options = {}) {
   const conversation = [
     { role: 'system', content: systemPrompt },
     ...messages.slice(-20),
@@ -55,7 +69,7 @@ export async function chat(messages, systemPrompt, userMessage = null) {
     });
   }
 
-  const response = await createChatCompletion(conversation);
+  const response = await createChatCompletion(conversation, options);
   return response.choices[0]?.message?.content?.trim() || '...';
 }
 
@@ -78,7 +92,7 @@ function fallbackAnalysis(text) {
   };
 }
 
-export async function analyzeMessage(text, context = {}) {
+export async function analyzeMessage(text, context = {}, options = {}) {
   const sanitized = stripCqCodes(text);
   if (!sanitized) {
     return fallbackAnalysis(text);
@@ -114,6 +128,9 @@ export async function analyzeMessage(text, context = {}) {
     ], {
       temperature: 0.2,
       maxTokens: 180,
+      traceContext: options.traceContext,
+      promptVersion: options.promptVersion || 'message-analysis/v1',
+      operation: options.operation || 'analysis',
     });
 
     const raw = response.choices[0]?.message?.content || '{}';
@@ -144,11 +161,12 @@ export async function analyzeMessage(text, context = {}) {
   }
 }
 
-export async function tts(text) {
+export async function tts(text, options = {}) {
   if (!config.yunoVoiceUri) {
     return null;
   }
 
+  const startedAt = Date.now();
   const response = await withRetry(
     () => axios.post(
       'https://api.siliconflow.cn/v1/audio/speech',
@@ -173,6 +191,13 @@ export async function tts(text) {
       logger,
     }
   );
+
+  logger.info('model', 'TTS finished', {
+    traceId: options.traceContext?.traceId,
+    operation: options.operation || 'tts',
+    elapsedMs: Date.now() - startedAt,
+    bytes: response.data?.byteLength || response.data?.length,
+  });
 
   return Buffer.from(response.data);
 }
