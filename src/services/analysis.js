@@ -26,20 +26,23 @@ function buildHeuristicResult({
   };
 }
 
-function buildRuleSignals(event, context) {
+function buildRuleSignals(event, context, options = {}) {
   const message = event.raw_message || '';
   const normalized = stripCqCodes(message);
   const selfId = String(event.self_id || '');
   const groupId = String(event.group_id || '');
   const isAdmin = String(event.user_id || '') === config.adminQq;
-  const directMention = message.includes(`[CQ:at,qq=${selfId}]`);
+  const directMention = Boolean(selfId) && message.includes(`[CQ:at,qq=${selfId}]`);
   const nameMention = /由乃|yuno/i.test(normalized);
   const question = /[?？]$/.test(normalized) || /(怎么|如何|为什么|为啥|吗|呢)\b/i.test(normalized);
   const keyword = /(帮助|命令|问题|状态|关系|好感|画像|群状态|情绪)/i.test(normalized);
   const highAffection = (context.relation?.affection || 0) >= 70;
   const recentActiveUser = (context.relation?.activeScore || 0) >= 65;
   const groupActiveWindow = (context.groupState?.activityLevel || 0) >= 60;
-  const random = Math.random() < (isAdvancedGroup(groupId) ? 0.02 : 0.01);
+
+  // Accept an injectable random function for deterministic testing.
+  const randomFn = options.random ?? (() => Math.random());
+  const random = randomFn() < (isAdvancedGroup(groupId) ? 0.02 : 0.01);
 
   const signals = [];
   let score = 0;
@@ -97,7 +100,7 @@ function buildRuleSignals(event, context) {
 export async function analyzeTrigger(event, context = {}, options = {}) {
   const groupId = String(event.group_id || '');
   const message = event.raw_message || '';
-  const rule = buildRuleSignals(event, context);
+  const rule = buildRuleSignals(event, context, options);
   const sentiment = inferSentiment(message);
   const intent = inferIntent(message);
 

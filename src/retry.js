@@ -39,12 +39,20 @@ export async function withRetry(task, options = {}) {
         throw error;
       }
 
+      // Exponential backoff: 1× → 2× → 4× ... capped at 30 s.
+      // This handles SiliconFlow 429 bursts far better than the previous
+      // linear schedule (1×, 2×, 3× ...) because each retry doubles the
+      // cooling period, reducing the chance of hammering a rate-limited API.
+      const backoff = Math.min(delayMs * (2 ** attempt), 30_000);
+
       logger?.warn(category, `${label} failed, retrying`, {
         attempt: attempt + 1,
         code: error.code,
         status: error.response?.status,
+        nextDelayMs: backoff,
       });
-      await sleep(delayMs * (attempt + 1));
+
+      await sleep(backoff);
     }
   }
 

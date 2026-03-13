@@ -1,3 +1,5 @@
+import { config } from '../config.js';
+
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -33,13 +35,20 @@ export function validateGroupMessageEvent(payload) {
     return { ok: false, errors };
   }
 
+  // self_id is required for direct-mention detection ([CQ:at,qq=BOT_QQ]).
+  // Some NapCat versions omit the field. Fall back to SELF_QQ from config so
+  // that '@由乃' is never silently ignored due to a missing self_id.
+  const resolvedSelfId = payload.self_id
+    ? String(payload.self_id)
+    : (config.selfQq || '');
+
   return {
     ok: true,
     value: {
       ...payload,
       group_id: String(payload.group_id),
       user_id: String(payload.user_id),
-      self_id: payload.self_id ? String(payload.self_id) : '',
+      self_id: resolvedSelfId,
       raw_message: payload.raw_message,
       sender: isObject(payload.sender) ? payload.sender : {},
     },

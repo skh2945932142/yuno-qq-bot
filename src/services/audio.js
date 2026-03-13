@@ -6,6 +6,16 @@ import { config } from '../config.js';
 
 let cachedFfmpegPath;
 
+// Cache the silk-sdk encode function after the first import so that subsequent
+// calls to encodeTencentSilk don't pay the dynamic-import overhead each time.
+let _silkEncode;
+async function getSilkEncode() {
+  if (!_silkEncode) {
+    _silkEncode = (await import('silk-sdk')).encode;
+  }
+  return _silkEncode;
+}
+
 async function fileExists(targetPath) {
   try {
     await access(targetPath);
@@ -174,7 +184,7 @@ export async function encodeTencentSilk(pcmOrWavBuffer, options = {}) {
     throw new Error('Cannot encode empty pcm buffer');
   }
 
-  const encodeImpl = options.encodeImpl || (await import('silk-sdk')).encode;
+  const encodeImpl = options.encodeImpl || await getSilkEncode();
   return encodeImpl(pcmOrWavBuffer, {
     fsHz: options.sampleRate ?? config.voiceSampleRate,
     packetLength: 20,

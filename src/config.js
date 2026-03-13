@@ -30,6 +30,10 @@ export const config = Object.freeze({
   napcatToken: process.env.NAPCAT_TOKEN || '',
   targetGroupId: process.env.TARGET_GROUP_ID ? String(process.env.TARGET_GROUP_ID) : '',
   adminQq: process.env.ADMIN_QQ ? String(process.env.ADMIN_QQ) : '',
+  // SELF_QQ is the bot's own QQ number. It is used as a fallback when the
+  // OneBot adapter omits self_id from the event payload, ensuring that
+  // direct-mention detection ([CQ:at,qq=SELF_QQ]) never silently fails.
+  selfQq: process.env.SELF_QQ ? String(process.env.SELF_QQ) : '',
   yunoVoiceUri: process.env.YUNO_VOICE_URI || '',
   enableVoice: readBoolean('ENABLE_VOICE', true),
   ffmpegPath: process.env.FFMPEG_PATH || '',

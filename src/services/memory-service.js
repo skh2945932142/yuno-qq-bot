@@ -2,18 +2,18 @@ import { config } from '../config.js';
 import { History, Relation, UserState } from '../models.js';
 import { clamp, extractPreferences, uniqueCompact } from '../utils.js';
 
-function buildMemorySummary(relation) {
+function buildMemorySummary({ preferences, favoriteTopics, activeScore }) {
   const segments = [];
 
-  if (relation.preferences?.length) {
-    segments.push(`偏好:${relation.preferences.join('、')}`);
+  if (preferences?.length) {
+    segments.push(`偏好:${preferences.join('、')}`);
   }
 
-  if (relation.favoriteTopics?.length) {
-    segments.push(`常聊:${relation.favoriteTopics.join('、')}`);
+  if (favoriteTopics?.length) {
+    segments.push(`常聊:${favoriteTopics.join('、')}`);
   }
 
-  segments.push(`活跃度:${Math.round(relation.activeScore || 0)}`);
+  segments.push(`活跃度:${Math.round(activeScore || 0)}`);
   return segments.join('；');
 }
 
@@ -63,6 +63,7 @@ export async function updateRelationProfile(relation, { text, analysis }) {
     ...(relation.preferences || []),
     ...extractPreferences(text),
   ], 6);
+
   const favoriteTopics = uniqueCompact([
     ...(analysis.topics || []),
     ...(relation.favoriteTopics || []),
@@ -75,27 +76,64 @@ export async function updateRelationProfile(relation, { text, analysis }) {
   if (analysis.intent === 'challenge') delta -= 1;
   if (relation.userId === config.adminQq) delta += 1;
 
-  relation.affection = clamp(relation.affection + delta, 0, 100);
-  relation.preferences = preferences;
-  relation.favoriteTopics = favoriteTopics;
-  relation.activeScore = clamp((relation.activeScore * 0.65) + 25, 0, 100);
-  relation.interactionCount = (relation.interactionCount || 0) + 1;
-  relation.lastSentiment = analysis.sentiment;
-  relation.lastInteract = new Date();
-  relation.memorySummary = buildMemorySummary(relation);
+  // Compute the new affection clamped value so we can do a bounded $inc via $set.
+  // We can't do a bounded $inc directly in MongoDB without a pipeline update, so we
+  // read the current value, compute the target, and use findOneAndUpdate with a
+  // $set so the write is still a single round-trip and we avoid the stale read that
+  // plagued the old mutate-then-save pattern.
+  const currentAffection = relation.affection ?? 30;
+  const nextAffection = clamp(currentAffection + delta, 0, 100);
+  const currentActiveScore = relation.activeScore ?? 0;
+  const nextActiveScore = clamp((currentActiveScore * 0.65) + 25, 0, 100);
+  const nextInteractionCount = (relation.interactionCount || 0) + 1;
+  const memorySummary = buildMemorySummary({ preferences, favoriteTopics, activeScore: nextActiveScore });
 
-  await relation.save();
-  return relation;
+  const updated = await Relation.findOneAndUpdate(
+    { groupId: relation.groupId, userId: relation.userId },
+    {
+      $set: {
+        affection: nextAffection,
+        preferences,
+        favoriteTopics,
+        activeScore: nextActiveScore,
+        interactionCount: nextInteractionCount,
+        lastSentiment: analysis.sentiment,
+        lastInteract: new Date(),
+        memorySummary,
+      },
+    },
+    { returnDocument: 'after' }
+  );
+
+  // Keep the in-memory object in sync so callers that already hold a reference
+  // see consistent values within the same request lifetime.
+  if (updated) {
+    Object.assign(relation, updated.toObject());
+  }
+
+  return updated ?? relation;
 }
 
 export async function updateUserState(userState, emotionResult, analysis) {
-  userState.currentEmotion = emotionResult.emotion;
-  userState.intensity = emotionResult.intensity;
-  userState.triggerReason = emotionResult.reason;
-  userState.lastIntent = analysis.intent;
-  userState.lastSentiment = analysis.sentiment;
-  userState.lastUpdated = new Date();
-  userState.decayAt = new Date(Date.now() + 90 * 60 * 1000);
-  await userState.save();
-  return userState;
+  const updated = await UserState.findOneAndUpdate(
+    { groupId: userState.groupId, userId: userState.userId },
+    {
+      $set: {
+        currentEmotion: emotionResult.emotion,
+        intensity: emotionResult.intensity,
+        triggerReason: emotionResult.reason,
+        lastIntent: analysis.intent,
+        lastSentiment: analysis.sentiment,
+        lastUpdated: new Date(),
+        decayAt: new Date(Date.now() + 90 * 60 * 1000),
+      },
+    },
+    { returnDocument: 'after' }
+  );
+
+  if (updated) {
+    Object.assign(userState, updated.toObject());
+  }
+
+  return updated ?? userState;
 }

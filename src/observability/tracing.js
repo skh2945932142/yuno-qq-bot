@@ -1,10 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import { logger } from '../logger.js';
 
-let traceCounter = 0;
-
-function nextTraceId() {
-  traceCounter += 1;
-  return `trace-${Date.now()}-${traceCounter}`;
+export function createTraceContext(workflow, meta = {}) {
+  return {
+    traceId: randomUUID(),
+    workflow,
+    startedAt: Date.now(),
+    meta: sanitizeMeta(meta),
+    spans: [],
+  };
 }
 
 function sanitizeMeta(meta = {}) {
@@ -16,16 +20,6 @@ function sanitizeMeta(meta = {}) {
     result[key] = value;
   }
   return result;
-}
-
-export function createTraceContext(workflow, meta = {}) {
-  return {
-    traceId: nextTraceId(),
-    workflow,
-    startedAt: Date.now(),
-    meta: sanitizeMeta(meta),
-    spans: [],
-  };
 }
 
 export async function withTraceSpan(trace, spanName, task, meta = {}) {

@@ -35,6 +35,25 @@ function summarizeIncomingMessage(username, text) {
   return `${username}: ${cleaned}`;
 }
 
+// Produce a safe user-turn text for the LLM.
+// When the original message is purely CQ codes (stickers, images, etc.)
+// stripCqCodes returns an empty string. Feeding an empty string as the
+// user message to chat() leads to unpredictable model output because the
+// history already has entries (conversation.length > 1) and the empty-
+// message fallback branch inside chat() never fires.
+function resolveUserTurn(rawText, cleanText, username) {
+  if (cleanText) return cleanText;
+
+  // Detect common CQ code types and produce a readable placeholder.
+  if (/\[CQ:face,/.test(rawText)) return `[${username} 发送了一个表情]`;
+  if (/\[CQ:image,/.test(rawText)) return `[${username} 发送了一张图片]`;
+  if (/\[CQ:record,/.test(rawText)) return `[${username} 发送了一条语音]`;
+  if (/\[CQ:video,/.test(rawText)) return `[${username} 发送了一段视频]`;
+  if (/\[CQ:/.test(rawText)) return `[${username} 发送了一条消息]`;
+
+  return cleanText;
+}
+
 async function buildContext(event, trace) {
   const groupId = String(event.group_id);
   const userId = String(event.user_id);
@@ -159,6 +178,7 @@ export async function processGroupMessage(event, precomputed = null, options = {
     const username = event.sender?.nickname || event.sender?.card || 'user';
     const rawText = event.raw_message || '';
     const cleanText = stripCqCodes(rawText);
+    const userTurn = resolveUserTurn(rawText, cleanText, username);
     const summary = summarizeIncomingMessage(username, rawText);
     const analysis = workflowContext.analysis;
 
@@ -222,7 +242,7 @@ export async function processGroupMessage(event, precomputed = null, options = {
     const replyText = await withTraceSpan(trace, 'generate-reply', () => chat(
       history.map((item) => ({ role: item.role, content: item.content })),
       systemPrompt,
-      cleanText,
+      userTurn,
       {
         traceContext: trace,
         promptVersion: 'reply-context/v2',
@@ -234,7 +254,7 @@ export async function processGroupMessage(event, precomputed = null, options = {
 
     const nextMessages = [
       ...history,
-      { role: 'user', content: cleanText },
+      { role: 'user', content: userTurn },
       { role: 'assistant', content: replyText },
     ].slice(-40);
 
