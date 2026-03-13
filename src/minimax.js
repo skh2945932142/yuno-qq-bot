@@ -162,7 +162,12 @@ export async function analyzeMessage(text, context = {}, options = {}) {
 }
 
 export async function tts(text, options = {}) {
-  if (!config.yunoVoiceUri) {
+  if (!config.enableVoice || !config.yunoVoiceUri) {
+    logger.info('model', 'TTS skipped', {
+      traceId: options.traceContext?.traceId,
+      operation: options.operation || 'tts',
+      reason: !config.enableVoice ? 'voice_disabled' : 'missing_voice_uri',
+    });
     return null;
   }
 
