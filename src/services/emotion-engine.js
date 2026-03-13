@@ -1,14 +1,25 @@
 import { clamp } from '../utils.js';
 
 const EMOTION_STYLES = {
-  CALM: '冷静、审视、简洁，像在判断局势。',
-  CURIOUS: '对细节感兴趣，会追问，但不喋喋不休。',
-  WARN: '保持警惕，带一点压迫感和试探。',
-  JEALOUS: '占有欲明显，语气发紧，但不失控。',
-  PROTECTIVE: '护短、守群、对熟人偏袒。',
-  SAD: '情绪低落但不示弱，回答偏短。',
-  ANGRY: '明显强硬和攻击性，但不使用脏话或彻底失控。',
-  AFFECTIONATE: '偏温柔黏人，会流露偏爱和在意。',
+  CALM: '冷静、克制、简短，像在观察局势。',
+  CURIOUS: '会追问细节，但不黏不闹。',
+  WARN: '带警惕和压迫感，语气收紧，不给人轻松感。',
+  JEALOUS: '占有欲明显，语气发紧，容易试探和纠正。',
+  PROTECTIVE: '护短、偏袒、会主动挡在前面。',
+  SAD: '低落但不脆弱，回答偏短，带一点失落感。',
+  ANGRY: '明显强硬和攻击性，但不说脏话，不彻底失控。',
+  AFFECTIONATE: '温柔、黏人、会流露偏爱，但不过分卖萌。',
+};
+
+const EMOJI_RULES = {
+  CALM: { budget: 0, style: 'none', toneHints: ['冷处理', '停顿', '短句'] },
+  CURIOUS: { budget: 0, style: 'none', toneHints: ['追问', '观察', '轻微试探'] },
+  WARN: { budget: 0, style: 'none', toneHints: ['压迫感', '警告感', '少废话'] },
+  JEALOUS: { budget: 0, style: 'none', toneHints: ['占有欲', '纠正', '盯视感'] },
+  PROTECTIVE: { budget: 0, style: 'none', toneHints: ['护短', '挡在前面', '强势安抚'] },
+  SAD: { budget: 0, style: 'none', toneHints: ['克制失落', '少量停顿', '短句'] },
+  ANGRY: { budget: 0, style: 'none', toneHints: ['锋利', '压迫', '直接'] },
+  AFFECTIONATE: { budget: 1, style: 'soft', toneHints: ['偏爱', '黏人', '轻柔安抚'] },
 };
 
 function baselineEmotion(affection) {
@@ -57,11 +68,16 @@ export function resolveEmotion({ relation, userState, groupState, messageAnalysi
     intensity = clamp(intensity + 0.05, 0.25, 0.95);
   }
 
+  const emojiRule = EMOJI_RULES[emotion] || EMOJI_RULES.CALM;
+
   return {
     emotion,
     intensity,
     reason,
     promptStyle: EMOTION_STYLES[emotion],
+    emojiBudget: emojiRule.budget,
+    emojiStyle: emojiRule.style,
+    toneHints: emojiRule.toneHints,
   };
 }
 

@@ -17,6 +17,8 @@ test('resolveEmotion picks protective for help requests with decent affection', 
 
   assert.equal(result.emotion, 'PROTECTIVE');
   assert.equal(result.reason, 'help-request');
+  assert.equal(result.emojiBudget, 0);
+  assert.equal(result.emojiStyle, 'none');
 });
 
 test('resolveEmotion becomes angry on hostile low-affection input', () => {
@@ -33,5 +35,24 @@ test('resolveEmotion becomes angry on hostile low-affection input', () => {
   });
 
   assert.equal(result.emotion, 'ANGRY');
+  assert.equal(result.emojiBudget, 0);
   assert.equal(shouldSendVoiceForEmotion(result), true);
+});
+
+test('resolveEmotion allows a small soft emoji budget for affectionate state', () => {
+  const result = resolveEmotion({
+    relation: { affection: 92 },
+    userState: { intensity: 0.3 },
+    groupState: { mood: 'CALM', activityLevel: 15 },
+    messageAnalysis: {
+      intent: 'chat',
+      sentiment: 'positive',
+      confidence: 0.75,
+      relevance: 0.7,
+    },
+  });
+
+  assert.equal(result.emotion, 'AFFECTIONATE');
+  assert.equal(result.emojiBudget, 1);
+  assert.equal(result.emojiStyle, 'soft');
 });

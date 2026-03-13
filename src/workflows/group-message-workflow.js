@@ -29,10 +29,41 @@ import { parseCommand } from '../services/commands.js';
 
 registerQueryTools(toolRegistry);
 
+const ALLOWED_SOFT_EMOJIS = new Set(['❤', '♥', '♡', '💕', '💗', '✨']);
+const EMOJI_REGEX = /\p{Extended_Pictographic}/gu;
+
 function summarizeIncomingMessage(username, text) {
   const cleaned = stripCqCodes(text).slice(0, 80);
   if (!cleaned) return '';
   return `${username}: ${cleaned}`;
+}
+
+export function enforceEmojiBudget(text, emotionResult) {
+  const budget = emotionResult?.emojiBudget ?? 0;
+  const style = emotionResult?.emojiStyle || 'none';
+  let used = 0;
+
+  const sanitized = String(text || '').replace(EMOJI_REGEX, (emoji) => {
+    if (budget <= 0) {
+      return '';
+    }
+
+    if (style === 'soft' && !ALLOWED_SOFT_EMOJIS.has(emoji)) {
+      return '';
+    }
+
+    if (used >= budget) {
+      return '';
+    }
+
+    used += 1;
+    return emoji;
+  });
+
+  return sanitized
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 // Produce a safe user-turn text for the LLM.
@@ -239,7 +270,7 @@ export async function processGroupMessage(event, precomputed = null, options = {
       advancedMode: workflowContext.isAdvanced,
     });
 
-    const replyText = await withTraceSpan(trace, 'generate-reply', () => chat(
+    const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => chat(
       history.map((item) => ({ role: item.role, content: item.content })),
       systemPrompt,
       userTurn,
@@ -251,6 +282,7 @@ export async function processGroupMessage(event, precomputed = null, options = {
     ), {
       historySize: history.length,
     });
+    const replyText = enforceEmojiBudget(rawReplyText, emotionResult);
 
     const nextMessages = [
       ...history,
