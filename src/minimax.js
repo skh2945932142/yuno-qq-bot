@@ -54,6 +54,35 @@ async function createChatCompletion(messages, options = {}) {
   return response;
 }
 
+export async function createEmbeddings(input, options = {}) {
+  const startedAt = Date.now();
+  const normalizedInput = Array.isArray(input) ? input : [input];
+
+  const response = await withRetry(
+    () => client.embeddings.create({
+      model: options.model || config.embeddingModel,
+      input: normalizedInput,
+    }),
+    {
+      retries: config.retryAttempts,
+      delayMs: config.retryDelayMs,
+      category: 'model',
+      label: 'embeddings',
+      logger,
+    }
+  );
+
+  logger.info('model', 'Embeddings finished', {
+    traceId: options.traceContext?.traceId,
+    operation: options.operation || 'embedding',
+    model: options.model || config.embeddingModel,
+    elapsedMs: Date.now() - startedAt,
+    inputCount: normalizedInput.length,
+  });
+
+  return response.data || [];
+}
+
 export async function chat(messages, systemPrompt, userMessage = null, options = {}) {
   const conversation = [
     { role: 'system', content: systemPrompt },

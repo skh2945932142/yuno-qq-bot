@@ -1,6 +1,10 @@
 import mongoose from 'mongoose';
 
 const RelationSchema = new mongoose.Schema({
+  platform: { type: String, default: 'qq' },
+  chatType: { type: String, default: 'group' },
+  chatId: { type: String, default: '' },
+  sessionKey: { type: String, default: '' },
   groupId: { type: String, required: true },
   userId: { type: String, required: true },
   affection: { type: Number, default: 30 },
@@ -17,6 +21,10 @@ RelationSchema.index({ groupId: 1, userId: 1 }, { unique: true });
 export const Relation = mongoose.model('Relation', RelationSchema);
 
 const HistorySchema = new mongoose.Schema({
+  platform: { type: String, default: 'qq' },
+  chatType: { type: String, default: 'group' },
+  chatId: { type: String, default: '' },
+  sessionKey: { type: String, default: '' },
   groupId: { type: String, required: true },
   userId: { type: String, required: true },
   messages: [{
@@ -29,6 +37,10 @@ HistorySchema.index({ groupId: 1, userId: 1 }, { unique: true });
 export const History = mongoose.model('History', HistorySchema);
 
 const UserStateSchema = new mongoose.Schema({
+  platform: { type: String, default: 'qq' },
+  chatType: { type: String, default: 'group' },
+  chatId: { type: String, default: '' },
+  sessionKey: { type: String, default: '' },
   groupId: { type: String, required: true },
   userId: { type: String, required: true },
   currentEmotion: { type: String, default: 'CALM' },
@@ -67,3 +79,37 @@ const GroupEventSchema = new mongoose.Schema({
 }, { minimize: false });
 GroupEventSchema.index({ groupId: 1, createdAt: -1 });
 export const GroupEvent = mongoose.model('GroupEvent', GroupEventSchema);
+
+const ConversationStateSchema = new mongoose.Schema({
+  platform: { type: String, default: 'qq' },
+  chatType: { type: String, default: 'group' },
+  chatId: { type: String, required: true },
+  sessionKey: { type: String, required: true, unique: true },
+  userId: { type: String, required: true },
+  rollingSummary: { type: String, default: '' },
+  messages: [{
+    role: String,
+    content: String,
+    time: { type: Date, default: Date.now },
+  }],
+  lastSummarizedAt: { type: Date, default: null },
+  updatedAt: { type: Date, default: Date.now },
+}, { minimize: false });
+export const ConversationState = mongoose.model('ConversationState', ConversationStateSchema);
+
+const UserProfileMemorySchema = new mongoose.Schema({
+  platform: { type: String, default: 'qq' },
+  userId: { type: String, required: true },
+  profileKey: { type: String, required: true, unique: true },
+  displayName: { type: String, default: '' },
+  preferredName: { type: String, default: '' },
+  tonePreference: { type: String, default: '' },
+  favoriteTopics: { type: [String], default: [] },
+  dislikes: { type: [String], default: [] },
+  roleplaySettings: { type: [String], default: [] },
+  relationshipPreference: { type: String, default: '' },
+  profileSummary: { type: String, default: '' },
+  lastUpdated: { type: Date, default: Date.now },
+}, { minimize: false });
+UserProfileMemorySchema.index({ platform: 1, userId: 1 }, { unique: true });
+export const UserProfileMemory = mongoose.model('UserProfileMemory', UserProfileMemorySchema);

@@ -26,6 +26,7 @@ export const config = Object.freeze({
   mongodbUri: process.env.MONGODB_URI || '',
   mongoMaxPoolSize: readNumber('MONGO_MAX_POOL_SIZE', 10),
   siliconflowApiKey: process.env.SILICONFLOW_API_KEY || '',
+  embeddingModel: process.env.EMBEDDING_MODEL || 'BAAI/bge-m3',
   napcatApi: (process.env.NAPCAT_API || '').replace(/\/+$/, ''),
   napcatToken: process.env.NAPCAT_TOKEN || '',
   targetGroupId: process.env.TARGET_GROUP_ID ? String(process.env.TARGET_GROUP_ID) : '',
@@ -42,6 +43,9 @@ export const config = Object.freeze({
   requestTimeoutMs: readNumber('REQUEST_TIMEOUT_MS', 15000),
   retryAttempts: readNumber('RETRY_ATTEMPTS', 2),
   retryDelayMs: readNumber('RETRY_DELAY_MS', 400),
+  qdrantUrl: (process.env.QDRANT_URL || '').replace(/\/+$/, ''),
+  qdrantApiKey: process.env.QDRANT_API_KEY || '',
+  qdrantCollection: process.env.QDRANT_COLLECTION || 'qq_bot_knowledge',
 });
 
 export function validateRuntimeConfig() {

@@ -1,4 +1,4 @@
 export {
-  processGroupMessage as handleMessage,
+  processIncomingMessage as handleMessage,
   shouldRespondToEvent as shouldRespond,
-} from './workflows/group-message-workflow.js';
+} from './message-workflow.js';
