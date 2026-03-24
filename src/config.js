@@ -20,6 +20,17 @@ function readBoolean(name, fallback) {
   return fallback;
 }
 
+function readJson(name, fallback) {
+  const value = process.env[name];
+  if (!value) return fallback;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
 export const config = Object.freeze({
   nodeEnv: process.env.NODE_ENV || 'development',
   port: readNumber('PORT', 3000),
@@ -65,6 +76,7 @@ export const config = Object.freeze({
   metricsPath: process.env.METRICS_PATH || '/metrics',
   logLevel: process.env.LOG_LEVEL || 'info',
   traceSampleRate: readNumber('TRACE_SAMPLE_RATE', 1),
+  specialUsers: readJson('SPECIAL_USERS_JSON', []),
 });
 
 export function validateRuntimeConfig() {

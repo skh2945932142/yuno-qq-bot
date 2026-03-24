@@ -108,6 +108,10 @@ const UserProfileMemorySchema = new mongoose.Schema({
   dislikes: { type: [String], default: [] },
   roleplaySettings: { type: [String], default: [] },
   relationshipPreference: { type: String, default: '' },
+  personaMode: { type: String, default: '' },
+  specialBondSummary: { type: String, default: '' },
+  bondMemories: { type: [String], default: [] },
+  specialNicknames: { type: [String], default: [] },
   profileSummary: { type: String, default: '' },
   lastUpdated: { type: Date, default: Date.now },
 }, { minimize: false });

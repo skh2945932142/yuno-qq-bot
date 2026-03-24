@@ -2,6 +2,7 @@ import { config, isAdvancedGroup } from './config.js';
 import { classifyReplyTrigger } from './minimax.js';
 import { normalizeLegacyMessageEvent } from './chat/session.js';
 import { loadTriggerPolicy } from './trigger-policy.js';
+import { getSpecialUserByUserId } from './special-users.js';
 import {
   clamp,
   extractAtTargets,
@@ -10,12 +11,21 @@ import {
   stripCqCodes,
 } from './utils.js';
 
+const JEALOUSY_PATTERN = /(别人|其他人|别的女人|别的男人|喜欢谁|谁靠近你|陪别人|看别人|抢走你|情敌)/i;
+
 function buildKeywordPattern(keywords = []) {
   if (!keywords.length) {
     return /$^/;
   }
 
   return new RegExp(`(${keywords.join('|')})`, 'i');
+}
+
+function hasMemoryHit(normalizedText, memories = []) {
+  return memories.some((item) => {
+    const normalized = String(item || '').trim();
+    return normalized && normalizedText.includes(normalized);
+  });
 }
 
 function buildHeuristicResult({
@@ -55,6 +65,7 @@ function buildRuleSignals(event, context, policy, options = {}) {
   const keywordPattern = buildKeywordPattern(policy.keywords);
   const atTargets = extractAtTargets(message);
   const isAdmin = normalizedEvent.userId === config.adminQq;
+  const specialUser = context.specialUser || getSpecialUserByUserId(normalizedEvent.userId);
   const directMention = normalizedEvent.chatType === 'group'
     ? Boolean(normalizedEvent.mentionsBot)
       || (normalizedEvent.selfId ? atTargets.includes(normalizedEvent.selfId) : false)
@@ -62,11 +73,19 @@ function buildRuleSignals(event, context, policy, options = {}) {
   const replyToBot = Boolean(normalizedEvent.replyTo) && directMention;
 
   const nameMention = /由乃|yuno/i.test(normalized);
-  const question = /[?？]$/.test(normalized) || /(怎么|如何|为什么|为啥|吗|么)\b/i.test(normalized);
+  const question = /[?？]$/.test(normalized) || /(怎么|如何|为什么|为啥|能不能|会不会|是不是)/i.test(normalized);
   const keyword = keywordPattern.test(normalized);
   const highAffection = (context.relation?.affection || 0) >= 70;
   const recentActiveUser = (context.relation?.activeScore || 0) >= 65;
   const groupActiveWindow = (context.groupState?.activityLevel || 0) >= 60;
+  const specialKeyword = Boolean(specialUser)
+    && (specialUser.triggerKeywords || []).some((item) => normalized.includes(item));
+  const jealousyTopic = JEALOUSY_PATTERN.test(normalized);
+  const bondMemoryHit = Boolean(specialUser) && hasMemoryHit(normalized, [
+    ...(context.userProfile?.bondMemories || []),
+    ...(specialUser?.memorySeeds || []),
+    ...(context.userProfile?.specialNicknames || []),
+  ]);
 
   const randomFn = options.random ?? (() => Math.random());
   const random = normalizedEvent.chatType === 'group'
@@ -91,6 +110,10 @@ function buildRuleSignals(event, context, policy, options = {}) {
   applyWeight(recentActiveUser, 'activeUser', 'active-user');
   applyWeight(groupActiveWindow && (nameMention || directMention), 'activeWindow', 'active-window');
   applyWeight(random, 'random', 'random');
+  applyWeight(Boolean(specialUser), 'specialUser', 'special-user');
+  applyWeight(specialKeyword, 'specialKeyword', 'special-keyword');
+  applyWeight(jealousyTopic, 'jealousyTopic', 'jealousy-topic');
+  applyWeight(bondMemoryHit, 'bondMemoryHit', 'bond-memory-hit');
 
   return {
     event: normalizedEvent,
@@ -103,6 +126,7 @@ function buildRuleSignals(event, context, policy, options = {}) {
     keyword,
     isAdmin,
     normalized,
+    specialUser,
   };
 }
 
@@ -112,6 +136,7 @@ function makeDecisionExplanation(rule, extras = {}) {
     signals: rule.signals || [],
     directMention: Boolean(rule.directMention),
     isAdmin: Boolean(rule.isAdmin),
+    specialUser: rule.specialUser ? rule.specialUser.label : null,
     classifier: extras.classifier || null,
     hardDecision: extras.hardDecision || null,
     finalDecision: extras.finalDecision || null,
@@ -126,6 +151,13 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
   const sentiment = inferSentiment(message);
   const intent = inferIntent(message);
   const isAttachmentOnly = shouldTreatAsAttachmentOnly(rule.event, rule.normalized);
+  const specialUser = rule.specialUser;
+  const autoAllowThreshold = specialUser
+    ? Math.max(0, (policy.groupChat.specialUserAutoAllowThreshold ?? (policy.groupChat.autoAllowThreshold - 0.12)))
+    : policy.groupChat.autoAllowThreshold;
+  const classifierAllowThreshold = specialUser
+    ? Math.max(0, (policy.groupChat.specialUserClassifierAllowThreshold ?? (policy.groupChat.classifierAllowThreshold - 0.08)))
+    : policy.groupChat.classifierAllowThreshold;
 
   if (!rule.normalized && !isAttachmentOnly) {
     return buildHeuristicResult({
@@ -170,7 +202,7 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
       intent,
       sentiment,
       relevance: clamp(policy.privateChat.minRelevance, 0, 1),
-      reason: 'private-default-reply',
+      reason: specialUser ? 'special-private-reply' : 'private-default-reply',
       ruleSignals: [...rule.signals, 'private-chat'],
       replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
       topics: context.topics || [],
@@ -188,7 +220,7 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
 
     return buildHeuristicResult({
       shouldRespond: true,
-      confidence: clamp(Math.max(rule.score, policy.groupChat.autoAllowThreshold), 0, 1),
+      confidence: clamp(Math.max(rule.score, autoAllowThreshold), 0, 1),
       intent,
       sentiment,
       relevance: isAdvancedGroup(rule.event.chatId) ? 0.85 : 0.8,
@@ -206,7 +238,7 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
   if (rule.isAdmin && policy.groupChat.hardAllowAdminCommand && (rule.question || rule.keyword)) {
     return buildHeuristicResult({
       shouldRespond: true,
-      confidence: clamp(Math.max(rule.score, policy.groupChat.classifierAllowThreshold), 0, 1),
+      confidence: clamp(Math.max(rule.score, classifierAllowThreshold), 0, 1),
       intent,
       sentiment,
       relevance: 0.78,
@@ -221,14 +253,14 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
     });
   }
 
-  if (rule.score >= policy.groupChat.autoAllowThreshold) {
+  if (rule.score >= autoAllowThreshold) {
     return buildHeuristicResult({
       shouldRespond: true,
       confidence: clamp(rule.score, 0, 1),
       intent,
       sentiment,
       relevance: clamp(Math.max(rule.score, 0.45), 0, 1),
-      reason: 'heuristic-threshold-pass',
+      reason: specialUser ? 'special-heuristic-pass' : 'heuristic-threshold-pass',
       ruleSignals: rule.signals,
       replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
       topics: context.topics || [],
@@ -238,8 +270,14 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
     });
   }
 
-  const withinClassifierWindow = rule.score >= policy.groupChat.requireClassifierWindow.minScore
-    && rule.score <= policy.groupChat.requireClassifierWindow.maxScore;
+  const classifierWindow = specialUser
+    ? {
+        minScore: Math.max(0, (policy.groupChat.requireClassifierWindow.minScore || 0) - 0.08),
+        maxScore: policy.groupChat.requireClassifierWindow.maxScore,
+      }
+    : policy.groupChat.requireClassifierWindow;
+  const withinClassifierWindow = rule.score >= classifierWindow.minScore
+    && rule.score <= classifierWindow.maxScore;
 
   if (policy.classifier.enabled && withinClassifierWindow) {
     const classifier = await (options.triggerClassifier || classifyReplyTrigger)(message, {
@@ -250,6 +288,7 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
       directMention: rule.directMention,
       ruleSignals: rule.signals,
       recentSummary: context.conversationState?.rollingSummary || '',
+      specialUser: specialUser?.label || '',
     }, {
       traceContext: options.traceContext,
       promptVersion: policy.classifier.promptVersion,

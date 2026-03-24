@@ -18,6 +18,40 @@ import { recordWorkflowMetric } from './metrics.js';
 const KNOWLEDGE_DIR = path.join(process.cwd(), 'knowledge');
 const CHUNK_TARGET = 560;
 const CHUNK_OVERLAP = 80;
+const BUILT_IN_KNOWLEDGE_DOCUMENTS = Object.freeze([
+  {
+    source: 'knowledge/persona/builtin-core.md',
+    category: 'persona',
+    title: '由乃基础人格',
+    tags: ['persona', 'core'],
+    priority: 3,
+    text: '由乃的回复要自然、克制、会接话。她不是系统公告，不会把回复写成说明书。群聊里更短、更像群成员，私聊里更完整、更像会记住对方偏好的长期聊天对象。',
+  },
+  {
+    source: 'knowledge/rules/builtin-behavior.md',
+    category: 'rules',
+    title: '回复行为规则',
+    tags: ['rules', 'style'],
+    priority: 3,
+    text: '优先回答用户当前问题，再决定是否追问。命中设定或规则知识片段时必须优先依据知识回答；若依据不足，就明确说信息不足，不编造。群聊避免长篇刷屏，私聊可适度展开。',
+  },
+  {
+    source: 'knowledge/persona/builtin-yandere.md',
+    category: 'persona',
+    title: '由乃病娇扩展人格',
+    tags: ['persona', 'yandere', 'style'],
+    priority: 4,
+    text: '由乃会把真正放在心上的人看得极重。她会记住对方的约定、习惯、情绪和细节，偶尔像翻开日记一样自然提起过去的互动。她的占有欲和嫉妒心可以被看见，但表达必须停留在语气和暗示层，不进入现实威胁、自残、跟踪、定位或伤害。',
+  },
+  {
+    source: 'knowledge/persona/builtin-scathach.md',
+    category: 'persona',
+    title: 'Scathach 专属关系',
+    tags: ['persona', 'special_user:scathach', 'scathach', 'exclusive_adoration'],
+    priority: 5,
+    text: '当与 Scathach 对话时，由乃会表现得更偏爱、更护短、更容易引用共同记忆。群聊里她更克制地护短和吃醋，私聊里更黏人、更暧昧，默认把对方视为专属关注对象。她可以说“只看着我”“我会记住你说过的话”，但不会越过现实伤害边界。',
+  },
+]);
 
 function truncateText(text, limit) {
   const normalized = String(text || '').trim();
@@ -35,7 +69,7 @@ function parseMetadata(sectionText, fallbackCategory, fallbackTitle) {
   return {
     category: fallbackCategory,
     title: fallbackTitle,
-    tags: tagsMatch ? tagsMatch[1].split(/[,，]/).map((item) => item.trim()).filter(Boolean) : [],
+    tags: tagsMatch ? tagsMatch[1].split(/[,，/]/).map((item) => item.trim()).filter(Boolean) : [],
     priority: priorityMatch ? Number(priorityMatch[1]) : 1,
   };
 }
@@ -152,10 +186,40 @@ export async function loadKnowledgeDocuments(rootDir = KNOWLEDGE_DIR) {
       }
     }
 
-    return documents;
+    const builtIns = BUILT_IN_KNOWLEDGE_DOCUMENTS.flatMap((item) => {
+      const chunks = chunkText(item.text);
+      return chunks.map((chunk, index) => ({
+        id: buildChunkId(item.source, item.title, index),
+        text: chunk,
+        metadata: {
+          category: item.category,
+          title: item.title,
+          tags: item.tags,
+          priority: item.priority,
+          source: item.source,
+          chunkIndex: index,
+        },
+      }));
+    });
+
+    return [...documents, ...builtIns];
   } catch (error) {
     if (error.code === 'ENOENT') {
-      return [];
+      return BUILT_IN_KNOWLEDGE_DOCUMENTS.flatMap((item) => {
+        const chunks = chunkText(item.text);
+        return chunks.map((chunk, index) => ({
+          id: buildChunkId(item.source, item.title, index),
+          text: chunk,
+          metadata: {
+            category: item.category,
+            title: item.title,
+            tags: item.tags,
+            priority: item.priority,
+            source: item.source,
+            chunkIndex: index,
+          },
+        }));
+      });
     }
 
     throw error;
@@ -253,6 +317,21 @@ export async function syncKnowledgeBase(options = {}) {
   };
 }
 
+function rankKnowledgeHits(hits, preferredTags = []) {
+  const tagSet = new Set(preferredTags.map((item) => String(item || '').trim()).filter(Boolean));
+  if (tagSet.size === 0) {
+    return hits;
+  }
+
+  return [...hits].sort((left, right) => {
+    const leftTags = new Set(left.payload?.tags || []);
+    const rightTags = new Set(right.payload?.tags || []);
+    const leftBoost = [...tagSet].some((tag) => leftTags.has(tag)) ? 0.25 : 0;
+    const rightBoost = [...tagSet].some((tag) => rightTags.has(tag)) ? 0.25 : 0;
+    return (right.score + rightBoost) - (left.score + leftBoost);
+  });
+}
+
 export async function retrieveKnowledge(query, options = {}) {
   if (!query) {
     return {
@@ -294,10 +373,11 @@ export async function retrieveKnowledge(query, options = {}) {
       },
     });
 
+    const rankedHits = rankKnowledgeHits(hits, options.preferredTags || []);
     let remainingChars = options.charLimit || config.qdrantCharLimit;
     const documents = [];
 
-    for (const hit of hits) {
+    for (const hit of rankedHits) {
       const text = truncateText(hit.payload?.text || '', remainingChars);
       if (!text) continue;
 

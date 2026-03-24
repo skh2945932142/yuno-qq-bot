@@ -3,7 +3,7 @@ import { logger } from './logger.js';
 import { chat, tts } from './minimax.js';
 import { sendReply, sendVoice } from './sender.js';
 import { analyzeTrigger } from './message-analysis.js';
-import { resolveEmotion, shouldSendVoiceForEmotion } from './services/emotion-engine.js';
+import { resolveEmotion, shouldSendVoiceForEmotion } from './emotion-engine.js';
 import {
   canUseAdvancedGroupFeatures,
   ensureGroupState,
@@ -29,6 +29,7 @@ import { normalizeLegacyMessageEvent } from './chat/session.js';
 import { stripCqCodes } from './utils.js';
 import { getRuntimeServices } from './runtime-services.js';
 import { recordWorkflowMetric } from './metrics.js';
+import { getSpecialUserByUserId, getSpecialUserKnowledgeTags } from './special-users.js';
 
 registerQueryTools(toolRegistry);
 
@@ -123,6 +124,7 @@ export async function buildWorkflowContext(event, trace, deps) {
     userId: event.userId,
   };
   const isAdvanced = event.chatType === 'group' && canUseAdvancedGroupFeatures(event.chatId);
+  const specialUser = getSpecialUserByUserId(event.userId);
 
   const [relation, userState, userProfile, conversationState, groupState, recentEvents] = await withTraceSpan(
     trace,
@@ -130,7 +132,7 @@ export async function buildWorkflowContext(event, trace, deps) {
     () => Promise.all([
       deps.ensureRelation(session),
       deps.ensureUserState(session),
-      deps.ensureUserProfileMemory({ platform: event.platform, userId: event.userId, userName: event.userName }),
+      deps.ensureUserProfileMemory({ platform: event.platform, userId: event.userId, userName: event.userName, specialUser }),
       deps.getConversationState(session),
       isAdvanced ? deps.ensureGroupState(event.chatId) : Promise.resolve(null),
       isAdvanced ? deps.getRecentEvents(event.chatId, 5) : Promise.resolve([]),
@@ -151,6 +153,7 @@ export async function buildWorkflowContext(event, trace, deps) {
     conversationState,
     groupState,
     recentEvents,
+    specialUser,
     isAdmin: event.userId === config.adminQq,
     isAdvanced,
   };
@@ -258,6 +261,8 @@ async function persistReplyState(context, payload, trace, deps) {
       text: payload.userTurn,
       analysis: payload.analysis,
       userName: payload.username,
+      userId: context.event.userId,
+      specialUser: context.specialUser,
     }),
   ];
 
@@ -445,6 +450,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
     const knowledge = task.requiresRetrieval
       ? await withTraceSpan(trace, 'retrieve-knowledge', () => deps.retrieveKnowledge(userTurn, {
           reason: task.reason,
+          preferredTags: getSpecialUserKnowledgeTags(workflowContext.specialUser),
         }), {
           route: task.category,
         })
@@ -456,6 +462,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       groupState: workflowContext.groupState,
       messageAnalysis: analysis,
       isAdmin: workflowContext.isAdmin,
+      specialUser: workflowContext.specialUser,
     });
 
     const systemPrompt = deps.buildReplyContext({
@@ -471,6 +478,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       emotionResult,
       knowledge,
       isAdmin: workflowContext.isAdmin,
+      specialUser: workflowContext.specialUser,
     });
 
     const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => deps.chat(
