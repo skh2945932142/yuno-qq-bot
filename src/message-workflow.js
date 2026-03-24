@@ -1,4 +1,4 @@
-import { config, isAdvancedGroup } from './config.js';
+import { config } from './config.js';
 import { logger } from './logger.js';
 import { chat, tts } from './minimax.js';
 import { sendReply, sendVoice } from './sender.js';
@@ -21,16 +21,18 @@ import { getConversationState, appendConversationMessages } from './conversation
 import { ensureUserProfileMemory, updateUserProfileMemory } from './profile-memory.js';
 import { retrieveKnowledge } from './knowledge-base.js';
 import { buildReplyContext } from './prompt-builder.js';
-import { createTraceContext, failTrace, finalizeTrace, withTraceSpan } from './observability/tracing.js';
+import { createTraceContext, failTrace, finalizeTrace, withTraceSpan } from './runtime-tracing.js';
 import { planIncomingTask } from './task-router.js';
 import { registerQueryTools } from './query-tools.js';
 import { toolRegistry } from './tools/registry.js';
 import { normalizeLegacyMessageEvent } from './chat/session.js';
 import { stripCqCodes } from './utils.js';
+import { getRuntimeServices } from './runtime-services.js';
+import { recordWorkflowMetric } from './metrics.js';
 
 registerQueryTools(toolRegistry);
 
-const ALLOWED_SOFT_EMOJIS = new Set(['❤', '♥', '💕', '💞', '✨']);
+const ALLOWED_SOFT_EMOJIS = new Set(['\u2764', '\u2665', '\u{1F495}', '\u{1F49E}', '\u2728']);
 const EMOJI_REGEX = /\p{Extended_Pictographic}/gu;
 
 function summarizeIncomingMessage(username, text) {
@@ -73,16 +75,18 @@ function resolveUserTurn(event) {
   const cleanText = stripCqCodes(event.rawText || event.text || '');
   if (cleanText) return cleanText;
 
-  if ((event.attachments || []).some((item) => item.type === 'face')) return `[${event.userName} 发送了一个表情]`;
-  if ((event.attachments || []).some((item) => item.type === 'image')) return `[${event.userName} 发送了一张图片]`;
-  if ((event.attachments || []).some((item) => item.type === 'record')) return `[${event.userName} 发送了一条语音]`;
-  if ((event.attachments || []).some((item) => item.type === 'video')) return `[${event.userName} 发送了一段视频]`;
-  if ((event.attachments || []).length > 0) return `[${event.userName} 发送了一条消息]`;
+  if ((event.attachments || []).some((item) => item.type === 'face')) return `[${event.userName} sent a sticker]`;
+  if ((event.attachments || []).some((item) => item.type === 'image')) return `[${event.userName} sent an image]`;
+  if ((event.attachments || []).some((item) => item.type === 'record')) return `[${event.userName} sent a voice message]`;
+  if ((event.attachments || []).some((item) => item.type === 'video')) return `[${event.userName} sent a video]`;
+  if ((event.attachments || []).length > 0) return `[${event.userName} sent a message]`;
 
   return cleanText;
 }
 
 function createWorkflowDeps(deps = {}) {
+  const runtimeServices = getRuntimeServices();
+
   return {
     analyzeTrigger: deps.analyzeTrigger || analyzeTrigger,
     planIncomingTask: deps.planIncomingTask || planIncomingTask,
@@ -107,10 +111,11 @@ function createWorkflowDeps(deps = {}) {
     sendReply: deps.sendReply || sendReply,
     sendVoice: deps.sendVoice || sendVoice,
     toolRegistry: deps.toolRegistry || toolRegistry,
+    enqueuePersistJob: deps.enqueuePersistJob || runtimeServices.queueManager?.enqueuePersist || null,
   };
 }
 
-async function buildContext(event, trace, deps) {
+export async function buildWorkflowContext(event, trace, deps) {
   const session = {
     platform: event.platform,
     chatType: event.chatType,
@@ -151,6 +156,32 @@ async function buildContext(event, trace, deps) {
   };
 }
 
+async function resolveContext(event, precomputed, trace, deps, options) {
+  if (precomputed?.relation && precomputed?.userState && precomputed?.conversationState) {
+    return {
+      ...precomputed,
+      event,
+      trace,
+    };
+  }
+
+  const context = await buildWorkflowContext(event, trace, deps);
+  if (precomputed?.analysis) {
+    return {
+      ...context,
+      analysis: precomputed.analysis,
+      trace,
+    };
+  }
+
+  const decision = await shouldRespondToEvent(event, { ...options, trace, deps });
+  return {
+    ...context,
+    analysis: decision.analysis,
+    trace,
+  };
+}
+
 export async function shouldRespondToEvent(event, options = {}) {
   const deps = createWorkflowDeps(options.deps);
   const normalizedEvent = normalizeLegacyMessageEvent(event);
@@ -158,29 +189,47 @@ export async function shouldRespondToEvent(event, options = {}) {
     chatType: normalizedEvent.chatType,
     chatId: normalizedEvent.chatId,
     userId: normalizedEvent.userId,
+    messageId: normalizedEvent.messageId,
+    queueJobId: options.queueJobId,
   });
 
   try {
-    const context = await buildContext(normalizedEvent, trace, deps);
+    const context = await buildWorkflowContext(normalizedEvent, trace, deps);
     const analysis = await withTraceSpan(
       trace,
       'analyze-trigger',
-      () => deps.analyzeTrigger(normalizedEvent, context, options),
+      () => deps.analyzeTrigger(normalizedEvent, context, {
+        ...options,
+        traceContext: trace,
+      }),
       {
         advancedMode: context.isAdvanced,
         chatType: normalizedEvent.chatType,
       }
     );
 
+    recordWorkflowMetric('yuno_trigger_decisions_total', 1, {
+      chat_type: normalizedEvent.chatType,
+      decision: analysis.shouldRespond ? 'allow' : 'deny',
+      reason: analysis.reason,
+    });
+
     finalizeTrace(trace, {
       shouldRespond: analysis.shouldRespond,
       reason: analysis.reason,
       chatType: normalizedEvent.chatType,
+      messageId: normalizedEvent.messageId,
+      decisionReason: analysis.reason,
     });
 
     return { ...context, analysis, trace };
   } catch (error) {
-    failTrace(trace, error);
+    failTrace(trace, error, {
+      chatType: normalizedEvent.chatType,
+      chatId: normalizedEvent.chatId,
+      userId: normalizedEvent.userId,
+      messageId: normalizedEvent.messageId,
+    });
     throw error;
   }
 }
@@ -236,14 +285,72 @@ async function persistReplyState(context, payload, trace, deps) {
   });
 
   const failures = results.filter((item) => item.status === 'rejected');
+  recordWorkflowMetric('yuno_persist_failures_total', failures.length, {
+    chat_type: context.event.chatType,
+  });
+
   if (failures.length > 0) {
     logger.warn('memory', 'Post-reply state updates partially failed', {
+      traceId: trace.traceId,
       chatType: context.event.chatType,
       chatId: context.event.chatId,
       userId: context.event.userId,
+      messageId: context.event.messageId,
       failed: failures.length,
-      traceId: trace.traceId,
+      decisionReason: payload.analysis.reason,
     });
+  }
+}
+
+function buildPersistJobData(context, payload) {
+  return {
+    event: context.event,
+    analysis: payload.analysis,
+    emotionResult: payload.emotionResult,
+    summary: payload.summary,
+    username: payload.username,
+    rawText: payload.rawText,
+    userTurn: payload.userTurn,
+    nextMessages: payload.nextMessages,
+  };
+}
+
+export async function processPersistJob(jobData, options = {}) {
+  const deps = createWorkflowDeps(options.deps);
+  const event = normalizeLegacyMessageEvent(jobData.event);
+  const trace = createTraceContext('persist-job', {
+    chatType: event.chatType,
+    chatId: event.chatId,
+    userId: event.userId,
+    messageId: event.messageId,
+    queueJobId: options.queueJobId,
+  });
+
+  try {
+    const context = await buildWorkflowContext(event, trace, deps);
+    await persistReplyState(context, {
+      nextMessages: jobData.nextMessages,
+      rawText: jobData.rawText,
+      userTurn: jobData.userTurn,
+      analysis: jobData.analysis,
+      emotionResult: jobData.emotionResult,
+      summary: jobData.summary,
+      username: jobData.username,
+    }, trace, deps);
+
+    finalizeTrace(trace, {
+      replyType: 'persist',
+      shouldRespond: true,
+      queueJobId: options.queueJobId,
+      messageId: event.messageId,
+    });
+    return true;
+  } catch (error) {
+    failTrace(trace, error, {
+      queueJobId: options.queueJobId,
+      messageId: event.messageId,
+    });
+    throw error;
   }
 }
 
@@ -254,19 +361,16 @@ export async function processIncomingMessage(event, precomputed = null, options 
     chatType: normalizedEvent.chatType,
     chatId: normalizedEvent.chatId,
     userId: normalizedEvent.userId,
+    messageId: normalizedEvent.messageId,
+    queueJobId: options.queueJobId,
   });
 
   try {
-    const context = precomputed || await shouldRespondToEvent(normalizedEvent, { ...options, trace, deps });
+    const context = await resolveContext(normalizedEvent, precomputed, trace, deps, options);
     const workflowContext = {
       ...context,
       event: normalizedEvent,
-      session: context.session || {
-        platform: normalizedEvent.platform,
-        chatType: normalizedEvent.chatType,
-        chatId: normalizedEvent.chatId,
-        userId: normalizedEvent.userId,
-      },
+      trace,
     };
     const rawText = normalizedEvent.rawText || '';
     const userTurn = resolveUserTurn(normalizedEvent);
@@ -275,21 +379,24 @@ export async function processIncomingMessage(event, precomputed = null, options 
 
     if (!analysis.shouldRespond) {
       logger.info('analysis', 'Message skipped after analysis', {
+        traceId: trace.traceId,
         chatType: normalizedEvent.chatType,
         chatId: normalizedEvent.chatId,
         userId: normalizedEvent.userId,
+        messageId: normalizedEvent.messageId,
         reason: analysis.reason,
         confidence: analysis.confidence,
-        traceId: trace.traceId,
+        decisionReason: analysis.reason,
       });
       finalizeTrace(trace, {
         shouldRespond: false,
         reason: analysis.reason,
+        queueJobId: options.queueJobId,
       });
       return null;
     }
 
-    const task = deps.planIncomingTask({
+    let task = deps.planIncomingTask({
       event: normalizedEvent,
       text: rawText,
       analysis,
@@ -297,20 +404,42 @@ export async function processIncomingMessage(event, precomputed = null, options 
     });
 
     if (task.type === 'tool') {
-      const toolResult = await runToolTask(task, workflowContext, trace, deps);
-      await withTraceSpan(trace, 'send-tool-response', () => deps.sendReply({
-        platform: normalizedEvent.platform,
-        chatType: normalizedEvent.chatType,
-        chatId: normalizedEvent.chatId,
-      }, toolResult.text), {
-        toolName: task.toolName,
-      });
-      finalizeTrace(trace, {
-        replyType: 'tool',
-        toolName: task.toolName,
-        shouldRespond: true,
-      });
-      return toolResult.text;
+      try {
+        const toolResult = await runToolTask(task, workflowContext, trace, deps);
+        await withTraceSpan(trace, 'send-tool-response', () => deps.sendReply({
+          platform: normalizedEvent.platform,
+          chatType: normalizedEvent.chatType,
+          chatId: normalizedEvent.chatId,
+        }, toolResult.text), {
+          toolName: task.toolName,
+        });
+        finalizeTrace(trace, {
+          replyType: 'tool',
+          toolName: task.toolName,
+          shouldRespond: true,
+          route: task.category,
+          queueJobId: options.queueJobId,
+          messageId: normalizedEvent.messageId,
+        });
+        return toolResult.text;
+      } catch (error) {
+        logger.warn('tool', 'Tool execution fell back to chat response', {
+          traceId: trace.traceId,
+          toolName: task.toolName,
+          messageId: normalizedEvent.messageId,
+          message: error.message,
+        });
+        task = {
+          ...task,
+          type: 'chat',
+          category: 'knowledge_qa',
+          requiresModel: true,
+          requiresRetrieval: true,
+          allowFollowUp: normalizedEvent.chatType === 'private',
+          reason: 'tool-fallback',
+        };
+        analysis.reason = 'tool-fallback';
+      }
     }
 
     const knowledge = task.requiresRetrieval
@@ -353,13 +482,13 @@ export async function processIncomingMessage(event, precomputed = null, options 
       userTurn,
       {
         traceContext: trace,
-        promptVersion: 'reply-context/v3',
+        promptVersion: 'reply-context/v4',
         operation: 'reply',
       }
     ), {
       historySize: workflowContext.conversationState.messages.length,
       route: task.category,
-      advancedMode: isAdvancedGroup(normalizedEvent.chatId),
+      advancedMode: workflowContext.isAdvanced,
     });
 
     const replyText = enforceEmojiBudget(rawReplyText, emotionResult);
@@ -374,7 +503,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       chatId: normalizedEvent.chatId,
     }, replyText));
 
-    await persistReplyState(workflowContext, {
+    const persistJobData = buildPersistJobData(workflowContext, {
       nextMessages,
       rawText,
       userTurn,
@@ -382,7 +511,23 @@ export async function processIncomingMessage(event, precomputed = null, options 
       emotionResult,
       summary,
       username: normalizedEvent.userName,
-    }, trace, deps);
+    });
+
+    if (!options.persistInline && deps.enqueuePersistJob) {
+      await deps.enqueuePersistJob(persistJobData, {
+        jobId: `persist:${normalizedEvent.platform}:${normalizedEvent.chatId}:${normalizedEvent.messageId || Date.now()}`,
+      });
+    } else {
+      await persistReplyState(workflowContext, {
+        nextMessages,
+        rawText,
+        userTurn,
+        analysis,
+        emotionResult,
+        summary,
+        username: normalizedEvent.userName,
+      }, trace, deps);
+    }
 
     if (config.enableVoice && config.yunoVoiceUri && deps.shouldSendVoiceForEmotion(emotionResult)) {
       try {
@@ -397,17 +542,27 @@ export async function processIncomingMessage(event, precomputed = null, options 
         }, audio));
       } catch (error) {
         logger.warn('model', 'Voice generation skipped', {
-          message: error.message,
           traceId: trace.traceId,
+          chatId: normalizedEvent.chatId,
+          messageId: normalizedEvent.messageId,
+          message: error.message,
         });
       }
     }
+
+    recordWorkflowMetric('yuno_replies_sent_total', 1, {
+      chat_type: normalizedEvent.chatType,
+      route: task.category,
+    });
 
     finalizeTrace(trace, {
       replyType: 'chat',
       shouldRespond: true,
       route: task.category,
       knowledgeHits: knowledge.documents?.length || 0,
+      queueJobId: options.queueJobId,
+      messageId: normalizedEvent.messageId,
+      decisionReason: analysis.reason,
     });
     return replyText;
   } catch (error) {
@@ -415,9 +570,21 @@ export async function processIncomingMessage(event, precomputed = null, options 
       chatType: normalizedEvent.chatType,
       chatId: normalizedEvent.chatId,
       userId: normalizedEvent.userId,
+      messageId: normalizedEvent.messageId,
+      queueJobId: options.queueJobId,
     });
     throw error;
   }
+}
+
+export async function processReplyJob(jobData, options = {}) {
+  return processIncomingMessage(jobData.event, {
+    analysis: jobData.analysis,
+  }, {
+    ...options,
+    queueJobId: options.queueJobId,
+    persistInline: false,
+  });
 }
 
 export async function processGroupMessage(event, precomputed = null, options = {}) {

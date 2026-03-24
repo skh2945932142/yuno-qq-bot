@@ -34,5 +34,5 @@ test('analyzeTrigger still suppresses unmentioned group chatter', async () => {
   });
 
   assert.equal(result.shouldRespond, false);
-  assert.equal(result.reason, 'direct-mention-required');
+  assert.equal(result.reason, 'group-low-confidence');
 });

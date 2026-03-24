@@ -14,3 +14,7 @@ export async function connectDB() {
     process.exit(1);
   }
 }
+
+export function isDbReady() {
+  return mongoose.connection.readyState === 1;
+}

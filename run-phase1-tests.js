@@ -6,3 +6,7 @@ await import('./phase1-profile-memory.test.js');
 await import('./phase1-knowledge-base.test.js');
 await import('./phase1-task-router.test.js');
 await import('./phase1-workflow.test.js');
+await import('./phase1-trigger-policy.test.js');
+await import('./phase1-queue-manager.test.js');
+await import('./phase1-knowledge-sync.test.js');
+await import('./phase1-tool-config.test.js');

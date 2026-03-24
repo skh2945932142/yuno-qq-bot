@@ -3,18 +3,28 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from './config.js';
 import { createEmbeddings } from './minimax.js';
-import { getQdrantStatus, ensureQdrantCollection, searchKnowledge, upsertKnowledgePoints } from './qdrant-client.js';
+import {
+  deleteKnowledgePointsByIds,
+  ensureQdrantCollection,
+  getQdrantStatus,
+  scrollKnowledgePoints,
+  searchKnowledge,
+  setKnowledgeManifest,
+  upsertKnowledgePoints,
+} from './qdrant-client.js';
+import { logger } from './logger.js';
+import { recordWorkflowMetric } from './metrics.js';
 
 const KNOWLEDGE_DIR = path.join(process.cwd(), 'knowledge');
 const CHUNK_TARGET = 560;
 const CHUNK_OVERLAP = 80;
-const RETRIEVAL_CHAR_LIMIT = 1200;
 
 function truncateText(text, limit) {
   const normalized = String(text || '').trim();
   if (normalized.length <= limit) {
     return normalized;
   }
+
   return `${normalized.slice(0, Math.max(0, limit - 1))}…`;
 }
 
@@ -91,6 +101,11 @@ function buildChunkId(filePath, title, index) {
     .digest('hex');
 }
 
+function createKnowledgeVersion(documents) {
+  const input = documents.map((item) => `${item.id}:${item.metadata.source}:${item.metadata.chunkIndex}`).join('|');
+  return crypto.createHash('sha1').update(input).digest('hex');
+}
+
 async function listMarkdownFiles(rootDir) {
   const entries = await fs.readdir(rootDir, { withFileTypes: true });
   const files = [];
@@ -120,7 +135,7 @@ export async function loadKnowledgeDocuments(rootDir = KNOWLEDGE_DIR) {
       const raw = await fs.readFile(filePath, 'utf8');
       const sections = splitMarkdownSections(raw);
 
-      sections.forEach((section) => {
+      for (const section of sections) {
         const metadata = parseMetadata(section.text, category, section.title || path.basename(filePath, '.md'));
         const chunks = chunkText(section.text);
         chunks.forEach((chunk, index) => {
@@ -134,7 +149,7 @@ export async function loadKnowledgeDocuments(rootDir = KNOWLEDGE_DIR) {
             },
           });
         });
-      });
+      }
     }
 
     return documents;
@@ -142,8 +157,36 @@ export async function loadKnowledgeDocuments(rootDir = KNOWLEDGE_DIR) {
     if (error.code === 'ENOENT') {
       return [];
     }
+
     throw error;
   }
+}
+
+async function deleteOrphanKnowledgePoints(validIds) {
+  const orphanIds = [];
+  let offset = null;
+
+  do {
+    const page = await scrollKnowledgePoints({
+      must_not: [{
+        key: 'type',
+        match: { value: 'manifest' },
+      }],
+    }, 128, offset);
+
+    for (const point of page.points) {
+      if (!validIds.has(String(point.id))) {
+        orphanIds.push(point.id);
+      }
+    }
+    offset = page.nextOffset;
+  } while (offset);
+
+  if (orphanIds.length > 0) {
+    await deleteKnowledgePointsByIds(orphanIds);
+  }
+
+  return orphanIds.length;
 }
 
 export async function syncKnowledgeBase(options = {}) {
@@ -156,7 +199,13 @@ export async function syncKnowledgeBase(options = {}) {
     };
   }
 
-  const embeddingRows = await createEmbeddings(
+  const embed = options.createEmbeddings || createEmbeddings;
+  const ensureCollection = options.ensureQdrantCollection || ensureQdrantCollection;
+  const upsertPoints = options.upsertKnowledgePoints || upsertKnowledgePoints;
+  const writeManifest = options.setKnowledgeManifest || setKnowledgeManifest;
+  const deleteOrphans = options.deleteOrphanKnowledgePoints || deleteOrphanKnowledgePoints;
+
+  const embeddingRows = await embed(
     documents.map((item) => item.text),
     { model: options.embeddingModel || config.embeddingModel }
   );
@@ -166,20 +215,41 @@ export async function syncKnowledgeBase(options = {}) {
     throw new Error('Embedding provider returned an empty vector set');
   }
 
-  await ensureQdrantCollection(vectorSize);
-  await upsertKnowledgePoints(documents.map((item, index) => ({
+  await ensureCollection(vectorSize);
+  const version = createKnowledgeVersion(documents);
+  await upsertPoints(documents.map((item, index) => ({
     id: item.id,
     vector: embeddingRows[index].embedding,
     payload: {
+      type: 'knowledge',
+      version,
       text: item.text,
       ...item.metadata,
     },
   })));
 
+  const orphanCount = await deleteOrphans(new Set(documents.map((item) => item.id)));
+  await writeManifest({
+    version,
+    documentCount: documents.length,
+    orphanCount,
+    updatedAt: new Date().toISOString(),
+  }, vectorSize);
+
+  recordWorkflowMetric('yuno_knowledge_sync_total', 1, { result: 'success' });
+  logger.info('retrieval', 'Knowledge base synchronized', {
+    collection: config.qdrantCollection,
+    count: documents.length,
+    orphanCount,
+    version,
+  });
+
   return {
     enabled: true,
     count: documents.length,
+    orphanCount,
     collection: config.qdrantCollection,
+    version,
   };
 }
 
@@ -194,7 +264,9 @@ export async function retrieveKnowledge(query, options = {}) {
     };
   }
 
-  const status = getQdrantStatus();
+  const embed = options.createEmbeddings || createEmbeddings;
+  const search = options.searchKnowledge || searchKnowledge;
+  const status = (options.getQdrantStatus || getQdrantStatus)();
   if (!status.enabled) {
     return {
       enabled: false,
@@ -206,17 +278,23 @@ export async function retrieveKnowledge(query, options = {}) {
   }
 
   try {
-    const [embedding] = await createEmbeddings([query], {
+    const [embedding] = await embed([query], {
       model: options.embeddingModel || config.embeddingModel,
       operation: 'retrieval-embedding',
     });
 
-    const hits = await searchKnowledge(embedding.embedding, {
-      limit: options.limit || 4,
-      scoreThreshold: options.scoreThreshold,
+    const hits = await search(embedding.embedding, {
+      limit: options.limit || config.qdrantTopK,
+      scoreThreshold: options.scoreThreshold ?? config.qdrantMinScore,
+      filter: {
+        must: [{
+          key: 'type',
+          match: { value: 'knowledge' },
+        }],
+      },
     });
 
-    let remainingChars = options.charLimit || RETRIEVAL_CHAR_LIMIT;
+    let remainingChars = options.charLimit || config.qdrantCharLimit;
     const documents = [];
 
     for (const hit of hits) {
@@ -233,6 +311,7 @@ export async function retrieveKnowledge(query, options = {}) {
           tags: hit.payload?.tags || [],
           priority: hit.payload?.priority || 1,
           source: hit.payload?.source || '',
+          version: hit.payload?.version || '',
         },
       });
 
@@ -242,6 +321,10 @@ export async function retrieveKnowledge(query, options = {}) {
       }
     }
 
+    recordWorkflowMetric('yuno_retrieval_queries_total', 1, {
+      result: documents.length > 0 ? 'hit' : 'miss',
+    });
+
     return {
       enabled: true,
       query,
@@ -250,6 +333,14 @@ export async function retrieveKnowledge(query, options = {}) {
       reason: documents.length > 0 ? 'ok' : 'no-match',
     };
   } catch (error) {
+    recordWorkflowMetric('yuno_retrieval_queries_total', 1, {
+      result: 'error',
+    });
+    logger.warn('retrieval', 'Knowledge retrieval failed', {
+      message: error.message,
+      query,
+    });
+
     return {
       enabled: false,
       query,

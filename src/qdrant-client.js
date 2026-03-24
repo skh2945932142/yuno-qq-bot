@@ -71,6 +71,54 @@ export async function upsertKnowledgePoints(points) {
   return { enabled: true, count: points.length };
 }
 
+export async function scrollKnowledgePoints(filter = null, limit = 256, offset = null) {
+  if (!isConfigured()) {
+    return { points: [], nextOffset: null };
+  }
+
+  const data = await request('post', `/collections/${config.qdrantCollection}/points/scroll`, {
+    limit,
+    offset,
+    with_payload: true,
+    with_vector: false,
+    filter: filter || undefined,
+  }, 'scroll qdrant points');
+
+  return {
+    points: data.result?.points || [],
+    nextOffset: data.result?.next_page_offset || null,
+  };
+}
+
+export async function deleteKnowledgePointsByIds(ids) {
+  if (!isConfigured() || !ids.length) {
+    return { enabled: isConfigured(), count: 0 };
+  }
+
+  await request('post', `/collections/${config.qdrantCollection}/points/delete?wait=true`, {
+    points: ids,
+  }, 'delete qdrant points by ids');
+
+  return { enabled: true, count: ids.length };
+}
+
+export async function setKnowledgeManifest(manifest, vectorSize = 1) {
+  if (!isConfigured()) {
+    return { enabled: false };
+  }
+
+  await upsertKnowledgePoints([{
+    id: 'knowledge_manifest',
+    vector: Array.from({ length: vectorSize }, () => 0),
+    payload: {
+      type: 'manifest',
+      ...manifest,
+    },
+  }]);
+
+  return { enabled: true };
+}
+
 export async function searchKnowledge(vector, options = {}) {
   if (!isConfigured()) {
     return [];
@@ -78,10 +126,11 @@ export async function searchKnowledge(vector, options = {}) {
 
   const data = await request('post', `/collections/${config.qdrantCollection}/points/search`, {
     vector,
-    limit: options.limit || 4,
+    limit: options.limit || config.qdrantTopK,
     with_payload: true,
     with_vector: false,
-    score_threshold: options.scoreThreshold ?? 0.2,
+    score_threshold: options.scoreThreshold ?? config.qdrantMinScore,
+    filter: options.filter || undefined,
   }, 'search qdrant points');
 
   return data.result || [];

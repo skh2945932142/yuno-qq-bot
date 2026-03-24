@@ -1,3 +1,5 @@
+import { findToolDefinitionByCommandType, getToolDefinitions } from './tool-config.js';
+
 function numberOrZero(value) {
   return Number.isFinite(value) ? value : 0;
 }
@@ -52,10 +54,11 @@ function buildGroupToolResult(context) {
 function buildProfileToolResult(context) {
   const relation = context.relation;
   const userProfile = context.userProfile;
+  const definition = findToolDefinitionByCommandType('profile');
 
   return {
     type: 'profile',
-    text: `画像摘要 ${userProfile?.profileSummary || relation.memorySummary || 'none'}\n偏好 ${formatList(userProfile?.favoriteTopics || relation.preferences)}\n不喜欢 ${formatList(userProfile?.dislikes, '暂无')}\n常聊主题 ${formatList(relation.favoriteTopics)}`,
+    text: `画像摘要 ${userProfile?.profileSummary || relation.memorySummary || definition?.fallbackMessage || 'none'}\n偏好 ${formatList(userProfile?.favoriteTopics || relation.preferences)}\n不喜欢 ${formatList(userProfile?.dislikes, '暂无')}\n常聊主题 ${formatList(relation.favoriteTopics)}`,
     data: {
       memorySummary: userProfile?.profileSummary || relation.memorySummary || '',
       preferredName: userProfile?.preferredName || '',
@@ -67,36 +70,42 @@ function buildProfileToolResult(context) {
   };
 }
 
-const QUERY_TOOLS = [
-  {
-    name: 'get_relation',
-    description: 'Read the current long-term relation snapshot for the user.',
-    inputSchema: { type: 'object', properties: {}, required: [] },
-    execute: async (_args, context) => buildRelationToolResult(context),
-  },
-  {
-    name: 'get_emotion',
-    description: 'Read the current short-term emotion state for the user.',
-    inputSchema: { type: 'object', properties: {}, required: [] },
-    execute: async (_args, context) => buildEmotionToolResult(context),
-  },
-  {
-    name: 'get_group_state',
-    description: 'Read the current group state summary.',
-    inputSchema: { type: 'object', properties: {}, required: [] },
-    execute: async (_args, context) => buildGroupToolResult(context),
-  },
-  {
-    name: 'get_profile',
-    description: 'Read the current long-term profile summary for the user.',
-    inputSchema: { type: 'object', properties: {}, required: [] },
-    execute: async (_args, context) => buildProfileToolResult(context),
-  },
-];
+const TOOL_EXECUTORS = {
+  get_relation: buildRelationToolResult,
+  get_emotion: buildEmotionToolResult,
+  get_group_state: buildGroupToolResult,
+  get_profile: buildProfileToolResult,
+};
 
 export function registerQueryTools(registry) {
-  for (const tool of QUERY_TOOLS) {
-    registry.register(tool);
+  for (const definition of getToolDefinitions()) {
+    registry.register({
+      name: definition.name,
+      description: definition.description,
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      permissions: definition.permissions,
+      allowIn: definition.allowIn,
+      metadata: definition,
+      execute: async (_args, context) => TOOL_EXECUTORS[definition.name](context),
+    });
   }
+
   return registry;
+}
+
+export function mapCommandToTool(command) {
+  if (!command?.toolName) {
+    return null;
+  }
+
+  const definition = getToolDefinitions().find((item) => item.name === command.toolName);
+  if (!definition) {
+    return null;
+  }
+
+  return {
+    name: definition.name,
+    args: {},
+    metadata: definition,
+  };
 }

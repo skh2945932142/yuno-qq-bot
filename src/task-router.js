@@ -1,5 +1,5 @@
-import { parseCommand } from './services/commands.js';
-import { mapCommandToTool } from './tools/query-tools.js';
+import { parseCommand } from './command-parser.js';
+import { findToolDefinitionByName } from './tool-config.js';
 import { normalizeLegacyMessageEvent } from './chat/session.js';
 import { stripCqCodes } from './utils.js';
 
@@ -12,6 +12,8 @@ const KNOWLEDGE_PATTERNS = [
   /你会什么/i,
   /口癖/i,
   /人设/i,
+  /手册/i,
+  /文档/i,
 ];
 
 const FOLLOW_UP_PATTERNS = [
@@ -42,16 +44,29 @@ export function planIncomingTask({ event, text, analysis, conversationState }) {
   const rawText = String(text ?? normalizedEvent.rawText ?? '');
   const normalizedText = stripCqCodes(rawText);
   const command = parseCommand(rawText);
-  const tool = mapCommandToTool(command);
 
-  if (tool) {
+  if (command?.toolName) {
+    const tool = findToolDefinitionByName(command.toolName);
+    const allowedInChat = tool?.allowIn?.includes(normalizedEvent.chatType) ?? true;
+    if (!allowedInChat) {
+      return {
+        type: 'ignore',
+        category: 'ignore',
+        requiresModel: false,
+        requiresRetrieval: false,
+        reason: 'tool-not-allowed-in-chat',
+      };
+    }
+
     return {
       type: 'tool',
       category: 'command',
-      toolName: tool.name,
-      toolArgs: tool.args,
+      toolName: command.toolName,
+      toolArgs: {},
       requiresModel: false,
       requiresRetrieval: false,
+      command,
+      toolMeta: tool,
       reason: `command:${command.type}`,
     };
   }
@@ -68,15 +83,17 @@ export function planIncomingTask({ event, text, analysis, conversationState }) {
 
   const recentMessages = conversationState?.messages || [];
   const hasRecentContext = recentMessages.length >= 2 || Boolean(conversationState?.rollingSummary);
+  const classifierCategory = analysis.decisionExplanation?.classifier?.category || '';
+  const toolFailureFallback = analysis.reason === 'tool-fallback';
 
-  if (matchAny(KNOWLEDGE_PATTERNS, normalizedText)) {
+  if (matchAny(KNOWLEDGE_PATTERNS, normalizedText) || classifierCategory === 'info_query' || toolFailureFallback) {
     return {
       type: 'chat',
       category: 'knowledge_qa',
       requiresModel: true,
       requiresRetrieval: true,
       allowFollowUp: normalizedEvent.chatType === 'private',
-      reason: 'knowledge-pattern',
+      reason: toolFailureFallback ? 'tool-fallback' : classifierCategory === 'info_query' ? 'classifier-info-query' : 'knowledge-pattern',
     };
   }
 

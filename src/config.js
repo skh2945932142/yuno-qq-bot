@@ -46,6 +46,25 @@ export const config = Object.freeze({
   qdrantUrl: (process.env.QDRANT_URL || '').replace(/\/+$/, ''),
   qdrantApiKey: process.env.QDRANT_API_KEY || '',
   qdrantCollection: process.env.QDRANT_COLLECTION || 'qq_bot_knowledge',
+  qdrantTopK: readNumber('QDRANT_TOP_K', 4),
+  qdrantMinScore: readNumber('QDRANT_MIN_SCORE', 0.2),
+  qdrantCharLimit: readNumber('QDRANT_CHAR_LIMIT', 1200),
+  enableQueue: readBoolean('ENABLE_QUEUE', false),
+  redisUrl: process.env.REDIS_URL || '',
+  replyQueueName: process.env.REPLY_QUEUE_NAME || 'reply_job',
+  persistQueueName: process.env.PERSIST_QUEUE_NAME || 'persist_job',
+  queueRetryAttempts: readNumber('QUEUE_RETRY_ATTEMPTS', 3),
+  queueBackoffMs: readNumber('QUEUE_BACKOFF_MS', 500),
+  queueConcurrency: Object.freeze({
+    default: readNumber('QUEUE_CONCURRENCY_DEFAULT', 4),
+    reply: readNumber('QUEUE_CONCURRENCY_REPLY', 2),
+    persist: readNumber('QUEUE_CONCURRENCY_PERSIST', 4),
+  }),
+  otlpEndpoint: process.env.OTLP_ENDPOINT || '',
+  enableMetrics: readBoolean('ENABLE_METRICS', true),
+  metricsPath: process.env.METRICS_PATH || '/metrics',
+  logLevel: process.env.LOG_LEVEL || 'info',
+  traceSampleRate: readNumber('TRACE_SAMPLE_RATE', 1),
 });
 
 export function validateRuntimeConfig() {

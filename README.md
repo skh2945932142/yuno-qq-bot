@@ -1,41 +1,48 @@
 # Yuno QQ Bot
 
-Lightweight QQ group bot focused on stable chat, structured state, and a clean path toward future agent and business workflow capabilities.
+QQ bot with unified message workflow, configurable trigger policy, Qdrant-backed RAG, queue-ready execution, and structured observability.
 
 ## Current Architecture
 
 ```text
 src/
-  agents/          task planning and routing
-  api/             HTTP app and webhook handlers
-  core/            bootstrap and runtime wiring
-  jobs/            background and scheduled jobs
-  memory/          memory/state access boundary
-  observability/   trace helpers and execution visibility
-  prompts/         prompt entrypoints and prompt version constants
-  retrieval/       retrieval boundary for future RAG support
-  schemas/         webhook and tool schemas
-  state/           group-state access boundary
-  tools/           tool registry and tool implementations
-  workflows/       end-to-end orchestration
-  services/        existing domain logic retained for compatibility
+  adapters/         inbound platform event normalization
+  chat/             session and message identity helpers
+  knowledge-base.js markdown -> embeddings -> Qdrant indexing and retrieval
+  message-analysis.js
+                    hard rules + heuristic scoring + lightweight classifier
+  message-workflow.js
+                    main reply and persist orchestration
+  queue-manager.js  BullMQ / inline queue abstraction
+  runtime-tracing.js
+                    trace lifecycle and span timing
+  metrics.js        Prometheus-style metrics registry
+  query-tools.js    configurable tool registration for built-in query tools
+  tool-config.js    declarative command/tool metadata
 ```
 
 ## What This Project Does Today
 
-- Receives OneBot group message webhooks.
-- Decides whether the bot should respond using rule-based gating plus optional model analysis.
-- Maintains layered state:
-  - long-term relation
-  - short-term user emotion
+- Receives OneBot group/private message webhooks.
+- Normalizes inbound events into a unified QQ message format.
+- Decides whether to reply using:
+  - hard rules
+  - configurable heuristic weights and thresholds
+  - a lightweight trigger classifier for borderline cases
+- Routes messages into:
+  - command tools
+  - knowledge/RAG replies
+  - follow-up replies
+  - cold-start chat
+  - normal group/private chat
+- Maintains:
+  - short-term conversation state
+  - relation and emotion state
+  - long-term user profile memory
   - group state and recent events
-- Supports structured query tools for:
-  - relation snapshot
-  - current emotion
-  - group state
-  - profile summary
-- Sends scheduled proactive messages for the target group.
-- Logs workflow traces, model usage, tool execution, and failures.
+- Indexes Markdown knowledge under `knowledge/` into Qdrant and retrieves matching chunks at reply time.
+- Exposes `/health`, `/ready`, and `/metrics`.
+- Supports queue-backed reply/persist jobs through BullMQ when Redis is enabled, with inline fallback for local development and tests.
 
 ## Run
 
@@ -50,41 +57,76 @@ Required environment variables:
 - `SILICONFLOW_API_KEY`
 - `NAPCAT_API`
 
-Optional:
+Optional core runtime:
 
 - `TARGET_GROUP_ID`
 - `ADMIN_QQ`
-- `YUNO_VOICE_URI`
-- `ENABLE_VOICE`
-- `FFMPEG_PATH`
+- `SELF_QQ`
 - `REQUEST_TIMEOUT_MS`
 - `RETRY_ATTEMPTS`
 - `RETRY_DELAY_MS`
+
+Optional voice:
+
+- `YUNO_VOICE_URI`
+- `ENABLE_VOICE`
+- `FFMPEG_PATH`
+
+Optional retrieval:
+
+- `QDRANT_URL`
+- `QDRANT_API_KEY`
+- `QDRANT_COLLECTION`
+- `QDRANT_TOP_K`
+- `QDRANT_MIN_SCORE`
+- `QDRANT_CHAR_LIMIT`
+- `EMBEDDING_MODEL`
+
+Optional queueing:
+
+- `ENABLE_QUEUE`
+- `REDIS_URL`
+- `REPLY_QUEUE_NAME`
+- `PERSIST_QUEUE_NAME`
+- `QUEUE_RETRY_ATTEMPTS`
+- `QUEUE_BACKOFF_MS`
+- `QUEUE_CONCURRENCY_DEFAULT`
+- `QUEUE_CONCURRENCY_REPLY`
+- `QUEUE_CONCURRENCY_PERSIST`
+
+Optional observability:
+
+- `ENABLE_METRICS`
+- `METRICS_PATH`
+- `OTLP_ENDPOINT`
+- `LOG_LEVEL`
+- `TRACE_SAMPLE_RATE`
+
+Optional config overrides:
+
+- `TRIGGER_POLICY_JSON`
+- `TOOL_CONFIG_JSON`
 
 ## Scripts
 
 ```bash
 npm test
 npm run eval
+npm run kb:sync
 ```
 
-`npm test` runs unit and architecture tests.
-
-`npm run eval` runs lightweight scenario evaluations for:
-
-- webhook schema validation
-- trigger analysis
-- command-to-tool routing
+- `npm test` runs legacy tests plus the Phase 1/2 workflow, trigger, queue, and retrieval tests.
+- `npm run kb:sync` reads Markdown documents from `knowledge/`, chunks them, embeds them, upserts them into Qdrant, writes a manifest, and removes orphan chunks.
 
 ## Operational Notes
 
-- Voice is optional and can be disabled with `ENABLE_VOICE=false`.
-- Retrieval/RAG is not enabled yet; the project now has a retrieval boundary in `src/retrieval/` so business knowledge retrieval can be added without polluting the chat workflow.
-- The project intentionally keeps the existing stack and avoids heavy framework additions.
+- Retrieval is live, not just a boundary placeholder. The active knowledge path is `knowledge/ -> embeddings -> Qdrant -> retrieveKnowledge()`.
+- If `ENABLE_QUEUE=false` or BullMQ dependencies are unavailable, the app falls back to inline execution while keeping the same queue API.
+- `/ready` reports database and queue readiness. `/metrics` exposes Prometheus-style counters and histograms.
+- The old `src/workflows/group-message-workflow.js` remains only as compatibility code; the active runtime path is `src/message-workflow.js`.
 
 ## Future Extension Points
 
-- Add business tools into `src/tools/` and register them in the shared registry.
-- Add workflow-specific planners under `src/agents/` or `src/workflows/`.
-- Add retrieval adapters in `src/retrieval/`.
-- Expand eval scenarios in `evals/scenarios.json`.
+- Add new tool definitions in `src/tool-config.js` and executors in `src/query-tools.js`.
+- Replace inline fallback with dedicated worker processes if you want reply/persist queues in separate runtimes.
+- Extend `knowledge/` with richer domain docs, FAQs, and roleplay/world references.
