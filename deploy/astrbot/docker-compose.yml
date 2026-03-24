@@ -1,0 +1,51 @@
+services:
+  astrbot:
+    image: ${ASTRBOT_IMAGE}
+    container_name: astrbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${ASTRBOT_PORT:-6185}:6185"
+    environment:
+      TZ: ${ASTRBOT_TIMEZONE:-Asia/Shanghai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_CHAT_MODEL: ${LLM_CHAT_MODEL}
+      NAPCAT_WS_URL: ${NAPCAT_WS_URL}
+      NAPCAT_HTTP_URL: ${NAPCAT_HTTP_URL}
+      NAPCAT_TOKEN: ${NAPCAT_TOKEN}
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./plugins:/app/plugins
+    # Adjust /app/data, /app/config, /app/plugins if your chosen AstrBot image uses different paths.
+
+  yuno:
+    image: node:22-alpine
+    container_name: yuno-core
+    restart: unless-stopped
+    working_dir: /workspace
+    env_file:
+      - .env
+    command: sh -lc "npm install && npm start"
+    ports:
+      - "${YUNO_PORT:-3000}:3000"
+    volumes:
+      - ../..:/workspace
+    depends_on:
+      - mongo
+
+  mongo:
+    image: mongo:7
+    container_name: yuno-mongo
+    restart: unless-stopped
+    volumes:
+      - ./data/mongo:/data/db
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: yuno-qdrant
+    restart: unless-stopped
+    volumes:
+      - ./data/qdrant:/qdrant/storage

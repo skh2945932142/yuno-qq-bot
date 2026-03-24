@@ -1,2 +1,4 @@
 node_modules/
 .env
+deploy/astrbot/.env
+deploy/astrbot/data/

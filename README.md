@@ -169,6 +169,7 @@ npm run kb:sync
   - `yuno-knowledge`
   - `yuno-schedule`
   - `yuno-chat`
+- `deploy/astrbot/` contains deployment templates and examples for running AstrBot as the outer orchestration layer without vendoring AstrBot source code into this repository.
 - Recommended layering:
   - AstrBot handles routing, plugins, permissions, and external tools.
   - Yuno Core handles trigger analysis, memory, retrieval, emotion, special-user policy, and final reply style.
