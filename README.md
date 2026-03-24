@@ -58,11 +58,14 @@ npm start
 Required environment variables:
 
 - `MONGODB_URI`
-- `SILICONFLOW_API_KEY`
+- `LLM_API_KEY` or `OPENAI_API_KEY`
+- `LLM_CHAT_MODEL`
 - `NAPCAT_API`
 
 Optional core runtime:
 
+- `LLM_BASE_URL`
+- `EMBEDDING_MODEL`
 - `TARGET_GROUP_ID`
 - `ADMIN_QQ`
 - `SELF_QQ`
@@ -72,6 +75,9 @@ Optional core runtime:
 
 Optional voice:
 
+- `TTS_API_KEY`
+- `TTS_BASE_URL`
+- `TTS_MODEL`
 - `YUNO_VOICE_URI`
 - `ENABLE_VOICE`
 - `FFMPEG_PATH`
@@ -84,7 +90,6 @@ Optional retrieval:
 - `QDRANT_TOP_K`
 - `QDRANT_MIN_SCORE`
 - `QDRANT_CHAR_LIMIT`
-- `EMBEDDING_MODEL`
 
 Optional queueing:
 

@@ -12,14 +12,14 @@ import {
 } from './utils.js';
 
 const client = new OpenAI({
-  apiKey: config.siliconflowApiKey,
-  baseURL: 'https://api.siliconflow.cn/v1',
+  apiKey: config.llmApiKey,
+  baseURL: config.llmBaseUrl,
 });
 
 async function createChatCompletion(messages, options = {}) {
   const startedAt = Date.now();
   const payload = {
-    model: 'Pro/MiniMaxAI/MiniMax-M2.5',
+    model: options.model || config.llmChatModel,
     messages,
     temperature: options.temperature ?? 0.7,
     max_tokens: options.maxTokens ?? 256,
@@ -27,6 +27,10 @@ async function createChatCompletion(messages, options = {}) {
 
   if (options.responseFormat) {
     payload.response_format = options.responseFormat;
+  }
+
+  if (!payload.model) {
+    throw new Error('Missing LLM chat model configuration');
   }
 
   const response = await withRetry(
@@ -270,11 +274,17 @@ export async function classifyReplyTrigger(text, context = {}, options = {}) {
 }
 
 export async function tts(text, options = {}) {
-  if (!config.enableVoice || !config.yunoVoiceUri) {
+  if (!config.enableVoice || !config.yunoVoiceUri || !config.ttsBaseUrl || !config.ttsApiKey) {
     logger.info('model', 'TTS skipped', {
       traceId: options.traceContext?.traceId,
       operation: options.operation || 'tts',
-      reason: !config.enableVoice ? 'voice_disabled' : 'missing_voice_uri',
+      reason: !config.enableVoice
+        ? 'voice_disabled'
+        : !config.yunoVoiceUri
+          ? 'missing_voice_uri'
+          : !config.ttsBaseUrl
+            ? 'missing_tts_base_url'
+            : 'missing_tts_api_key',
     });
     return null;
   }
@@ -282,16 +292,16 @@ export async function tts(text, options = {}) {
   const startedAt = Date.now();
   const response = await withRetry(
     () => axios.post(
-      'https://api.siliconflow.cn/v1/audio/speech',
+      config.ttsBaseUrl,
       {
-        model: 'FunAudioLLM/CosyVoice2-0.5B',
+        model: config.ttsModel,
         input: text,
         voice: config.yunoVoiceUri,
         response_format: 'mp3',
         speed: 1.0,
       },
       {
-        headers: { Authorization: `Bearer ${config.siliconflowApiKey}` },
+        headers: { Authorization: `Bearer ${config.ttsApiKey}` },
         responseType: 'arraybuffer',
         timeout: config.requestTimeoutMs,
       }

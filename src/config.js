@@ -36,8 +36,17 @@ export const config = Object.freeze({
   port: readNumber('PORT', 3000),
   mongodbUri: process.env.MONGODB_URI || '',
   mongoMaxPoolSize: readNumber('MONGO_MAX_POOL_SIZE', 10),
-  siliconflowApiKey: process.env.SILICONFLOW_API_KEY || '',
+  llmApiKey: process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY || '',
+  llmBaseUrl: (process.env.LLM_BASE_URL
+    || process.env.OPENAI_BASE_URL
+    || (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1' : 'https://api.openai.com/v1'))
+    .replace(/\/+$/, ''),
+  llmChatModel: process.env.LLM_CHAT_MODEL || (process.env.SILICONFLOW_API_KEY ? 'Pro/MiniMaxAI/MiniMax-M2.5' : ''),
   embeddingModel: process.env.EMBEDDING_MODEL || 'BAAI/bge-m3',
+  ttsApiKey: process.env.TTS_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY || '',
+  ttsBaseUrl: (process.env.TTS_BASE_URL || (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1/audio/speech' : ''))
+    .replace(/\/+$/, ''),
+  ttsModel: process.env.TTS_MODEL || 'FunAudioLLM/CosyVoice2-0.5B',
   napcatApi: (process.env.NAPCAT_API || '').replace(/\/+$/, ''),
   napcatToken: process.env.NAPCAT_TOKEN || '',
   targetGroupId: process.env.TARGET_GROUP_ID ? String(process.env.TARGET_GROUP_ID) : '',
@@ -89,7 +98,8 @@ export const config = Object.freeze({
 export function validateRuntimeConfig() {
   const required = [
     ['MONGODB_URI', config.mongodbUri],
-    ['SILICONFLOW_API_KEY', config.siliconflowApiKey],
+    ['LLM_API_KEY/OPENAI_API_KEY/SILICONFLOW_API_KEY', config.llmApiKey],
+    ['LLM_CHAT_MODEL', config.llmChatModel],
     ['NAPCAT_API', config.napcatApi],
   ];
 
