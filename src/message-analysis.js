@@ -1,6 +1,7 @@
 import { config, isAdvancedGroup } from './config.js';
 import { classifyReplyTrigger } from './minimax.js';
 import { normalizeLegacyMessageEvent } from './chat/session.js';
+import { parseCommand } from './command-parser.js';
 import { loadTriggerPolicy } from './trigger-policy.js';
 import { getSpecialUserByUserId } from './special-users.js';
 import {
@@ -58,6 +59,12 @@ function shouldTreatAsAttachmentOnly(event, normalizedText) {
   return !normalizedText && Array.isArray(event.attachments) && event.attachments.length > 0;
 }
 
+function isPokeEvent(event) {
+  return event?.source?.postType === 'notice'
+    && event?.source?.noticeType === 'notify'
+    && event?.source?.subType === 'poke';
+}
+
 function buildRuleSignals(event, context, policy, options = {}) {
   const normalizedEvent = normalizeLegacyMessageEvent(event);
   const message = normalizedEvent.rawText || '';
@@ -75,6 +82,8 @@ function buildRuleSignals(event, context, policy, options = {}) {
   const nameMention = /由乃|yuno/i.test(normalized);
   const question = /[?？]$/.test(normalized) || /(怎么|如何|为什么|为啥|能不能|会不会|是不是)/i.test(normalized);
   const keyword = keywordPattern.test(normalized);
+  const command = Boolean(parseCommand(normalized)) || /^\/\S+/.test(normalized);
+  const poke = isPokeEvent(normalizedEvent);
   const highAffection = (context.relation?.affection || 0) >= 70;
   const recentActiveUser = (context.relation?.activeScore || 0) >= 65;
   const groupActiveWindow = (context.groupState?.activityLevel || 0) >= 60;
@@ -105,6 +114,8 @@ function buildRuleSignals(event, context, policy, options = {}) {
   applyWeight(nameMention, 'nameMention', 'name-mention');
   applyWeight(question, 'question', 'question');
   applyWeight(keyword, 'keyword', 'keyword');
+  applyWeight(command, 'command', 'command');
+  applyWeight(poke, 'poke', 'poke');
   applyWeight(isAdmin, 'admin', 'admin');
   applyWeight(highAffection, 'highAffection', 'high-affection');
   applyWeight(recentActiveUser, 'activeUser', 'active-user');
@@ -124,6 +135,8 @@ function buildRuleSignals(event, context, policy, options = {}) {
     nameMention,
     question,
     keyword,
+    command,
+    poke,
     isAdmin,
     normalized,
     specialUser,
@@ -235,6 +248,24 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
     });
   }
 
+  if (rule.poke) {
+    return buildHeuristicResult({
+      shouldRespond: true,
+      confidence: clamp(Math.max(rule.score, autoAllowThreshold), 0, 1),
+      intent,
+      sentiment,
+      relevance: 0.88,
+      reason: 'poke-trigger',
+      ruleSignals: rule.signals,
+      replyStyle: 'calm',
+      topics: context.topics || [],
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'allow',
+        finalDecision: 'allow',
+      }),
+    });
+  }
+
   if (rule.isAdmin && policy.groupChat.hardAllowAdminCommand && (rule.question || rule.keyword)) {
     return buildHeuristicResult({
       shouldRespond: true,
@@ -249,6 +280,32 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
       decisionExplanation: makeDecisionExplanation(rule, {
         hardDecision: 'allow',
         finalDecision: 'allow',
+      }),
+    });
+  }
+
+  if (
+    rule.event.chatType === 'group'
+    && policy.groupChat.requireExplicitTrigger
+    && !rule.directMention
+    && !rule.keyword
+    && !rule.command
+    && !rule.poke
+    && !rule.specialKeyword
+  ) {
+    return buildHeuristicResult({
+      shouldRespond: false,
+      confidence: clamp(rule.score, 0, 1),
+      intent,
+      sentiment,
+      relevance: 0.1,
+      reason: 'explicit-trigger-required',
+      ruleSignals: rule.signals,
+      replyStyle: 'calm',
+      topics: context.topics || [],
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'deny',
+        finalDecision: 'deny',
       }),
     });
   }

@@ -7,12 +7,15 @@ QQ bot with unified message workflow, configurable trigger policy, Qdrant-backed
 ```text
 src/
   adapters/         inbound platform event normalization
+  astrbot-yuno-plugin.js
+                    AstrBot-facing plugin wrapper around Yuno Core
   chat/             session and message identity helpers
   knowledge-base.js markdown -> embeddings -> Qdrant indexing and retrieval
   message-analysis.js
                     hard rules + heuristic scoring + lightweight classifier
   message-workflow.js
                     main reply and persist orchestration
+  yuno-core.js      platform-agnostic conversation entry for external orchestrators
   queue-manager.js  BullMQ / inline queue abstraction
   runtime-tracing.js
                     trace lifecycle and span timing
@@ -43,6 +46,7 @@ src/
 - Indexes Markdown knowledge under `knowledge/` into Qdrant and retrieves matching chunks at reply time.
 - Exposes `/health`, `/ready`, and `/metrics`.
 - Supports queue-backed reply/persist jobs through BullMQ when Redis is enabled, with inline fallback for local development and tests.
+- Exposes a platform-agnostic `runYunoConversation(...)` entry so AstrBot or other orchestrators can reuse the same persona core.
 
 ## Run
 
@@ -107,6 +111,13 @@ Optional config overrides:
 - `TRIGGER_POLICY_JSON`
 - `TOOL_CONFIG_JSON`
 - `SPECIAL_USERS_JSON`
+- `MEME_ENABLED`
+- `MEME_AUTO_COLLECT`
+- `MEME_AUTO_SEND`
+- `MEME_STORAGE_DIR`
+- `MEME_ENABLED_GROUPS`
+- `MEME_OPT_OUT_USERS`
+- `MEME_REQUIRE_ADMIN_FOR_AUTO_MODE`
 
 `SPECIAL_USERS_JSON` lets you bind special persona overlays by `userId`. Example:
 
@@ -139,6 +150,43 @@ npm run kb:sync
 
 - `npm test` runs legacy tests plus the Phase 1/2 workflow, trigger, queue, and retrieval tests.
 - `npm run kb:sync` reads Markdown documents from `knowledge/`, chunks them, embeds them, upserts them into Qdrant, writes a manifest, and removes orphan chunks.
+
+## AstrBot Integration
+
+- `src/yuno-core.js` is the stable integration surface for outer orchestrators.
+- `src/astrbot-yuno-plugin.js` is a minimal AstrBot-style wrapper that:
+  - adapts an AstrBot message context
+  - calls `runYunoConversation(...)`
+  - returns structured output while keeping persona formatting inside Yuno Core
+- `src/astrbot-plugin-router.js` provides same-process plugin routing for:
+  - `yuno-meme`
+  - `yuno-status`
+  - `yuno-knowledge`
+  - `yuno-schedule`
+  - `yuno-chat`
+- Recommended layering:
+  - AstrBot handles routing, plugins, permissions, and external tools.
+  - Yuno Core handles trigger analysis, memory, retrieval, emotion, special-user policy, and final reply style.
+
+## Trigger Rules
+
+- Group chat is conservative by default and now requires an explicit trigger before replying:
+  - direct `@bot`
+  - known keywords
+  - slash commands such as `/profile`, `/emotion`, `/command`
+  - QQ poke notifications targeting the bot
+- Private chat still defaults to reply mode unless you override the trigger policy.
+- The built-in `/command` alias is available through the query tool registry and returns the current command list.
+
+## Meme Phase 1
+
+- Same-process meme support is split into collection, retrieval, generation, and decision modules under `src/meme-*.js`.
+- Phase 1 supports:
+  - collecting image assets from enabled groups
+  - tagging and retrieving meme candidates
+  - generating a single-message fake chat screenshot as SVG
+  - routing the final text + image back through Yuno Core formatter
+- Automatic meme sending is disabled by default. Enable it explicitly with `MEME_AUTO_SEND=true`, and keep group allowlists / opt-out lists configured.
 
 ## Operational Notes
 

@@ -70,11 +70,23 @@ function buildProfileToolResult(context) {
   };
 }
 
+function buildHelpToolResult() {
+  const commands = getToolDefinitions().map((definition) => `/${definition.commandAliases[0]}`);
+  return {
+    type: 'help',
+    text: `Available commands: ${commands.join(', ')}`,
+    data: {
+      commands,
+    },
+  };
+}
+
 const TOOL_EXECUTORS = {
   get_relation: buildRelationToolResult,
   get_emotion: buildEmotionToolResult,
   get_group_state: buildGroupToolResult,
   get_profile: buildProfileToolResult,
+  get_help: buildHelpToolResult,
 };
 
 export function registerQueryTools(registry) {

@@ -47,6 +47,17 @@ export const TOOL_DEFINITIONS = Object.freeze([
     rateLimitMs: 0,
     fallbackMessage: '暂时拿不到画像摘要。',
   },
+  {
+    name: 'get_help',
+    commandType: 'help',
+    commandAliases: ['help', 'command', 'commands', '命令', '帮助'],
+    description: 'Read the available command list.',
+    permissions: ['member', 'admin'],
+    triggerKeywords: ['help', 'command', '命令', '帮助'],
+    allowIn: ['group', 'private'],
+    rateLimitMs: 0,
+    fallbackMessage: '暂时拿不到命令列表。',
+  },
 ]);
 
 function mergeDefinitions(base, overrides = []) {

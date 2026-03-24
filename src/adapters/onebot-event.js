@@ -58,12 +58,22 @@ export function validateOnebotMessageEvent(payload) {
     return { ok: false, errors: ['payload must be an object'] };
   }
 
-  if (payload.post_type !== 'message') {
-    errors.push('post_type must be "message"');
+  const postType = String(payload.post_type || '').trim().toLowerCase();
+  const isMessage = postType === 'message';
+  const isPoke = postType === 'notice'
+    && String(payload.notice_type || '').trim().toLowerCase() === 'notify'
+    && String(payload.sub_type || '').trim().toLowerCase() === 'poke';
+
+  if (!isMessage && !isPoke) {
+    errors.push('payload must be a supported OneBot message or poke notice');
   }
 
   const messageType = String(payload.message_type || '').trim().toLowerCase();
-  if (!['group', 'private'].includes(messageType)) {
+  const inferredMessageType = isPoke
+    ? (payload.group_id ? 'group' : 'private')
+    : messageType;
+
+  if (!['group', 'private'].includes(inferredMessageType)) {
     errors.push('message_type must be "group" or "private"');
   }
 
@@ -71,11 +81,11 @@ export function validateOnebotMessageEvent(payload) {
     errors.push('user_id is required');
   }
 
-  if (messageType === 'group' && !payload.group_id) {
+  if (inferredMessageType === 'group' && !payload.group_id) {
     errors.push('group_id is required');
   }
 
-  if (typeof payload.raw_message !== 'string') {
+  if (isMessage && typeof payload.raw_message !== 'string') {
     errors.push('raw_message must be a string');
   }
 
@@ -87,30 +97,33 @@ export function validateOnebotMessageEvent(payload) {
     ? String(payload.self_id)
     : (config.selfQq || '');
   const sender = isObject(payload.sender) ? payload.sender : {};
-  const rawText = payload.raw_message;
-  const mentionsBot = messageType === 'group'
-    ? extractAtTargets(rawText).includes(resolvedSelfId)
-    : false;
+  const rawText = isPoke ? '[poke]' : payload.raw_message;
+  const mentionsBot = isPoke
+    ? String(payload.target_id || '') === resolvedSelfId
+    : inferredMessageType === 'group'
+      ? extractAtTargets(rawText).includes(resolvedSelfId)
+      : false;
 
   return {
     ok: true,
     value: normalizeLegacyMessageEvent({
       platform: 'qq',
-      chatType: messageType,
-      chatId: String(messageType === 'group' ? payload.group_id : payload.user_id),
+      chatType: inferredMessageType,
+      chatId: String(inferredMessageType === 'group' ? payload.group_id : payload.user_id),
       userId: String(payload.user_id),
       userName: sender.card || sender.nickname || String(payload.user_id),
       messageId: String(payload.message_id || ''),
       replyTo: resolveReplyTo(payload),
-      text: stripCqCodes(rawText),
+      text: isPoke ? '/poke' : stripCqCodes(rawText),
       rawText,
       mentionsBot,
-      attachments: extractAttachments(rawText),
+      attachments: isPoke ? [] : extractAttachments(rawText),
       timestamp: Number(payload.time || Date.now()),
       source: {
         adapter: 'onebot',
-        postType: payload.post_type,
-        messageType,
+        postType,
+        messageType: inferredMessageType,
+        noticeType: String(payload.notice_type || ''),
         subType: String(payload.sub_type || ''),
       },
       selfId: resolvedSelfId,

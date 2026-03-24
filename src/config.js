@@ -77,6 +77,13 @@ export const config = Object.freeze({
   logLevel: process.env.LOG_LEVEL || 'info',
   traceSampleRate: readNumber('TRACE_SAMPLE_RATE', 1),
   specialUsers: readJson('SPECIAL_USERS_JSON', []),
+  memeEnabled: readBoolean('MEME_ENABLED', true),
+  memeAutoCollect: readBoolean('MEME_AUTO_COLLECT', true),
+  memeAutoSend: readBoolean('MEME_AUTO_SEND', false),
+  memeStorageDir: process.env.MEME_STORAGE_DIR || 'data/memes',
+  memeEnabledGroups: readJson('MEME_ENABLED_GROUPS', []),
+  memeOptOutUsers: readJson('MEME_OPT_OUT_USERS', []),
+  memeRequireAdminForAutoMode: readBoolean('MEME_REQUIRE_ADMIN_FOR_AUTO_MODE', true),
 });
 
 export function validateRuntimeConfig() {

@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { analyzeTrigger } from './src/message-analysis.js';
 import { config } from './src/config.js';
 
-test('trigger policy override can suppress classifier and deny borderline chatter', async () => {
+test('trigger policy override can disable explicit trigger gate', async () => {
   const result = await analyzeTrigger({
     platform: 'qq',
     chatType: 'group',
     chatId: '12345',
     userId: '10001',
     userName: 'Alice',
-    rawText: '有问题想问你',
+    rawText: 'can you answer something',
     mentionsBot: false,
   }, {
     relation: { affection: 30, activeScore: 10 },
@@ -19,6 +19,7 @@ test('trigger policy override can suppress classifier and deny borderline chatte
     triggerPolicy: {
       classifier: { enabled: false },
       groupChat: {
+        requireExplicitTrigger: false,
         autoAllowThreshold: 0.95,
         requireClassifierWindow: { minScore: 0.9, maxScore: 0.94 },
       },
@@ -36,12 +37,15 @@ test('group admin question can pass without direct mention under mixed policy', 
     chatId: '12345',
     userId: config.adminQq || '10001',
     userName: 'Admin',
-    rawText: '这个设定怎么用',
+    rawText: 'how should this setting work',
     mentionsBot: false,
   }, {
     relation: { affection: 30, activeScore: 10 },
     groupState: { activityLevel: 10 },
   }, {
+    triggerPolicy: {
+      keywords: ['setting'],
+    },
     triggerClassifier: async () => ({
       shouldRespond: true,
       confidence: 0.9,

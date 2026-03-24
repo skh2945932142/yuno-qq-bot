@@ -11,6 +11,7 @@ export const DEFAULT_TRIGGER_POLICY = Object.freeze({
   groupChat: {
     hardAllowDirectMention: true,
     hardAllowAdminCommand: true,
+    requireExplicitTrigger: true,
     requireClassifierWindow: {
       minScore: 0.3,
       maxScore: 0.74,
@@ -33,6 +34,8 @@ export const DEFAULT_TRIGGER_POLICY = Object.freeze({
     activeWindow: 0.08,
     random: 0.05,
     replyToBot: 0.3,
+    command: 0.9,
+    poke: 0.9,
     specialUser: 0.18,
     specialKeyword: 0.14,
     jealousyTopic: 0.12,

@@ -49,9 +49,67 @@ function buildNapcatTargetPayload(target, message) {
   };
 }
 
+function normalizeImageMessage(image) {
+  if (!image) {
+    return null;
+  }
+
+  if (typeof image === 'string') {
+    return { type: 'image', data: { file: image } };
+  }
+
+  if (image.file) {
+    return { type: 'image', data: { file: image.file } };
+  }
+
+  if (image.url) {
+    return { type: 'image', data: { file: image.url } };
+  }
+
+  if (image.base64) {
+    return { type: 'image', data: { file: `base64://${image.base64}` } };
+  }
+
+  return null;
+}
+
 export async function sendReply(target, text) {
   const request = buildNapcatTargetPayload(target, [{ type: 'text', data: { text } }]);
   await invokePostNapcat(postNapcat, request.action, request.payload, `send ${request.target.chatType} text`);
+}
+
+export async function sendStructuredReply(target, outputs = []) {
+  const message = [];
+
+  for (const output of outputs) {
+    if (!output) {
+      continue;
+    }
+
+    if (output.type === 'text' && output.text) {
+      message.push({ type: 'text', data: { text: output.text } });
+      continue;
+    }
+
+    if (output.type === 'image') {
+      const normalized = normalizeImageMessage(output.image);
+      if (normalized) {
+        message.push(normalized);
+      }
+    }
+  }
+
+  if (message.length === 0) {
+    return false;
+  }
+
+  const request = buildNapcatTargetPayload(target, message);
+  await invokePostNapcat(postNapcat, request.action, request.payload, `send ${request.target.chatType} structured`);
+  return true;
+}
+
+export async function sendImage(target, image) {
+  return sendStructuredReply(target, [{ type: 'image', image }]);
 }
 
 export async function sendText(groupId, text, chatType = 'group') {

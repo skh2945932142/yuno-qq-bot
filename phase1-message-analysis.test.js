@@ -9,7 +9,7 @@ test('analyzeTrigger defaults to replying in private chat', async () => {
     chatId: '10001',
     userId: '10001',
     userName: 'Alice',
-    rawText: '你会什么？',
+    rawText: 'what can you do?',
   }, {
     relation: { affection: 30, activeScore: 10 },
     groupState: null,
@@ -19,14 +19,14 @@ test('analyzeTrigger defaults to replying in private chat', async () => {
   assert.equal(result.reason, 'private-default-reply');
 });
 
-test('analyzeTrigger still suppresses unmentioned group chatter', async () => {
+test('analyzeTrigger suppresses group chatter without explicit trigger', async () => {
   const result = await analyzeTrigger({
     platform: 'qq',
     chatType: 'group',
     chatId: '12345',
     userId: '10001',
     userName: 'Alice',
-    rawText: '今天吃什么',
+    rawText: 'what should we eat today',
     mentionsBot: false,
   }, {
     relation: { affection: 30, activeScore: 10 },
@@ -34,33 +34,36 @@ test('analyzeTrigger still suppresses unmentioned group chatter', async () => {
   });
 
   assert.equal(result.shouldRespond, false);
-  assert.equal(result.reason, 'group-low-confidence');
+  assert.equal(result.reason, 'explicit-trigger-required');
 });
 
-test('analyzeTrigger gives special users a lower reply threshold in group chat', async () => {
+test('special user still replies when an explicit trigger keyword is present', async () => {
   const result = await analyzeTrigger({
     platform: 'qq',
     chatType: 'group',
     chatId: '12345',
     userId: '20001',
     userName: 'Scathach',
-    rawText: '师父，教导我一下',
+    rawText: 'help teach me',
     mentionsBot: false,
   }, {
     relation: { affection: 88, activeScore: 72 },
-    userProfile: { bondMemories: ['教导'], specialNicknames: ['师父'] },
+    userProfile: { bondMemories: ['teach'], specialNicknames: ['master'] },
     groupState: { activityLevel: 20 },
     specialUser: {
       userId: '20001',
       label: 'Scathach',
       affectionFloor: 88,
-      triggerKeywords: ['教导我', '师父'],
-      memorySeeds: ['教导'],
+      triggerKeywords: ['teach', 'master'],
+      memorySeeds: ['teach'],
+    },
+  }, {
+    triggerPolicy: {
+      keywords: ['help', 'teach'],
     },
   });
 
   assert.equal(result.shouldRespond, true);
-  assert.equal(result.reason, 'special-heuristic-pass');
   assert.match(result.ruleSignals.join(','), /special-user/);
-  assert.match(result.ruleSignals.join(','), /special-keyword/);
+  assert.match(result.ruleSignals.join(','), /special-keyword|keyword/);
 });

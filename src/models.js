@@ -117,3 +117,27 @@ const UserProfileMemorySchema = new mongoose.Schema({
 }, { minimize: false });
 UserProfileMemorySchema.index({ platform: 1, userId: 1 }, { unique: true });
 export const UserProfileMemory = mongoose.model('UserProfileMemory', UserProfileMemorySchema);
+
+const MemeAssetSchema = new mongoose.Schema({
+  assetId: { type: String, required: true, unique: true },
+  platform: { type: String, default: 'qq' },
+  chatId: { type: String, required: true },
+  userId: { type: String, default: '' },
+  sourceMessageId: { type: String, default: '' },
+  type: { type: String, default: 'image' },
+  origin: { type: String, default: 'upload' },
+  quoteText: { type: String, default: '' },
+  imageUrl: { type: String, default: '' },
+  storagePath: { type: String, default: '' },
+  avatarUrl: { type: String, default: '' },
+  tags: { type: [String], default: [] },
+  emotion: { type: String, default: 'funny' },
+  safetyStatus: { type: String, default: 'safe' },
+  disabled: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now },
+  lastUsedAt: { type: Date, default: null },
+  usageCount: { type: Number, default: 0 },
+}, { minimize: false });
+MemeAssetSchema.index({ chatId: 1, createdAt: -1 });
+MemeAssetSchema.index({ chatId: 1, userId: 1, createdAt: -1 });
+export const MemeAsset = mongoose.model('MemeAsset', MemeAssetSchema);
