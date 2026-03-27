@@ -30,21 +30,21 @@ test('trigger policy override can disable explicit trigger gate', async () => {
   assert.equal(result.reason, 'group-low-confidence');
 });
 
-test('group admin question can pass without direct mention under mixed policy', async () => {
+test('group admin plain question is still suppressed without explicit trigger', async () => {
   const result = await analyzeTrigger({
     platform: 'qq',
     chatType: 'group',
     chatId: '12345',
     userId: config.adminQq || '10001',
     userName: 'Admin',
-    rawText: 'how should this setting work',
+    rawText: 'how should this work today',
     mentionsBot: false,
   }, {
     relation: { affection: 30, activeScore: 10 },
     groupState: { activityLevel: 10 },
   }, {
     triggerPolicy: {
-      keywords: ['setting'],
+      keywords: ['help'],
     },
     triggerClassifier: async () => ({
       shouldRespond: true,
@@ -54,6 +54,25 @@ test('group admin question can pass without direct mention under mixed policy', 
     }),
   });
 
-  assert.equal(result.shouldRespond, true);
-  assert.match(result.reason, /admin-priority-pass|classifier-allow/);
+  assert.equal(result.shouldRespond, false);
+  assert.equal(result.reason, 'explicit-trigger-required');
 });
+
+test('group admin command still counts as explicit trigger', async () => {
+  const result = await analyzeTrigger({
+    platform: 'qq',
+    chatType: 'group',
+    chatId: '12345',
+    userId: config.adminQq || '10001',
+    userName: 'Admin',
+    rawText: '/help',
+    mentionsBot: false,
+  }, {
+    relation: { affection: 30, activeScore: 10 },
+    groupState: { activityLevel: 10 },
+  });
+
+  assert.equal(result.shouldRespond, true);
+  assert.equal(result.reason, 'command-trigger');
+});
+

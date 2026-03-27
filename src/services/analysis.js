@@ -3,10 +3,20 @@ import { analyzeMessage } from '../minimax.js';
 import {
   clamp,
   extractAtTargets,
-  inferIntent,
   inferSentiment,
   stripCqCodes,
 } from '../utils.js';
+
+function inferLegacyIntent(text, rule = {}) {
+  const normalized = stripCqCodes(text);
+  if (!normalized) return 'ignore';
+  if (rule.directMention && normalized.length > 0) return 'help';
+  if (rule.keyword || /(help|°ïÖú|°ïÎÒ|ÎÊÌâ|ÔõÃ´|ÈçºÎ|ÎªÊ²Ã´|ÎªÉ¶|ÄÜ²»ÄÜ|»á²»»á|ÊÇ²»ÊÇ)/i.test(normalized)) return 'help';
+  if (/(ÄãÊÇË­|½éÉÜ|×ÔÎÒ½éÉÜ)/i.test(normalized)) return 'identity';
+  if (/(±Õ×ì|±ðËµ»°|ÌÖÑáÄã|¹ö¿ª)/i.test(normalized)) return 'challenge';
+  if (/(Ôç°²|Íí°²|ÄãºÃ|ÔÚÂð|hello|hi)/i.test(normalized)) return 'social';
+  return 'chat';
+}
 
 function buildHeuristicResult({
   shouldRespond,
@@ -41,9 +51,9 @@ function buildRuleSignals(event, context, options = {}) {
   const isAdmin = String(event.user_id || '') === config.adminQq;
   const directMention = Boolean(selfId) && atTargets.includes(selfId);
 
-  const nameMention = /ç”±ä¹ƒ|yuno/i.test(normalized);
-  const question = /[?ï¼Ÿ]$/.test(normalized) || /(æ€Žä¹ˆ|å¦‚ä½•|ä¸ºä»€ä¹ˆ|ä¸ºå•¥|å—|ä¹ˆ)\b/i.test(normalized);
-  const keyword = /(å¸®åŠ©|å‘½ä»¤|é—®é¢˜|çŠ¶æ€|å…³ç³»|å¥½æ„Ÿ|ç”»åƒ|ç¾¤çŠ¶æ€|æƒ…ç»ª)/i.test(normalized);
+  const nameMention = /ÓÉÄË|yuno/i.test(normalized);
+  const question = /[?£¿]$/.test(normalized) || /(ÔõÃ´|ÈçºÎ|ÎªÊ²Ã´|ÎªÉ¶|ÄÜ²»ÄÜ|»á²»»á|ÊÇ²»ÊÇ|help)/i.test(normalized);
+  const keyword = /(°ïÖú|ÃüÁî|ÎÊÌâ|×´Ì¬|¹ØÏµ|ºÃ¸Ð|»­Ïñ|Èº×´Ì¬|ÇéÐ÷|help|command|question|setting)/i.test(normalized);
   const highAffection = (context.relation?.affection || 0) >= 70;
   const recentActiveUser = (context.relation?.activeScore || 0) >= 65;
   const groupActiveWindow = (context.groupState?.activityLevel || 0) >= 60;
@@ -110,7 +120,7 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
   const message = event.raw_message || '';
   const rule = buildRuleSignals(event, context, options);
   const sentiment = inferSentiment(message);
-  const intent = inferIntent(message);
+  const intent = inferLegacyIntent(message, rule);
 
   if (!rule.normalized) {
     return {
