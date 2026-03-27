@@ -1,7 +1,7 @@
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { chat, tts } from './minimax.js';
-import { sendReply, sendVoice } from './sender.js';
+import { sendReply, sendStructuredReply, sendVoice } from './sender.js';
 import { analyzeTrigger } from './message-analysis.js';
 import { resolveEmotion, shouldSendVoiceForEmotion } from './emotion-engine.js';
 import {
@@ -30,6 +30,8 @@ import { stripCqCodes } from './utils.js';
 import { getRuntimeServices } from './runtime-services.js';
 import { recordWorkflowMetric } from './metrics.js';
 import { getSpecialUserByUserId, getSpecialUserKnowledgeTags } from './special-users.js';
+import { resolveUserPersonaPolicy } from './persona-policy.js';
+import { formatToolResultAsYuno, normalizeFormatterOutputs } from './yuno-formatter.js';
 
 registerQueryTools(toolRegistry);
 
@@ -110,6 +112,7 @@ function createWorkflowDeps(deps = {}) {
     chat: deps.chat || chat,
     tts: deps.tts || tts,
     sendReply: deps.sendReply || sendReply,
+    sendStructuredReply: deps.sendStructuredReply || sendStructuredReply,
     sendVoice: deps.sendVoice || sendVoice,
     toolRegistry: deps.toolRegistry || toolRegistry,
     enqueuePersistJob: deps.enqueuePersistJob || runtimeServices.queueManager?.enqueuePersist || null,
@@ -266,16 +269,6 @@ async function persistReplyState(context, payload, trace, deps) {
     }),
   ];
 
-  if (payload.summary && context.event.chatType === 'group') {
-    tasks.push(deps.recordGroupEvent({
-      groupId: context.event.chatId,
-      userId: context.event.userId,
-      username: payload.username,
-      summary: payload.summary,
-      sentiment: payload.analysis.sentiment,
-      topics: payload.analysis.topics,
-    }));
-  }
 
   if (context.isAdvanced) {
     tasks.push(deps.updateGroupStateFromAnalysis({
@@ -411,13 +404,35 @@ export async function processIncomingMessage(event, precomputed = null, options 
     if (task.type === 'tool') {
       try {
         const toolResult = await runToolTask(task, workflowContext, trace, deps);
-        await withTraceSpan(trace, 'send-tool-response', () => deps.sendReply({
+        const target = {
           platform: normalizedEvent.platform,
           chatType: normalizedEvent.chatType,
           chatId: normalizedEvent.chatId,
-        }, toolResult.text), {
-          toolName: task.toolName,
-        });
+        };
+
+        let replyText = toolResult?.text || toolResult?.summary || 'Done.';
+        if (toolResult?.tool) {
+          const policy = resolveUserPersonaPolicy({
+            userId: normalizedEvent.userId,
+            scene: normalizedEvent.chatType,
+            relation: workflowContext.relation,
+            basePersona: 'yuno',
+          });
+          replyText = formatToolResultAsYuno(toolResult, policy);
+          const outputs = normalizeFormatterOutputs(toolResult, replyText);
+          await withTraceSpan(trace, 'send-tool-response', () => deps.sendStructuredReply(target, outputs), {
+            toolName: task.toolName,
+          });
+          recordWorkflowMetric('yuno_tool_results_total', 1, {
+            tool: task.toolName,
+            chat_type: normalizedEvent.chatType,
+          });
+        } else {
+          await withTraceSpan(trace, 'send-tool-response', () => deps.sendReply(target, replyText), {
+            toolName: task.toolName,
+          });
+        }
+
         finalizeTrace(trace, {
           replyType: 'tool',
           toolName: task.toolName,
@@ -426,7 +441,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
           queueJobId: options.queueJobId,
           messageId: normalizedEvent.messageId,
         });
-        return toolResult.text;
+        return replyText;
       } catch (error) {
         logger.warn('tool', 'Tool execution fell back to chat response', {
           traceId: trace.traceId,
@@ -598,3 +613,8 @@ export async function processReplyJob(jobData, options = {}) {
 export async function processGroupMessage(event, precomputed = null, options = {}) {
   return processIncomingMessage(event, precomputed, options);
 }
+
+
+
+
+

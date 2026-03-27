@@ -9,9 +9,36 @@ import { createQueueManager } from './queue-manager.js';
 import { metrics, recordWorkflowMetric } from './metrics.js';
 import { getTelemetryStatus, initializeTelemetry } from './telemetry.js';
 import { setRuntimeServices, getRuntimeServices } from './runtime-services.js';
+import { recordInboundGroupObservation } from './group-ops.js';
+import { evaluateGroupAutomation } from './group-automation.js';
+import { runYunoConversation } from './yuno-core.js';
 
 function buildReplyJobId(event) {
   return `reply:${event.platform}:${event.chatId}:${event.messageId || `${event.userId}:${event.timestamp}`}`;
+}
+
+async function deliverAutomationToolResult(event, toolResult) {
+  return runYunoConversation({
+    platform: event.platform,
+    scene: event.chatType,
+    userId: event.userId,
+    groupId: event.chatType === 'group' ? event.chatId : '',
+    chatId: event.chatId,
+    username: event.userName,
+    rawMessage: event.rawText || event.text || '',
+    metadata: {
+      messageId: event.messageId,
+      timestamp: event.timestamp,
+      mentionsBot: event.mentionsBot,
+      source: event.source,
+      sender: event.sender,
+      attachments: event.attachments,
+      replyTo: event.replyTo,
+    },
+  }, {
+    toolResult,
+    responseMode: 'send',
+  });
 }
 
 export function createApp() {
@@ -35,6 +62,50 @@ export function createApp() {
     });
 
     try {
+      if (event.chatType === 'group') {
+        try {
+          await recordInboundGroupObservation(event);
+        } catch (error) {
+          logger.warn('group-ops', 'Failed to record inbound group observation', {
+            message: error.message,
+            chatId: event.chatId,
+            userId: event.userId,
+            messageId: event.messageId,
+          });
+        }
+
+        let automationDecision = null;
+        try {
+          automationDecision = await evaluateGroupAutomation(event);
+          for (const toolResult of automationDecision.toolResults || []) {
+            await deliverAutomationToolResult(event, toolResult);
+            recordWorkflowMetric('yuno_automation_messages_total', 1, {
+              chat_type: event.chatType,
+              tool: toolResult.tool,
+            });
+          }
+        } catch (error) {
+          logger.warn('automation', 'Failed to evaluate group automation', {
+            message: error.message,
+            chatId: event.chatId,
+            userId: event.userId,
+            messageId: event.messageId,
+          });
+        }
+
+        if (automationDecision?.suppressNormalReply) {
+          recordWorkflowMetric('yuno_suppressed_messages_total', 1, {
+            chat_type: event.chatType,
+            reason: 'automation-suppressed',
+          });
+          return;
+        }
+
+        if (event.source?.noticeType === 'group_increase') {
+          return;
+        }
+      }
+
       const decision = await shouldRespondToEvent(event);
       if (!decision.analysis.shouldRespond) {
         recordWorkflowMetric('yuno_suppressed_messages_total', 1, {

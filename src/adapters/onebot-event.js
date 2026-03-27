@@ -63,13 +63,15 @@ export function validateOnebotMessageEvent(payload) {
   const isPoke = postType === 'notice'
     && String(payload.notice_type || '').trim().toLowerCase() === 'notify'
     && String(payload.sub_type || '').trim().toLowerCase() === 'poke';
+  const isGroupIncrease = postType === 'notice'
+    && String(payload.notice_type || '').trim().toLowerCase() === 'group_increase';
 
-  if (!isMessage && !isPoke) {
-    errors.push('payload must be a supported OneBot message or poke notice');
+  if (!isMessage && !isPoke && !isGroupIncrease) {
+    errors.push('payload must be a supported OneBot message or notice');
   }
 
   const messageType = String(payload.message_type || '').trim().toLowerCase();
-  const inferredMessageType = isPoke
+  const inferredMessageType = isPoke || isGroupIncrease
     ? (payload.group_id ? 'group' : 'private')
     : messageType;
 
@@ -97,12 +99,21 @@ export function validateOnebotMessageEvent(payload) {
     ? String(payload.self_id)
     : (config.selfQq || '');
   const sender = isObject(payload.sender) ? payload.sender : {};
-  const rawText = isPoke ? '[poke]' : payload.raw_message;
+  const rawText = isPoke
+    ? '[poke]'
+    : isGroupIncrease
+      ? '[group_increase]'
+      : payload.raw_message;
   const mentionsBot = isPoke
     ? String(payload.target_id || '') === resolvedSelfId
     : inferredMessageType === 'group'
       ? extractAtTargets(rawText).includes(resolvedSelfId)
       : false;
+  const text = isPoke
+    ? '/poke'
+    : isGroupIncrease
+      ? '/welcome'
+      : stripCqCodes(rawText);
 
   return {
     ok: true,
@@ -114,10 +125,10 @@ export function validateOnebotMessageEvent(payload) {
       userName: sender.card || sender.nickname || String(payload.user_id),
       messageId: String(payload.message_id || ''),
       replyTo: resolveReplyTo(payload),
-      text: isPoke ? '/poke' : stripCqCodes(rawText),
+      text,
       rawText,
       mentionsBot,
-      attachments: isPoke ? [] : extractAttachments(rawText),
+      attachments: isMessage ? extractAttachments(rawText) : [],
       timestamp: Number(payload.time || Date.now()),
       source: {
         adapter: 'onebot',

@@ -72,9 +72,14 @@ const GroupEventSchema = new mongoose.Schema({
   userId: { type: String, default: '' },
   username: { type: String, default: '' },
   type: { type: String, default: 'message' },
+  eventSource: { type: String, default: 'message' },
+  messageId: { type: String, default: '' },
+  rawText: { type: String, default: '' },
   sentiment: { type: String, default: 'neutral' },
   summary: { type: String, required: true },
   topics: { type: [String], default: [] },
+  keywordHits: { type: [String], default: [] },
+  anomalyType: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now },
 }, { minimize: false });
 GroupEventSchema.index({ groupId: 1, createdAt: -1 });
@@ -141,3 +146,47 @@ const MemeAssetSchema = new mongoose.Schema({
 MemeAssetSchema.index({ chatId: 1, createdAt: -1 });
 MemeAssetSchema.index({ chatId: 1, userId: 1, createdAt: -1 });
 export const MemeAsset = mongoose.model('MemeAsset', MemeAssetSchema);
+
+const GroupAutomationRuleSchema = new mongoose.Schema({
+  ruleId: { type: String, required: true, unique: true },
+  groupId: { type: String, required: true },
+  ruleType: { type: String, required: true },
+  label: { type: String, default: '' },
+  enabled: { type: Boolean, default: true },
+  pattern: { type: String, default: '' },
+  config: { type: mongoose.Schema.Types.Mixed, default: {} },
+  createdBy: { type: String, default: '' },
+  lastTriggeredAt: { type: Date, default: null },
+}, {
+  minimize: false,
+  timestamps: true,
+});
+GroupAutomationRuleSchema.index({ groupId: 1, ruleType: 1, enabled: 1 });
+export const GroupAutomationRule = mongoose.model('GroupAutomationRule', GroupAutomationRuleSchema);
+
+const AutomationTaskSchema = new mongoose.Schema({
+  taskId: { type: String, required: true, unique: true },
+  platform: { type: String, default: 'qq' },
+  chatType: { type: String, default: 'private' },
+  chatId: { type: String, required: true },
+  groupId: { type: String, default: '' },
+  userId: { type: String, default: '' },
+  taskType: { type: String, required: true },
+  enabled: { type: Boolean, default: true },
+  triggerAt: { type: Date, default: null },
+  nextRunAt: { type: Date, default: null },
+  repeatIntervalMinutes: { type: Number, default: 0 },
+  sourceType: { type: String, default: 'manual' },
+  target: { type: String, default: '' },
+  summary: { type: String, default: '' },
+  payload: { type: mongoose.Schema.Types.Mixed, default: {} },
+  lastTriggeredAt: { type: Date, default: null },
+  lastDeliveredKey: { type: String, default: '' },
+}, {
+  minimize: false,
+  timestamps: true,
+});
+AutomationTaskSchema.index({ enabled: 1, nextRunAt: 1 });
+AutomationTaskSchema.index({ chatId: 1, taskType: 1, enabled: 1 });
+AutomationTaskSchema.index({ userId: 1, taskType: 1, enabled: 1 });
+export const AutomationTask = mongoose.model('AutomationTask', AutomationTaskSchema);

@@ -18,3 +18,11 @@ await import('./phase1-yuno-formatter.test.js');
 await import('./phase1-astrbot-router.test.js');
 await import('./phase1-meme-agent.test.js');
 await import('./phase1-onebot-poke.test.js');
+await import('./phase1-group-ops.test.js');
+await import('./phase1-automation-rules.test.js');
+await import('./phase1-automation-tasks.test.js');
+await import('./phase1-formatter-ops.test.js');
+await import('./phase1-task-router-vnext.test.js');
+await import('./phase1-onebot-notice.test.js');
+
+
