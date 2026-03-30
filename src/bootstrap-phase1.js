@@ -12,6 +12,7 @@ import { setRuntimeServices, getRuntimeServices } from './runtime-services.js';
 import { recordInboundGroupObservation } from './group-ops.js';
 import { evaluateGroupAutomation } from './group-automation.js';
 import { runYunoConversation } from './yuno-core.js';
+import { isNonTargetPokeEvent } from './message-analysis.js';
 
 function buildReplyJobId(event) {
   return `reply:${event.platform}:${event.chatId}:${event.messageId || `${event.userId}:${event.timestamp}`}`;
@@ -62,6 +63,24 @@ export function createApp() {
     });
 
     try {
+      if (event.chatType === 'group' && isNonTargetPokeEvent(event)) {
+        recordWorkflowMetric('yuno_poke_ignored_total', 1, {
+          chat_type: event.chatType,
+          reason: 'non-target-poke',
+        });
+        recordWorkflowMetric('yuno_suppressed_messages_total', 1, {
+          chat_type: event.chatType,
+          reason: 'non-target-poke',
+        });
+        logger.info('webhook', 'Ignored non-target poke event', {
+          chatId: event.chatId,
+          userId: event.userId,
+          messageId: event.messageId,
+          decisionReason: 'non-target-poke',
+        });
+        return;
+      }
+
       if (event.chatType === 'group') {
         try {
           await recordInboundGroupObservation(event);

@@ -12,7 +12,7 @@ import {
   stripCqCodes,
 } from './utils.js';
 
-const JEALOUSY_PATTERN = /(别人|其他人|别的女人|别的男人|喜欢谁|谁靠近你|陪别人|看别人|抢走你|情敌)/i;
+const JEALOUSY_PATTERN = /(鍒汉|鍏朵粬浜簗鍒殑濂充汉|鍒殑鐢蜂汉|鍠滄璋亅璋侀潬杩戜綘|闄埆浜簗鐪嬪埆浜簗鎶㈣蛋浣爘鎯呮晫)/i;
 
 function buildKeywordPattern(keywords = []) {
   if (!keywords.length) {
@@ -65,6 +65,16 @@ function isPokeEvent(event) {
     && event?.source?.subType === 'poke';
 }
 
+export function isBotTargetedPokeEvent(event) {
+  const normalizedEvent = normalizeLegacyMessageEvent(event);
+  return isPokeEvent(normalizedEvent) && Boolean(normalizedEvent.mentionsBot);
+}
+
+export function isNonTargetPokeEvent(event) {
+  const normalizedEvent = normalizeLegacyMessageEvent(event);
+  return isPokeEvent(normalizedEvent) && !normalizedEvent.mentionsBot;
+}
+
 function buildRuleSignals(event, context, policy, options = {}) {
   const normalizedEvent = normalizeLegacyMessageEvent(event);
   const message = normalizedEvent.rawText || '';
@@ -79,11 +89,12 @@ function buildRuleSignals(event, context, policy, options = {}) {
     : false;
   const replyToBot = Boolean(normalizedEvent.replyTo) && directMention;
 
-  const nameMention = /由乃|yuno/i.test(normalized);
-  const question = /[?��]$/.test(normalized) || /(��ô|���|Ϊʲô|Ϊɶ|�ܲ���|�᲻��|�ǲ���|help)/i.test(normalized);
+  const nameMention = /鐢变箖|yuno/i.test(normalized);
+  const question = /[?？]$/.test(normalized) || /(怎么|如何|为什么|为啥|能不能|会不会|是不是|help)/i.test(normalized);
   const keyword = keywordPattern.test(normalized);
-  const command = Boolean(parseCommand(normalized)) || /^\/\S+/.test(normalized);
-  const poke = isPokeEvent(normalizedEvent);
+  const command = normalizedEvent.source?.postType !== 'notice'
+    && (Boolean(parseCommand(normalized)) || /^\/\S+/.test(normalized));
+  const poke = isBotTargetedPokeEvent(normalizedEvent);
   const highAffection = (context.relation?.affection || 0) >= 70;
   const recentActiveUser = (context.relation?.activeScore || 0) >= 65;
   const groupActiveWindow = (context.groupState?.activityLevel || 0) >= 60;
@@ -143,6 +154,211 @@ function buildRuleSignals(event, context, policy, options = {}) {
   };
 }
 
+function buildNonTargetPokeDeny(rule, intent, sentiment, reason = 'non-target-poke') {
+  return buildHeuristicResult({
+    shouldRespond: false,
+    confidence: 0,
+    intent,
+    sentiment,
+    relevance: 0,
+    reason,
+    topics: [],
+    ruleSignals: rule.signals,
+    replyStyle: 'calm',
+    decisionExplanation: makeDecisionExplanation(rule, {
+      hardDecision: 'deny',
+      finalDecision: 'deny',
+    }),
+  });
+}
+
+export function analyzeTriggerFast(event, options = {}) {
+  const policy = loadTriggerPolicy(options.triggerPolicy);
+  const rule = buildRuleSignals(event, {}, policy, options);
+  const message = rule.event.rawText || '';
+  const sentiment = inferSentiment(message);
+  const intent = inferIntent(message);
+  const isAttachmentOnly = shouldTreatAsAttachmentOnly(rule.event, rule.normalized);
+
+  if (isNonTargetPokeEvent(rule.event)) {
+    return buildNonTargetPokeDeny(rule, intent, sentiment);
+  }
+
+  if (!rule.normalized && !isAttachmentOnly) {
+    return buildHeuristicResult({
+      shouldRespond: false,
+      confidence: 0,
+      intent: 'ignore',
+      sentiment: 'neutral',
+      relevance: 0,
+      reason: 'empty-message',
+      topics: [],
+      ruleSignals: rule.signals,
+      replyStyle: 'calm',
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'deny',
+        finalDecision: 'deny',
+      }),
+    });
+  }
+
+  if (policy.hardDeny.ignorePureAttachmentWithoutMention && isAttachmentOnly && !rule.directMention) {
+    return buildHeuristicResult({
+      shouldRespond: false,
+      confidence: 0.15,
+      intent,
+      sentiment,
+      relevance: 0.1,
+      reason: 'attachment-without-mention',
+      topics: [],
+      ruleSignals: rule.signals,
+      replyStyle: 'calm',
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'deny',
+        finalDecision: 'deny',
+      }),
+    });
+  }
+
+  if (rule.event.chatType === 'private' && policy.privateChat.autoAllow) {
+    return buildHeuristicResult({
+      shouldRespond: true,
+      confidence: clamp(Math.max(rule.score, policy.privateChat.minConfidence), 0, 1),
+      intent,
+      sentiment,
+      relevance: clamp(policy.privateChat.minRelevance, 0, 1),
+      reason: 'private-default-reply',
+      ruleSignals: [...rule.signals, 'private-chat'],
+      replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
+      topics: [],
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'allow',
+        finalDecision: 'allow',
+      }),
+    });
+  }
+
+  if (rule.directMention && policy.groupChat.hardAllowDirectMention) {
+    return buildHeuristicResult({
+      shouldRespond: true,
+      confidence: clamp(Math.max(rule.score, policy.groupChat.autoAllowThreshold), 0, 1),
+      intent,
+      sentiment,
+      relevance: isAdvancedGroup(rule.event.chatId) ? 0.85 : 0.8,
+      reason: isAdvancedGroup(rule.event.chatId)
+        ? 'advanced-direct-mention-pass'
+        : 'basic-direct-mention-pass',
+      ruleSignals: rule.signals,
+      replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
+      topics: [],
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'allow',
+        finalDecision: 'allow',
+      }),
+    });
+  }
+
+  if (rule.poke) {
+    return buildHeuristicResult({
+      shouldRespond: true,
+      confidence: clamp(Math.max(rule.score, policy.groupChat.autoAllowThreshold), 0, 1),
+      intent,
+      sentiment,
+      relevance: 0.88,
+      reason: 'poke-trigger',
+      ruleSignals: rule.signals,
+      replyStyle: 'calm',
+      topics: [],
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'allow',
+        finalDecision: 'allow',
+      }),
+    });
+  }
+
+  if (rule.command && policy.groupChat.hardAllowCommand) {
+    return buildHeuristicResult({
+      shouldRespond: true,
+      confidence: clamp(Math.max(rule.score, policy.groupChat.autoAllowThreshold), 0, 1),
+      intent,
+      sentiment,
+      relevance: 0.9,
+      reason: 'command-trigger',
+      ruleSignals: rule.signals,
+      replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
+      topics: [],
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'allow',
+        finalDecision: 'allow',
+      }),
+    });
+  }
+
+  if ((rule.keyword || rule.specialKeyword) && policy.groupChat.hardAllowKeyword) {
+    return buildHeuristicResult({
+      shouldRespond: true,
+      confidence: clamp(Math.max(rule.score, policy.groupChat.classifierAllowThreshold), 0, 1),
+      intent,
+      sentiment,
+      relevance: 0.8,
+      reason: rule.specialKeyword ? 'special-keyword-trigger' : 'keyword-trigger',
+      ruleSignals: rule.signals,
+      replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
+      topics: [],
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'allow',
+        finalDecision: 'allow',
+      }),
+    });
+  }
+
+  if (rule.isAdmin && policy.groupChat.hardAllowAdminCommand && rule.command) {
+    return buildHeuristicResult({
+      shouldRespond: true,
+      confidence: clamp(Math.max(rule.score, policy.groupChat.classifierAllowThreshold), 0, 1),
+      intent,
+      sentiment,
+      relevance: 0.78,
+      reason: 'admin-command-pass',
+      ruleSignals: [...rule.signals, 'admin-priority'],
+      replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
+      topics: [],
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'allow',
+        finalDecision: 'allow',
+      }),
+    });
+  }
+
+  if (
+    rule.event.chatType === 'group'
+    && policy.groupChat.requireExplicitTrigger
+    && !rule.directMention
+    && !rule.keyword
+    && !rule.command
+    && !rule.poke
+    && !rule.specialKeyword
+  ) {
+    return buildHeuristicResult({
+      shouldRespond: false,
+      confidence: clamp(rule.score, 0, 1),
+      intent,
+      sentiment,
+      relevance: 0.1,
+      reason: 'explicit-trigger-required',
+      ruleSignals: rule.signals,
+      replyStyle: 'calm',
+      topics: [],
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'deny',
+        finalDecision: 'deny',
+      }),
+    });
+  }
+
+  return null;
+}
+
 function makeDecisionExplanation(rule, extras = {}) {
   return {
     heuristicScore: Number(rule.score || 0),
@@ -171,6 +387,10 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
   const classifierAllowThreshold = specialUser
     ? Math.max(0, (policy.groupChat.specialUserClassifierAllowThreshold ?? (policy.groupChat.classifierAllowThreshold - 0.08)))
     : policy.groupChat.classifierAllowThreshold;
+
+  if (isNonTargetPokeEvent(rule.event)) {
+    return buildNonTargetPokeDeny(rule, intent, sentiment);
+  }
 
   if (!rule.normalized && !isAttachmentOnly) {
     return buildHeuristicResult({

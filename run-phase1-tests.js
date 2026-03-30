@@ -18,6 +18,7 @@ await import('./phase1-yuno-formatter.test.js');
 await import('./phase1-astrbot-router.test.js');
 await import('./phase1-meme-agent.test.js');
 await import('./phase1-onebot-poke.test.js');
+await import('./phase1-poke-fast-path.test.js');
 await import('./phase1-group-ops.test.js');
 await import('./phase1-automation-rules.test.js');
 await import('./phase1-automation-tasks.test.js');

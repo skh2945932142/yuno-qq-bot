@@ -2,7 +2,7 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import { chat, tts } from './minimax.js';
 import { sendReply, sendStructuredReply, sendVoice } from './sender.js';
-import { analyzeTrigger } from './message-analysis.js';
+import { analyzeTrigger, analyzeTriggerFast } from './message-analysis.js';
 import { resolveEmotion, shouldSendVoiceForEmotion } from './emotion-engine.js';
 import {
   canUseAdvancedGroupFeatures,
@@ -92,6 +92,7 @@ function createWorkflowDeps(deps = {}) {
 
   return {
     analyzeTrigger: deps.analyzeTrigger || analyzeTrigger,
+    analyzeTriggerFast: deps.analyzeTriggerFast || analyzeTriggerFast,
     planIncomingTask: deps.planIncomingTask || planIncomingTask,
     ensureRelation: deps.ensureRelation || ensureRelation,
     ensureUserState: deps.ensureUserState || ensureUserState,
@@ -119,7 +120,20 @@ function createWorkflowDeps(deps = {}) {
   };
 }
 
-export async function buildWorkflowContext(event, trace, deps) {
+function shouldUseLightweightContext(event, analysis = null) {
+  if (analysis?.reason === 'poke-trigger') {
+    return true;
+  }
+
+  if (analysis?.reason === 'command-trigger') {
+    return true;
+  }
+
+  const normalizedText = stripCqCodes(event?.rawText || event?.text || '');
+  return event?.source?.postType === 'message' && /^\/\S+/.test(normalizedText);
+}
+
+export async function buildWorkflowContext(event, trace, deps, options = {}) {
   const session = {
     platform: event.platform,
     chatType: event.chatType,
@@ -127,6 +141,7 @@ export async function buildWorkflowContext(event, trace, deps) {
     userId: event.userId,
   };
   const isAdvanced = event.chatType === 'group' && canUseAdvancedGroupFeatures(event.chatId);
+  const lightweight = Boolean(options.lightweight);
   const specialUser = getSpecialUserByUserId(event.userId);
 
   const [relation, userState, userProfile, conversationState, groupState, recentEvents] = await withTraceSpan(
@@ -137,13 +152,14 @@ export async function buildWorkflowContext(event, trace, deps) {
       deps.ensureUserState(session),
       deps.ensureUserProfileMemory({ platform: event.platform, userId: event.userId, userName: event.userName, specialUser }),
       deps.getConversationState(session),
-      isAdvanced ? deps.ensureGroupState(event.chatId) : Promise.resolve(null),
-      isAdvanced ? deps.getRecentEvents(event.chatId, 5) : Promise.resolve([]),
+      isAdvanced && !lightweight ? deps.ensureGroupState(event.chatId) : Promise.resolve(null),
+      isAdvanced && !lightweight ? deps.getRecentEvents(event.chatId, 5) : Promise.resolve([]),
     ]),
     {
       chatType: event.chatType,
       chatId: event.chatId,
       userId: event.userId,
+      contextMode: lightweight ? 'lightweight' : 'full',
     }
   );
 
@@ -159,6 +175,7 @@ export async function buildWorkflowContext(event, trace, deps) {
     specialUser,
     isAdmin: event.userId === config.adminQq,
     isAdvanced,
+    contextMode: lightweight ? 'lightweight' : 'full',
   };
 }
 
@@ -171,7 +188,9 @@ async function resolveContext(event, precomputed, trace, deps, options) {
     };
   }
 
-  const context = await buildWorkflowContext(event, trace, deps);
+  const context = await buildWorkflowContext(event, trace, deps, {
+    lightweight: shouldUseLightweightContext(event, precomputed?.analysis),
+  });
   if (precomputed?.analysis) {
     return {
       ...context,
@@ -200,6 +219,45 @@ export async function shouldRespondToEvent(event, options = {}) {
   });
 
   try {
+    const fastAnalysis = deps.analyzeTriggerFast(normalizedEvent, {
+      ...options,
+      traceContext: trace,
+    });
+
+    if (fastAnalysis) {
+      recordWorkflowMetric('yuno_trigger_fast_path_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        reason: fastAnalysis.reason,
+      });
+
+      recordWorkflowMetric('yuno_trigger_decisions_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        decision: fastAnalysis.shouldRespond ? 'allow' : 'deny',
+        reason: fastAnalysis.reason,
+      });
+
+      finalizeTrace(trace, {
+        shouldRespond: fastAnalysis.shouldRespond,
+        reason: fastAnalysis.reason,
+        chatType: normalizedEvent.chatType,
+        messageId: normalizedEvent.messageId,
+        decisionReason: fastAnalysis.reason,
+        fastPath: true,
+      });
+
+      return {
+        event: normalizedEvent,
+        session: {
+          platform: normalizedEvent.platform,
+          chatType: normalizedEvent.chatType,
+          chatId: normalizedEvent.chatId,
+          userId: normalizedEvent.userId,
+        },
+        analysis: fastAnalysis,
+        trace,
+      };
+    }
+
     const context = await buildWorkflowContext(normalizedEvent, trace, deps);
     const analysis = await withTraceSpan(
       trace,
@@ -221,12 +279,13 @@ export async function shouldRespondToEvent(event, options = {}) {
     });
 
     finalizeTrace(trace, {
-      shouldRespond: analysis.shouldRespond,
-      reason: analysis.reason,
-      chatType: normalizedEvent.chatType,
-      messageId: normalizedEvent.messageId,
-      decisionReason: analysis.reason,
-    });
+        shouldRespond: analysis.shouldRespond,
+        reason: analysis.reason,
+        chatType: normalizedEvent.chatType,
+        messageId: normalizedEvent.messageId,
+        decisionReason: analysis.reason,
+        fastPath: false,
+      });
 
     return { ...context, analysis, trace };
   } catch (error) {
@@ -586,6 +645,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       queueJobId: options.queueJobId,
       messageId: normalizedEvent.messageId,
       decisionReason: analysis.reason,
+      contextMode: workflowContext.contextMode || 'full',
     });
     return replyText;
   } catch (error) {
