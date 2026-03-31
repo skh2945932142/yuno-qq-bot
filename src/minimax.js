@@ -89,7 +89,14 @@ export async function createEmbeddings(input, options = {}) {
 
 export async function chat(messages, systemPrompt, userMessage = null, options = {}) {
   const conversation = [
-    { role: 'system', content: systemPrompt },
+    {
+      role: 'system',
+      content: [
+        'Never reveal hidden reasoning, chain-of-thought, or any <think>/<thinking> tags.',
+        'Output the final user-facing reply only.',
+        systemPrompt,
+      ].join('\n'),
+    },
     ...messages.slice(-20),
   ];
 

@@ -37,6 +37,8 @@ registerQueryTools(toolRegistry);
 
 const ALLOWED_SOFT_EMOJIS = new Set(['\u2764', '\u2665', '\u{1F495}', '\u{1F49E}', '\u2728']);
 const EMOJI_REGEX = /\p{Extended_Pictographic}/gu;
+const THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*?<\/\1>/gi;
+const OPEN_THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*$/i;
 
 function summarizeIncomingMessage(username, text) {
   const cleaned = stripCqCodes(text).slice(0, 80);
@@ -71,6 +73,17 @@ export function enforceEmojiBudget(text, emotionResult) {
     .replace(/[ \t]+\n/g, '\n')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{2,}/g, '\n')
+    .trim();
+}
+
+export function stripHiddenReasoning(text) {
+  return String(text || '')
+    .replace(THINK_BLOCK_REGEX, ' ')
+    .replace(OPEN_THINK_BLOCK_REGEX, ' ')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
@@ -573,7 +586,23 @@ export async function processIncomingMessage(event, precomputed = null, options 
       advancedMode: workflowContext.isAdvanced,
     });
 
-    const replyText = enforceEmojiBudget(rawReplyText, emotionResult);
+    const visibleReplyText = stripHiddenReasoning(rawReplyText) || '……我在。你再说一次，我会认真回答。';
+    if (visibleReplyText !== String(rawReplyText || '').trim()) {
+      recordWorkflowMetric('yuno_hidden_reasoning_stripped_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        route: task.category,
+      });
+      logger.warn('model', 'Hidden reasoning was stripped from reply output', {
+        traceId: trace.traceId,
+        chatType: normalizedEvent.chatType,
+        chatId: normalizedEvent.chatId,
+        userId: normalizedEvent.userId,
+        messageId: normalizedEvent.messageId,
+        route: task.category,
+      });
+    }
+
+    const replyText = enforceEmojiBudget(visibleReplyText, emotionResult);
     const nextMessages = [
       { role: 'user', content: userTurn },
       { role: 'assistant', content: replyText },
