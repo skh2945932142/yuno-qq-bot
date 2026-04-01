@@ -12,14 +12,22 @@ import {
   stripCqCodes,
 } from './utils.js';
 
-const JEALOUSY_PATTERN = /(鍒汉|鍏朵粬浜簗鍒殑濂充汉|鍒殑鐢蜂汉|鍠滄璋亅璋侀潬杩戜綘|闄埆浜簗鐪嬪埆浜簗鎶㈣蛋浣爘鎯呮晫)/i;
+const JEALOUSY_PATTERN = /(\u522b\u4eba|\u5176\u4ed6\u4eba|\u53e6\u4e00\u4e2a\u4eba|\u559c\u6b22\u8c01|\u770b\u522b\u4eba|\u522b\u770b\u522b\u4eba|\u966a\u522b\u4eba|\u9760\u8fd1\u4f60|\u62a2\u8d70\u4f60|\u60c5\u654c|someone else|other people)/i;
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 function buildKeywordPattern(keywords = []) {
-  if (!keywords.length) {
+  const escapedKeywords = keywords
+    .map((item) => escapeRegex(item))
+    .filter(Boolean);
+
+  if (!escapedKeywords.length) {
     return /$^/;
   }
 
-  return new RegExp(`(${keywords.join('|')})`, 'i');
+  return new RegExp(`(${escapedKeywords.join('|')})`, 'i');
 }
 
 function hasMemoryHit(normalizedText, memories = []) {
@@ -89,8 +97,8 @@ function buildRuleSignals(event, context, policy, options = {}) {
     : false;
   const replyToBot = Boolean(normalizedEvent.replyTo) && directMention;
 
-  const nameMention = /鐢变箖|yuno/i.test(normalized);
-  const question = /[?？]$/.test(normalized) || /(怎么|如何|为什么|为啥|能不能|会不会|是不是|help)/i.test(normalized);
+  const nameMention = /(\u7531\u4e43|yuno)/i.test(normalized);
+  const question = /[??]$/.test(normalized) || /(\u600e\u4e48|\u5982\u4f55|\u4e3a\u4ec0\u4e48|\u4e3a\u5565|\u80fd\u4e0d\u80fd|\u4f1a\u4e0d\u4f1a|\u662f\u4e0d\u662f|help)/i.test(normalized);
   const keyword = keywordPattern.test(normalized);
   const command = normalizedEvent.source?.postType !== 'notice'
     && (Boolean(parseCommand(normalized)) || /^\/\S+/.test(normalized));
@@ -151,6 +159,9 @@ function buildRuleSignals(event, context, policy, options = {}) {
     isAdmin,
     normalized,
     specialUser,
+    specialKeyword,
+    jealousyTopic,
+    bondMemoryHit,
   };
 }
 

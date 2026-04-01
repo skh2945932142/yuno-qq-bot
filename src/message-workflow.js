@@ -603,7 +603,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       promptProfile: replyLengthProfile.promptProfile,
     });
 
-    const visibleReplyText = stripHiddenReasoning(rawReplyText) || '……我在。你再说一次，我会认真回答。';
+    const visibleReplyText = stripHiddenReasoning(rawReplyText) || '??????????????????';
     if (visibleReplyText !== String(rawReplyText || '').trim()) {
       recordWorkflowMetric('yuno_hidden_reasoning_stripped_total', 1, {
         chat_type: normalizedEvent.chatType,

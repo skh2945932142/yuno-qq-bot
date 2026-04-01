@@ -16,6 +16,7 @@ await import('./phase1-knowledge-sync.test.js');
 await import('./phase1-tool-config.test.js');
 await import('./phase1-yuno-core.test.js');
 await import('./phase1-astrbot-plugin.test.js');
+await import('./phase1-yuno-status-plugin.test.js');
 await import('./phase1-yuno-formatter.test.js');
 await import('./phase1-astrbot-router.test.js');
 await import('./phase1-meme-agent.test.js');

@@ -9,17 +9,28 @@ const DEFAULT_QUEUE_STATUS = {
 };
 
 function createInlineQueueManager() {
-  const seenJobIds = new Set();
+  const seenJobIds = new Map();
+  const DEDUP_TTL_MS = 5 * 60 * 1000;
+
+  function pruneExpired() {
+    const cutoff = Date.now() - DEDUP_TTL_MS;
+    for (const [jobId, timestamp] of seenJobIds) {
+      if (timestamp < cutoff) {
+        seenJobIds.delete(jobId);
+      }
+    }
+  }
 
   return {
     status: { ...DEFAULT_QUEUE_STATUS },
     async enqueue(name, data, handler, options = {}) {
+      pruneExpired();
       if (options.jobId && seenJobIds.has(options.jobId)) {
         recordWorkflowMetric('yuno_queue_deduplicated_total', 1, { queue: name, mode: 'inline' });
         return { id: options.jobId, deduplicated: true };
       }
       if (options.jobId) {
-        seenJobIds.add(options.jobId);
+        seenJobIds.set(options.jobId, Date.now());
       }
       recordWorkflowMetric('yuno_queue_jobs_total', 1, { queue: name, mode: 'inline' });
       await handler(data, {

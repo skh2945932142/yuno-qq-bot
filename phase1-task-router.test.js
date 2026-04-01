@@ -36,6 +36,17 @@ test('planIncomingTask identifies cold-start prompts', () => {
   assert.equal(task.category, 'cold_start');
 });
 
+test('planIncomingTask identifies follow-up prompts', () => {
+  const task = planIncomingTask({
+    event: createEvent({ rawText: '然后呢' }),
+    text: '然后呢',
+    analysis: { shouldRespond: true, reason: 'private-default-reply' },
+    conversationState: { messages: [{ role: 'user', content: '先前聊过' }] },
+  });
+
+  assert.equal(task.category, 'follow_up');
+});
+
 test('planIncomingTask uses group/private defaults when no special route matches', () => {
   const privateTask = planIncomingTask({
     event: createEvent({ rawText: '今天好累' }),

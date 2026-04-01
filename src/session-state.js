@@ -4,7 +4,7 @@ import { buildChatScopeId, buildSessionKey } from './chat/session.js';
 import { clamp, extractPreferences, uniqueCompact } from './utils.js';
 import { getSpecialUserByUserId } from './special-users.js';
 
-function buildMemorySummary({ preferences, favoriteTopics, activeScore, specialUser }) {
+function buildMemorySummaryPrefix({ preferences, favoriteTopics, specialUser }) {
   const segments = [];
 
   if (specialUser?.label) {
@@ -19,8 +19,7 @@ function buildMemorySummary({ preferences, favoriteTopics, activeScore, specialU
     segments.push(`常聊:${favoriteTopics.join(' / ')}`);
   }
 
-  segments.push(`活跃度:${Math.round(activeScore || 0)}`);
-  return segments.join('；');
+  return segments.length > 0 ? `${segments.join('；')}；` : '';
 }
 
 function buildSessionFilter(session) {
@@ -140,48 +139,82 @@ export async function updateRelationProfile(relation, { text, analysis }) {
   if (analysis.ruleSignals?.includes('bond-memory-hit')) delta += 1;
 
   const affectionFloor = specialUser?.affectionFloor || 0;
-  const currentAffection = relation.affection ?? Math.max(30, affectionFloor);
-  const nextAffection = clamp(Math.max(currentAffection + delta, affectionFloor), 0, 100);
-  const currentActiveScore = relation.activeScore ?? 0;
-  const nextActiveScore = clamp((currentActiveScore * 0.65) + (specialUser ? 28 : 25), 0, 100);
-  const nextInteractionCount = (relation.interactionCount || 0) + 1;
-  const memorySummary = buildMemorySummary({
+  const nextActiveScore = clamp(((relation.activeScore ?? 0) * 0.65) + (specialUser ? 28 : 25), 0, 100);
+  const memorySummaryPrefix = buildMemorySummaryPrefix({
     preferences,
     favoriteTopics,
-    activeScore: nextActiveScore,
     specialUser,
   });
   const tags = uniqueCompact([
     ...(relation.tags || []),
     ...(specialUser ? ['special-user', specialUser.personaMode] : []),
   ], 8);
+  const now = new Date();
+  const sessionFields = buildSessionFields({
+    platform: relation.platform || 'qq',
+    chatType: relation.chatType || 'group',
+    chatId: relation.chatId || relation.groupId,
+    userId: relation.userId,
+  });
+  const activeScoreExpression = {
+    $min: [100, {
+      $add: [
+        { $multiply: [{ $ifNull: ['$activeScore', 0] }, 0.65] },
+        specialUser ? 28 : 25,
+      ],
+    }],
+  };
+  const affectionExpression = {
+    $max: [
+      affectionFloor,
+      {
+        $min: [
+          100,
+          {
+            $add: [
+              { $ifNull: ['$affection', Math.max(30, affectionFloor)] },
+              delta,
+            ],
+          },
+        ],
+      },
+    ],
+  };
 
   const updated = await Relation.findOneAndUpdate(
     { _id: relation._id },
-    {
-      $set: {
-        ...buildSessionFields({
-          platform: relation.platform || 'qq',
-          chatType: relation.chatType || 'group',
-          chatId: relation.chatId || relation.groupId,
-          userId: relation.userId,
-        }),
-        affection: nextAffection,
-        preferences,
-        favoriteTopics,
-        activeScore: nextActiveScore,
-        interactionCount: nextInteractionCount,
-        lastSentiment: analysis.sentiment,
-        lastInteract: new Date(),
-        memorySummary,
-        tags,
+    [
+      {
+        $set: {
+          ...sessionFields,
+          affection: affectionExpression,
+          preferences: { $literal: preferences },
+          favoriteTopics: { $literal: favoriteTopics },
+          activeScore: activeScoreExpression,
+          interactionCount: { $add: [{ $ifNull: ['$interactionCount', 0] }, 1] },
+          lastSentiment: analysis.sentiment,
+          lastInteract: now,
+          tags: { $literal: tags },
+        },
       },
-    },
+      {
+        $set: {
+          memorySummary: {
+            $concat: [
+              memorySummaryPrefix,
+              '活跃度:',
+              { $toString: { $round: ['$activeScore', 0] } },
+            ],
+          },
+        },
+      },
+    ],
     { returnDocument: 'after' }
   );
 
   if (updated) {
     Object.assign(relation, updated.toObject());
+    relation.activeScore = nextActiveScore;
   }
 
   return updated || relation;
