@@ -26,6 +26,27 @@ function formatKnowledgeDocuments(documents) {
     .join('\n');
 }
 
+function formatReplyLengthSection(replyLengthProfile, route) {
+  if (!replyLengthProfile) {
+    return [
+      '【Reply Length】',
+      '- Use a balanced default length for the current scene.',
+      '- Expand more for knowledge answers, emotional support, and strong follow-ups.',
+      '- Do not turn simple replies into long lectures.',
+    ].join('\n');
+  }
+
+  return [
+    '【Reply Length】',
+    `- tier=${replyLengthProfile.tier}`,
+    `- route=${route?.category || 'chat'}`,
+    `- maxTokens=${replyLengthProfile.maxTokens}`,
+    `- guidance=${replyLengthProfile.guidance}`,
+    '- Keep the reply in natural prose. Add one more layer of reaction, explanation, or comfort when the scene deserves it.',
+    '- Tool, reminder, and status outputs should still stay concise unless this is a knowledge-answer scene.',
+  ].join('\n');
+}
+
 function formatPlatformContext(event, route, specialUser) {
   if (event.chatType === 'private') {
     return [
@@ -121,6 +142,7 @@ export function buildReplyContext({
   knowledge,
   isAdmin,
   specialUser = null,
+  replyLengthProfile = null,
 }) {
   const recentEventSummary = recentEvents?.length
     ? recentEvents.map((item) => `- ${item.summary}`).join('\n')
@@ -159,6 +181,8 @@ export function buildReplyContext({
     '',
     '【命中知识片段】',
     formatKnowledgeDocuments(knowledge?.documents || []),
+    '',
+    formatReplyLengthSection(replyLengthProfile, route),
     '',
     '【当前轮判断】',
     `- intent=${messageAnalysis.intent}`,

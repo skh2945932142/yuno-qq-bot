@@ -32,6 +32,7 @@ import { recordWorkflowMetric } from './metrics.js';
 import { getSpecialUserByUserId, getSpecialUserKnowledgeTags } from './special-users.js';
 import { resolveUserPersonaPolicy } from './persona-policy.js';
 import { formatToolResultAsYuno, normalizeFormatterOutputs } from './yuno-formatter.js';
+import { resolveReplyLengthProfile } from './reply-length.js';
 
 registerQueryTools(toolRegistry);
 
@@ -551,6 +552,13 @@ export async function processIncomingMessage(event, precomputed = null, options 
       isAdmin: workflowContext.isAdmin,
       specialUser: workflowContext.specialUser,
     });
+    const replyLengthProfile = resolveReplyLengthProfile({
+      event: normalizedEvent,
+      route: task,
+      analysis,
+      emotionResult,
+      conversationState: workflowContext.conversationState,
+    });
 
     const systemPrompt = deps.buildReplyContext({
       event: normalizedEvent,
@@ -566,6 +574,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       knowledge,
       isAdmin: workflowContext.isAdmin,
       specialUser: workflowContext.specialUser,
+      replyLengthProfile,
     });
 
     const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => deps.chat(
@@ -579,11 +588,14 @@ export async function processIncomingMessage(event, precomputed = null, options 
         traceContext: trace,
         promptVersion: 'reply-context/v4',
         operation: 'reply',
+        maxTokens: replyLengthProfile.maxTokens,
       }
     ), {
       historySize: workflowContext.conversationState.messages.length,
       route: task.category,
       advancedMode: workflowContext.isAdvanced,
+      replyLengthTier: replyLengthProfile.tier,
+      replyMaxTokens: replyLengthProfile.maxTokens,
     });
 
     const visibleReplyText = stripHiddenReasoning(rawReplyText) || '……我在。你再说一次，我会认真回答。';
@@ -675,6 +687,8 @@ export async function processIncomingMessage(event, precomputed = null, options 
       messageId: normalizedEvent.messageId,
       decisionReason: analysis.reason,
       contextMode: workflowContext.contextMode || 'full',
+      replyLengthTier: replyLengthProfile.tier,
+      replyMaxTokens: replyLengthProfile.maxTokens,
     });
     return replyText;
   } catch (error) {
