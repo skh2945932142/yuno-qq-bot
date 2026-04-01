@@ -1,17 +1,17 @@
-import { parseCommand } from './command-parser.js';
+﻿import { parseCommand } from './command-parser.js';
 import { findToolDefinitionByName } from './tool-config.js';
 import { normalizeLegacyMessageEvent } from './chat/session.js';
 import { stripCqCodes } from './utils.js';
 
 const KNOWLEDGE_PATTERNS = [
-  /(设定|人设|规则|世界观|手册|文档|faq|说明书)/i,
+  /(设定|人设|规则|世界观|手册|文档|faq|说明书?)/i,
   /(你是谁|你会什么|你能做什么)/i,
   /(manual|docs?|documentation|faq|who are you|what can you do)/i,
 ];
 
 const FOLLOW_UP_PATTERNS = [
   /^(然后呢|然后|接着|继续|展开说说|细说|再说说)/i,
-  /^(是吗|真的吗|真吗|后来呢)/i,
+  /^(是吗|真的吗|真的呢|后来呢)/i,
   /^(那怎么办|那然后呢|那为什么|为什么|怎么说|什么意思)/i,
   /^(and then|go on|continue|really\??|why|what do you mean)/i,
 ];
@@ -91,7 +91,11 @@ export function planIncomingTask({ event, text, analysis, conversationState }) {
       requiresModel: true,
       requiresRetrieval: true,
       allowFollowUp: normalizedEvent.chatType === 'private',
-      reason: toolFailureFallback ? 'tool-fallback' : classifierCategory === 'info_query' ? 'classifier-info-query' : 'knowledge-pattern',
+      reason: toolFailureFallback
+        ? 'tool-fallback'
+        : classifierCategory === 'info_query'
+          ? 'classifier-info-query'
+          : 'knowledge-pattern',
     };
   }
 

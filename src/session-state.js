@@ -1,7 +1,7 @@
-import { config } from './config.js';
+﻿import { config } from './config.js';
 import { Relation, UserState } from './models.js';
 import { buildChatScopeId, buildSessionKey } from './chat/session.js';
-import { clamp, extractPreferences, uniqueCompact } from './utils.js';
+import { extractPreferences, uniqueCompact } from './utils.js';
 import { getSpecialUserByUserId } from './special-users.js';
 
 function buildMemorySummaryPrefix({ preferences, favoriteTopics, specialUser }) {
@@ -55,7 +55,12 @@ async function findExistingDoc(Model, session) {
     });
   }
 
-  if (doc && (doc.sessionKey !== sessionKey || doc.chatId !== String(session.chatId) || doc.platform !== session.platform || doc.chatType !== session.chatType)) {
+  if (doc && (
+    doc.sessionKey !== sessionKey
+    || doc.chatId !== String(session.chatId)
+    || doc.platform !== session.platform
+    || doc.chatType !== session.chatType
+  )) {
     const updated = await Model.findOneAndUpdate(
       { _id: doc._id },
       { $set: buildSessionFields(session) },
@@ -139,7 +144,6 @@ export async function updateRelationProfile(relation, { text, analysis }) {
   if (analysis.ruleSignals?.includes('bond-memory-hit')) delta += 1;
 
   const affectionFloor = specialUser?.affectionFloor || 0;
-  const nextActiveScore = clamp(((relation.activeScore ?? 0) * 0.65) + (specialUser ? 28 : 25), 0, 100);
   const memorySummaryPrefix = buildMemorySummaryPrefix({
     preferences,
     favoriteTopics,
@@ -156,30 +160,6 @@ export async function updateRelationProfile(relation, { text, analysis }) {
     chatId: relation.chatId || relation.groupId,
     userId: relation.userId,
   });
-  const activeScoreExpression = {
-    $min: [100, {
-      $add: [
-        { $multiply: [{ $ifNull: ['$activeScore', 0] }, 0.65] },
-        specialUser ? 28 : 25,
-      ],
-    }],
-  };
-  const affectionExpression = {
-    $max: [
-      affectionFloor,
-      {
-        $min: [
-          100,
-          {
-            $add: [
-              { $ifNull: ['$affection', Math.max(30, affectionFloor)] },
-              delta,
-            ],
-          },
-        ],
-      },
-    ],
-  };
 
   const updated = await Relation.findOneAndUpdate(
     { _id: relation._id },
@@ -187,10 +167,35 @@ export async function updateRelationProfile(relation, { text, analysis }) {
       {
         $set: {
           ...sessionFields,
-          affection: affectionExpression,
+          affection: {
+            $max: [
+              affectionFloor,
+              {
+                $min: [
+                  100,
+                  {
+                    $add: [
+                      { $ifNull: ['$affection', Math.max(30, affectionFloor)] },
+                      delta,
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
           preferences: { $literal: preferences },
           favoriteTopics: { $literal: favoriteTopics },
-          activeScore: activeScoreExpression,
+          activeScore: {
+            $min: [
+              100,
+              {
+                $add: [
+                  { $multiply: [{ $ifNull: ['$activeScore', 0] }, 0.65] },
+                  specialUser ? 28 : 25,
+                ],
+              },
+            ],
+          },
           interactionCount: { $add: [{ $ifNull: ['$interactionCount', 0] }, 1] },
           lastSentiment: analysis.sentiment,
           lastInteract: now,
@@ -202,7 +207,7 @@ export async function updateRelationProfile(relation, { text, analysis }) {
           memorySummary: {
             $concat: [
               memorySummaryPrefix,
-              '活跃度:',
+              '活跃度 ',
               { $toString: { $round: ['$activeScore', 0] } },
             ],
           },
@@ -214,7 +219,6 @@ export async function updateRelationProfile(relation, { text, analysis }) {
 
   if (updated) {
     Object.assign(relation, updated.toObject());
-    relation.activeScore = nextActiveScore;
   }
 
   return updated || relation;

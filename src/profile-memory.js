@@ -1,4 +1,4 @@
-import { UserProfileMemory } from './models.js';
+﻿import { UserProfileMemory } from './models.js';
 import { buildUserProfileKey } from './chat/session.js';
 import { uniqueCompact } from './utils.js';
 import { getSpecialUserByUserId } from './special-users.js';
@@ -24,7 +24,7 @@ export function buildProfileSummary(profile) {
   }
 
   if (profile.favoriteTopics?.length) {
-    segments.push(`常聊主题:${profile.favoriteTopics.join(' / ')}`);
+    segments.push(`常聊话题:${profile.favoriteTopics.join(' / ')}`);
   }
 
   if (profile.dislikes?.length) {
@@ -79,7 +79,7 @@ function detectTonePreference(text) {
 
 function extractPreferredName(text) {
   const patterns = [
-    /(?:叫我|你可以叫我|称呼我为?)["“]?([\u4e00-\u9fa5A-Za-z0-9_-]{1,16})["”]?/i,
+    /(?:叫我|你可以叫我|称呼我为?)['"“”]?([\u4e00-\u9fa5A-Za-z0-9_-]{1,16})['"“”]?/i,
     /call me ([A-Za-z0-9_-]{1,16})/i,
   ];
 
@@ -187,8 +187,8 @@ function extractSpecialNicknames(text) {
   const normalized = String(text || '');
   const matches = [];
   const patterns = [
-    /(?:叫我|称呼我为?)["“]?([\u4e00-\u9fa5A-Za-z0-9_-]{1,16})["”]?/g,
-    /(?:你可以喊我|你就叫我)["“]?([\u4e00-\u9fa5A-Za-z0-9_-]{1,16})["”]?/g,
+    /(?:叫我|称呼我为?)['"“”]?([\u4e00-\u9fa5A-Za-z0-9_-]{1,16})['"“”]?/g,
+    /(?:你可以喊我|你就叫我)['"“”]?([\u4e00-\u9fa5A-Za-z0-9_-]{1,16})['"“”]?/g,
   ];
 
   for (const pattern of patterns) {
