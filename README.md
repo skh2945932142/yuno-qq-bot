@@ -52,6 +52,8 @@ src/
 
 ```bash
 npm install
+npm run doctor
+npm run smoke
 npm start
 ```
 
@@ -103,6 +105,20 @@ Optional queueing:
 - `QUEUE_CONCURRENCY_REPLY`
 - `QUEUE_CONCURRENCY_PERSIST`
 
+## Server Config Recipes
+
+If you run `node src/index.js` directly on the server host, start from [env.server.example](d:/code/QaQ_bot/yuno-qq-bot/env.server.example).
+
+If you run the app inside the same Docker / Compose network as MongoDB, NapCat, and Qdrant, start from [env.docker.example](d:/code/QaQ_bot/yuno-qq-bot/env.docker.example).
+
+Important deployment notes:
+
+- Host mode must use a host-reachable `MONGODB_URI`. Do not leave Docker-only service names such as `mongo` or `service-xxxxx` in `.env` unless Node runs inside that same container network.
+- Voice mode needs a real ffmpeg binary. On Linux servers this is usually `FFMPEG_PATH=/usr/bin/ffmpeg`. On Windows it is often `C:\\ffmpeg\\bin\\ffmpeg.exe`.
+- Retrieval is only active when both `QDRANT_URL` and `QDRANT_COLLECTION` are set. After filling them, run `npm run kb:sync` once to build the collection.
+- `SELF_QQ` should be set to the bot's own QQ number so CQ mentions and poke targeting can be resolved reliably even when upstream payloads omit `self_id`.
+- `npm run doctor` will now tell you whether Mongo, NapCat, the LLM provider, FFmpeg, Redis, and Qdrant are actually reachable with the current `.env`.
+
 Optional observability:
 
 - `ENABLE_METRICS`
@@ -151,10 +167,14 @@ Optional config overrides:
 npm test
 npm run eval
 npm run kb:sync
+npm run doctor
+npm run smoke
 ```
 
 - `npm test` runs legacy tests plus the Phase 1/2 workflow, trigger, queue, and retrieval tests.
 - `npm run kb:sync` reads Markdown documents from `knowledge/`, chunks them, embeds them, upserts them into Qdrant, writes a manifest, and removes orphan chunks.
+- `npm run doctor` checks the current runtime configuration and probes MongoDB, NapCat, the active LLM provider, optional Qdrant, optional Redis, and optional FFmpeg.
+- `npm run smoke` runs capture-only conversation scenarios against the active `runYunoConversation(...)` path without sending any live QQ messages or writing conversation state.
 
 ## AstrBot Integration
 

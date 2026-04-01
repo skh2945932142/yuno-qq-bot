@@ -12,8 +12,8 @@ function createEvent(overrides = {}) {
     chatId: '10001',
     userId: '10001',
     userName: 'Alice',
-    rawText: '今天有点累',
-    text: '今天有点累',
+    rawText: 'Today feels a little tiring.',
+    text: 'Today feels a little tiring.',
     attachments: [],
     mentionsBot: false,
     timestamp: Date.now(),
@@ -40,33 +40,39 @@ test('resolveReplyLengthProfile expands knowledge answers more than normal group
 
   assert.equal(groupProfile.tier, 'balanced');
   assert.equal(groupProfile.maxTokens, config.groupChatMaxTokens);
+  assert.equal(groupProfile.promptProfile, 'compact');
+  assert.equal(groupProfile.historyLimit, 4);
   assert.equal(knowledgeProfile.tier, 'expanded');
   assert.equal(knowledgeProfile.maxTokens, config.knowledgeReplyMaxTokens);
+  assert.equal(knowledgeProfile.promptProfile, 'standard');
+  assert.equal(knowledgeProfile.historyLimit, 5);
 });
 
-test('buildReplyContext includes reply length guidance', () => {
+test('buildReplyContext includes reply length guidance and prompt profile', () => {
   const prompt = buildReplyContext({
     event: createEvent(),
     route: { category: 'private_chat', allowFollowUp: true },
-    relation: { affection: 72, memorySummary: '熟悉的聊天对象' },
+    relation: { affection: 72, memorySummary: 'Familiar conversation partner.' },
     userState: { currentEmotion: 'AFFECTIONATE' },
     userProfile: {
-      profileSummary: '喜欢温柔一点的语气',
-      preferredName: '阿离',
-      favoriteTopics: ['日常'],
+      profileSummary: 'Prefers a softer tone.',
+      preferredName: 'Ali',
+      favoriteTopics: ['daily-life'],
       dislikes: [],
     },
-    conversationState: { rollingSummary: '刚聊过今天的状态', messages: [] },
+    conversationState: { rollingSummary: 'They were just talking about today.', messages: [] },
     groupState: null,
     recentEvents: [],
     messageAnalysis: { intent: 'social', sentiment: 'positive', relevance: 0.82, ruleSignals: ['private-chat'] },
-    emotionResult: { intensity: 0.75, promptStyle: '温柔完整', toneHints: ['偏爱', '安抚'] },
+    emotionResult: { intensity: 0.75, promptStyle: 'warm and complete', toneHints: ['preference', 'comfort'] },
     knowledge: { documents: [] },
     isAdmin: false,
     specialUser: null,
     replyLengthProfile: {
       tier: 'expanded',
       maxTokens: 520,
+      historyLimit: 6,
+      promptProfile: 'standard',
       guidance: 'Length mode: expanded. In private chat, give a fuller and more emotionally complete reply.',
     },
   });
@@ -74,16 +80,18 @@ test('buildReplyContext includes reply length guidance', () => {
   assert.match(prompt, /Reply Length/);
   assert.match(prompt, /tier=expanded/);
   assert.match(prompt, /maxTokens=520/);
+  assert.match(prompt, /historyLimit=6/);
+  assert.match(prompt, /promptProfile=standard/);
 });
 
-test('processIncomingMessage passes route-specific maxTokens to chat generation', async () => {
+test('processIncomingMessage passes route-specific generation profile to chat', async () => {
   const captured = [];
 
   await processIncomingMessage(createEvent({
     chatType: 'group',
     chatId: '20001',
-    rawText: '由乃，你怎么看今天的安排？',
-    text: '由乃，你怎么看今天的安排？',
+    rawText: 'Yuno, what do you think about tonight\'s plan?',
+    text: 'Yuno, what do you think about tonight\'s plan?',
     mentionsBot: true,
   }), {
     relation: { _id: 'r1', affection: 55, activeScore: 20, preferences: [], favoriteTopics: [], userId: '10001', platform: 'qq', chatType: 'group', chatId: '20001' },
@@ -97,8 +105,8 @@ test('processIncomingMessage passes route-specific maxTokens to chat generation'
     event: createEvent({
       chatType: 'group',
       chatId: '20001',
-      rawText: '由乃，你怎么看今天的安排？',
-      text: '由乃，你怎么看今天的安排？',
+      rawText: 'Yuno, what do you think about tonight\'s plan?',
+      text: 'Yuno, what do you think about tonight\'s plan?',
       mentionsBot: true,
     }),
     analysis: {
@@ -108,7 +116,7 @@ test('processIncomingMessage passes route-specific maxTokens to chat generation'
       sentiment: 'neutral',
       relevance: 0.9,
       reason: 'basic-direct-mention-pass',
-      topics: ['安排'],
+      topics: ['plan'],
       ruleSignals: ['direct-mention'],
       replyStyle: 'calm',
     },
@@ -118,8 +126,12 @@ test('processIncomingMessage passes route-specific maxTokens to chat generation'
       sendVoice: async () => false,
       retrieveKnowledge: async () => ({ enabled: false, documents: [], reason: 'disabled' }),
       chat: async (_messages, _systemPrompt, _userTurn, options) => {
-        captured.push(options.maxTokens);
-        return '我觉得今天可以先把最重要的事排前面，再留一点余量。';
+        captured.push({
+          maxTokens: options.maxTokens,
+          historyLimit: options.historyLimit,
+          temperature: options.temperature,
+        });
+        return 'Put the important thing first and leave a little margin.';
       },
       appendConversationMessages: async () => null,
       updateRelationProfile: async () => null,
@@ -129,5 +141,7 @@ test('processIncomingMessage passes route-specific maxTokens to chat generation'
     },
   });
 
-  assert.equal(captured[0], 420);
+  assert.equal(captured[0].maxTokens, 420);
+  assert.equal(captured[0].historyLimit, 5);
+  assert.equal(captured[0].temperature, 0.58);
 });

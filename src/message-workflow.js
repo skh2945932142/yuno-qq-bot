@@ -586,9 +586,11 @@ export async function processIncomingMessage(event, precomputed = null, options 
       userTurn,
       {
         traceContext: trace,
-        promptVersion: 'reply-context/v4',
+        promptVersion: 'reply-context/v5',
         operation: 'reply',
         maxTokens: replyLengthProfile.maxTokens,
+        historyLimit: replyLengthProfile.historyLimit,
+        temperature: replyLengthProfile.temperature,
       }
     ), {
       historySize: workflowContext.conversationState.messages.length,
@@ -596,6 +598,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
       advancedMode: workflowContext.isAdvanced,
       replyLengthTier: replyLengthProfile.tier,
       replyMaxTokens: replyLengthProfile.maxTokens,
+      replyHistoryLimit: replyLengthProfile.historyLimit,
+      replyTemperature: replyLengthProfile.temperature,
+      promptProfile: replyLengthProfile.promptProfile,
     });
 
     const visibleReplyText = stripHiddenReasoning(rawReplyText) || '……我在。你再说一次，我会认真回答。';

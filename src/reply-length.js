@@ -2,10 +2,9 @@ import { config } from './config.js';
 
 function normalizeTier(value, fallback) {
   const normalized = String(value || '').trim().toLowerCase();
-  if (['concise', 'balanced', 'expanded'].includes(normalized)) {
-    return normalized;
-  }
-  return fallback;
+  return ['concise', 'balanced', 'expanded'].includes(normalized)
+    ? normalized
+    : fallback;
 }
 
 function buildGuidance(event, tier) {
@@ -13,18 +12,63 @@ function buildGuidance(event, tier) {
   const sceneLabel = isPrivate ? 'private chat' : 'group chat';
 
   if (tier === 'concise') {
-    return `Length mode: concise. In this ${sceneLabel}, keep it tight and direct. One compact answer plus at most one short follow-up beat.`;
+    return `Length mode: concise. In this ${sceneLabel}, answer in a compact, direct way. One short beat is enough.`;
   }
 
   if (tier === 'expanded') {
     return isPrivate
-      ? 'Length mode: expanded. In private chat, give a fuller and more emotionally complete reply. Aim for 5-8 natural sentences with smooth transitions, but stay conversational.'
-      : 'Length mode: expanded. In group chat, be noticeably more talkative than before. Aim for 4-6 natural sentences, add one extra layer of explanation or reaction, but avoid wall-of-text spam.';
+      ? 'Length mode: expanded. In private chat, give a fuller and emotionally complete reply with smooth transitions.'
+      : 'Length mode: expanded. In group chat, be noticeably more talkative than before, but still avoid wall-of-text spam.';
   }
 
   return isPrivate
-    ? 'Length mode: balanced. In private chat, reply with a complete and warm answer. Aim for 3-6 natural sentences and allow one soft follow-up.'
-    : 'Length mode: balanced. In group chat, be more chatty than before. Aim for 2-4 natural sentences and add one extra reaction, example, or clarifying thought when it helps.';
+    ? 'Length mode: balanced. In private chat, reply with a complete and warm answer and allow one soft follow-up.'
+    : 'Length mode: balanced. In group chat, be chatty enough to feel alive, but still keep rhythm and brevity.';
+}
+
+function buildGenerationProfile({ isPrivate, routeCategory, analysis, emotionResult, hasRecentContext }) {
+  let historyLimit = isPrivate ? 6 : 4;
+  let temperature = isPrivate ? 0.7 : 0.58;
+  let promptProfile = isPrivate ? 'standard' : 'compact';
+
+  if (routeCategory === 'knowledge_qa') {
+    historyLimit = isPrivate ? 8 : 5;
+    temperature = 0.38;
+    promptProfile = 'standard';
+  } else if (routeCategory === 'follow_up' && hasRecentContext) {
+    historyLimit = isPrivate ? 8 : 6;
+    temperature = isPrivate ? 0.66 : 0.56;
+    promptProfile = 'standard';
+  } else if (routeCategory === 'cold_start') {
+    historyLimit = isPrivate ? 6 : 4;
+    temperature = isPrivate ? 0.72 : 0.6;
+    promptProfile = isPrivate ? 'standard' : 'compact';
+  } else if (routeCategory === 'poke') {
+    historyLimit = 2;
+    temperature = 0.5;
+    promptProfile = 'fast';
+  }
+
+  if (analysis?.intent === 'help') {
+    historyLimit = Math.max(historyLimit, isPrivate ? 7 : 5);
+    temperature = Math.min(temperature, 0.56);
+    promptProfile = 'standard';
+  }
+
+  if ((analysis?.relevance || 0) >= 0.85 && routeCategory === 'group_chat') {
+    historyLimit = Math.max(historyLimit, 5);
+    promptProfile = 'standard';
+  }
+
+  if (['PROTECTIVE', 'AFFECTIONATE', 'FIXATED'].includes(emotionResult?.emotion || '')) {
+    historyLimit = Math.max(historyLimit, isPrivate ? 7 : 5);
+  }
+
+  return {
+    historyLimit,
+    temperature,
+    promptProfile,
+  };
 }
 
 export function resolveReplyLengthProfile({
@@ -58,6 +102,10 @@ export function resolveReplyLengthProfile({
     tier = isPrivate ? 'expanded' : 'balanced';
     maxTokens = isPrivate ? config.privateChatMaxTokens : config.groupChatMaxTokens;
     reason = 'cold-start-route';
+  } else if (routeCategory === 'poke') {
+    tier = 'concise';
+    maxTokens = isPrivate ? 160 : 96;
+    reason = 'poke-fast-path';
   }
 
   if (analysis?.intent === 'help') {
@@ -85,11 +133,22 @@ export function resolveReplyLengthProfile({
     }
   }
 
+  const generationProfile = buildGenerationProfile({
+    isPrivate,
+    routeCategory,
+    analysis,
+    emotionResult,
+    hasRecentContext,
+  });
+
   return {
     tier,
     maxTokens,
     reason,
     routeCategory,
     guidance: buildGuidance(event || { chatType: isPrivate ? 'private' : 'group' }, tier),
+    historyLimit: generationProfile.historyLimit,
+    temperature: generationProfile.temperature,
+    promptProfile: generationProfile.promptProfile,
   };
 }

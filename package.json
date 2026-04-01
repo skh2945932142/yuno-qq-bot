@@ -9,7 +9,9 @@
     "dev": "node --watch src/index.js",
     "test": "node run-phase1-tests.js",
     "eval": "node evals/run-evals.js",
-    "kb:sync": "node scripts/kb-sync.js"
+    "kb:sync": "node scripts/kb-sync.js",
+    "doctor": "node doctor.js",
+    "smoke": "node smoke.js"
   },
   "keywords": [],
   "author": "",

@@ -29,6 +29,10 @@ async function createChatCompletion(messages, options = {}) {
     payload.response_format = options.responseFormat;
   }
 
+  if (options.stop) {
+    payload.stop = options.stop;
+  }
+
   if (!payload.model) {
     throw new Error('Missing LLM chat model configuration');
   }
@@ -56,6 +60,10 @@ async function createChatCompletion(messages, options = {}) {
   });
 
   return response;
+}
+
+function readFirstChoiceContent(response, fallback = '') {
+  return response?.choices?.[0]?.message?.content?.trim() || fallback;
 }
 
 export async function createEmbeddings(input, options = {}) {
@@ -88,16 +96,18 @@ export async function createEmbeddings(input, options = {}) {
 }
 
 export async function chat(messages, systemPrompt, userMessage = null, options = {}) {
+  const historyLimit = Math.max(0, Number(options.historyLimit ?? 8));
   const conversation = [
     {
       role: 'system',
       content: [
-        'Never reveal hidden reasoning, chain-of-thought, or any <think>/<thinking> tags.',
-        'Output the final user-facing reply only.',
+        'Write the final user-facing reply only.',
+        'Do not output hidden reasoning, analysis, planning notes, role labels, or any <think>/<thinking> tags.',
+        'Start immediately with the actual reply text.',
         systemPrompt,
       ].join('\n'),
     },
-    ...messages.slice(-20),
+    ...messages.slice(-historyLimit),
   ];
 
   if (userMessage) {
@@ -110,7 +120,7 @@ export async function chat(messages, systemPrompt, userMessage = null, options =
   }
 
   const response = await createChatCompletion(conversation, options);
-  return response.choices[0]?.message?.content?.trim() || '...';
+  return readFirstChoiceContent(response, '...');
 }
 
 function fallbackAnalysis(text) {
@@ -173,7 +183,7 @@ export async function analyzeMessage(text, context = {}, options = {}) {
       operation: options.operation || 'analysis',
     });
 
-    const raw = response.choices[0]?.message?.content || '{}';
+    const raw = readFirstChoiceContent(response, '{}');
     const parsed = safeJsonParse(raw);
     if (!parsed) {
       return fallbackAnalysis(text);
@@ -261,7 +271,7 @@ export async function classifyReplyTrigger(text, context = {}, options = {}) {
       operation: options.operation || 'trigger-classifier',
     });
 
-    const raw = response.choices[0]?.message?.content || '{}';
+    const raw = readFirstChoiceContent(response, '{}');
     const parsed = safeJsonParse(raw);
     if (!parsed) {
       return fallbackTriggerClassification(text, context);
