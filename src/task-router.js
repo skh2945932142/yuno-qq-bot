@@ -4,53 +4,33 @@ import { normalizeLegacyMessageEvent } from './chat/session.js';
 import { stripCqCodes } from './utils.js';
 
 const KNOWLEDGE_PATTERNS = [
-  /设定/i,
-  /规则/i,
-  /世界观/i,
-  /faq/i,
-  /你是/i,
-  /你会什么/i,
-  /手册/i,
-  /文档/i,
-  /群报告/i,
-  /活跃榜/i,
-  /璁惧畾/i,
-  /瑙勫垯/i,
-  /涓栫晫瑙/i,
-  /浣犳槸璋/i,
-  /浣犱細浠/i,
-  /鎵嬪唽/i,
-  /鏂囨。/i,
+/设定/i,
+/规则/i,
+/世界观/i,
+/你是谁/i,
+/你会什么/i,
+/手册/i,
+/文档/i,
 ];
 
 const FOLLOW_UP_PATTERNS = [
-  /^然后/i,
-  /^继续/i,
-  /^是吗/i,
-  /^真的/i,
-  /^那怎么办/i,
-  /^为什么/i,
-  /^怎么说/i,
-  /^鐒跺悗/i,
-  /^缁х画/i,
-  /^鏄悧/i,
-  /^鐪熺殑/i,
-  /^閭ｆ/i,
-  /^涓轰粈/i,
-  /^鎬庝箞/i,
+
+// FOLLOW_UP_PATTERNS:
+/^然后/i,
+/^继续/i,
+/^是吗/i,
+/^真的/i,
+/^那怎么办/i,
+/^为什么/i,
+/^怎么说/i
 ];
 
 const COLD_START_PATTERNS = [
-  /无聊/i,
-  /在吗/i,
-  /不知道聊什么/i,
-  /聊点什么/i,
-  /你会什么/i,
-  /鏃犺亰/i,
-  /鍦ㄥ悧/i,
-  /涓嶇煡閬撹亰浠/i,
-  /鑱婄偣浠/i,
-  /浣犱細浠/i,
+/无聊/i,
+/在吗/i,
+/不知道聊什么/i,
+/聊点什么/i,
+/你会什么/i,
 ];
 
 function matchAny(patterns, text) {
