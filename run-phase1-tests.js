@@ -1,4 +1,4 @@
-await import('./test/run-tests.js');
+﻿await import('./test/run-tests.js');
 await import('./phase1-tests/unified-adapter.test.js');
 await import('./phase1-message-analysis.test.js');
 await import('./phase1-conversation-memory.test.js');
@@ -26,8 +26,10 @@ await import('./phase1-group-ops.test.js');
 await import('./phase1-automation-rules.test.js');
 await import('./phase1-automation-tasks.test.js');
 await import('./phase1-formatter-ops.test.js');
+await import('./phase1-copy-style.test.js');
 await import('./phase1-task-router-vnext.test.js');
 await import('./phase1-onebot-notice.test.js');
 
 
 await import('./phase1-persist-job.test.js');
+

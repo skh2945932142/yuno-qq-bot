@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+﻿import crypto from 'node:crypto';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { recordWorkflowMetric } from './metrics.js';
@@ -230,10 +230,10 @@ export async function evaluateGroupAutomation(event, deps = {}) {
           groupId: event.chatId,
           summary: eventText(event).slice(0, 120),
         },
-        summary: `${event.userName || event.userId} mentioned ${rule.pattern}.`,
+        summary: `${event.userName || event.userId} 提到了 ${rule.pattern}。`,
         priority: 'high',
         visibility: 'group',
-        followUpHint: 'Use /watch list to inspect current watches.',
+        followUpHint: '想看当前盯梢规则，可以用 /watch list。',
         safetyFlags: [],
       });
       continue;
@@ -248,7 +248,7 @@ export async function evaluateGroupAutomation(event, deps = {}) {
           groupId: event.chatId,
           customMessage: String(rule.config?.message || '').trim(),
         },
-        summary: `${event.userName || event.userId} joined the group.`,
+        summary: `${event.userName || event.userId} 加入了群聊。`,
         priority: 'normal',
         visibility: 'group',
         followUpHint: '',
@@ -271,3 +271,4 @@ export async function evaluateGroupAutomation(event, deps = {}) {
     isAdmin: isAdminUser(event.userId),
   };
 }
+

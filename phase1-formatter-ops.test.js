@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { formatToolResultAsYuno } from './src/yuno-formatter.js';
 
@@ -13,11 +13,12 @@ test('formatter renders group reports without losing key fields', () => {
       topTopics: [{ name: 'deploy', count: 8 }],
       anomalies: [],
     },
-    summary: 'Last 24h: 42 messages from 8 active users.',
+    summary: '最近 24 小时里一共 42 条消息，活跃了 8 个人。',
   }, { specialUser: null });
 
   assert.match(text, /42/);
-  assert.match(text, /8 active users/);
+  assert.match(text, /活跃/);
+  assert.match(text, /8/);
   assert.match(text, /Alice/);
 });
 
@@ -27,9 +28,9 @@ test('formatter renders reminder creation in a concise utility style', () => {
     payload: {
       payload: { delayMinutes: 15 },
     },
-    summary: 'Reminder created.',
+    summary: '提醒已经记下了。',
   }, { specialUser: null });
 
   assert.match(text, /15/);
-  assert.match(text, /remind/i);
+  assert.match(text, /提醒/);
 });

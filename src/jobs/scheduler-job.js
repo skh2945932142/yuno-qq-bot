@@ -1,4 +1,4 @@
-import cron from 'node-cron';
+﻿import cron from 'node-cron';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { chat } from '../minimax.js';
@@ -159,10 +159,10 @@ export async function runDueAutomationTasks(now = new Date()) {
             taskId: task.taskId,
             sourceType: task.sourceType,
             target: task.target,
-            summary: task.summary || `Subscription matched for ${task.sourceType}:${task.target}.`,
+            summary: task.summary || `订阅 ${task.sourceType}:${task.target} 有了新的动静。`,
             actionSuggestion: task.payload?.actionSuggestion || '',
           },
-          summary: task.summary || `Subscription matched for ${task.sourceType}:${task.target}.`,
+          summary: task.summary || `订阅 ${task.sourceType}:${task.target} 有了新的动静。`,
           priority: 'low',
           visibility: task.chatType === 'group' ? 'group' : 'default',
           followUpHint: '',
@@ -218,3 +218,4 @@ export function startScheduler() {
     hasTargetGroup,
   });
 }
+

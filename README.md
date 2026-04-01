@@ -1,54 +1,52 @@
-# Yuno QQ Bot
+﻿# Yuno QQ Bot
 
-QQ bot with unified message workflow, configurable trigger policy, Qdrant-backed RAG, queue-ready execution, and structured observability.
+由乃人格驱动的 QQ Bot。当前仓库已经收口成一条统一主线：OneBot/NapCat 事件进入后，走同一份触发分析、记忆、情绪、RAG、工具路由和回复格式化流程；AstrBot 或其他外部编排层也通过同一个 `Yuno Core` 复用这套人格核心。
 
-## Current Architecture
+## 这是什么
+
+这个项目现在负责三件事：
+
+- 在 QQ 群聊和私聊里接收并归一化消息事件
+- 基于触发规则、记忆、情绪、知识库和工具结果生成由乃风格回复
+- 为 AstrBot、自动化任务、群运营能力和表情包能力提供统一的人格化出口
+
+主设计原则只有一条：
+
+- 外部能力负责拿结果，最终怎么说都交给 Yuno Core
+
+## 当前运行架构
 
 ```text
-src/
-  adapters/         inbound platform event normalization
-  astrbot-yuno-plugin.js
-                    AstrBot-facing plugin wrapper around Yuno Core
-  chat/             session and message identity helpers
-  knowledge-base.js markdown -> embeddings -> Qdrant indexing and retrieval
-  message-analysis.js
-                    hard rules + heuristic scoring + lightweight classifier
-  message-workflow.js
-                    main reply and persist orchestration
-  yuno-core.js      platform-agnostic conversation entry for external orchestrators
-  queue-manager.js  BullMQ / inline queue abstraction
-  runtime-tracing.js
-                    trace lifecycle and span timing
-  metrics.js        Prometheus-style metrics registry
-  query-tools.js    configurable tool registration for built-in query tools
-  tool-config.js    declarative command/tool metadata
+OneBot / NapCat
+  └─ src/index.js
+       └─ src/bootstrap-phase1.js
+            └─ src/message-workflow.js
+                 ├─ src/message-analysis.js
+                 ├─ src/task-router.js
+                 ├─ src/emotion-engine.js
+                 ├─ src/prompt-builder.js
+                 ├─ src/reply-length.js
+                 ├─ src/query-tools.js
+                 └─ src/yuno-formatter.js
+
+AstrBot / 外部编排
+  └─ src/yuno-core.js
+       └─ src/message-workflow.js
 ```
 
-## What This Project Does Today
+## 现在具备的能力
 
-- Receives OneBot group/private message webhooks.
-- Normalizes inbound events into a unified QQ message format.
-- Decides whether to reply using:
-  - hard rules
-  - configurable heuristic weights and thresholds
-  - a lightweight trigger classifier for borderline cases
-- Routes messages into:
-  - command tools
-  - knowledge/RAG replies
-  - follow-up replies
-  - cold-start chat
-  - normal group/private chat
-- Maintains:
-  - short-term conversation state
-  - relation and emotion state
-  - long-term user profile memory
-  - group state and recent events
-- Indexes Markdown knowledge under `knowledge/` into Qdrant and retrieves matching chunks at reply time.
-- Exposes `/health`, `/ready`, and `/metrics`.
-- Supports queue-backed reply/persist jobs through BullMQ when Redis is enabled, with inline fallback for local development and tests.
-- Exposes a platform-agnostic `runYunoConversation(...)` entry so AstrBot or other orchestrators can reuse the same persona core.
+- OneBot 群聊 / 私聊统一入站
+- 显式触发群聊回复：`@bot`、关键词、`/command`、戳一戳 bot 本体
+- 短期记忆、长期画像、关系状态、情绪状态
+- Qdrant 检索增强生成（RAG）
+- BullMQ / inline 双模式队列执行
+- 群报告、活跃榜、关键词监控、提醒、订阅
+- AstrBot 同进程接入接口
+- 表情包一期：素材收集、检索、单条仿聊天截图生成
+- `/health`、`/ready`、`/metrics`、`doctor`、`smoke`
 
-## Run
+## 快速运行
 
 ```bash
 npm install
@@ -57,14 +55,22 @@ npm run smoke
 npm start
 ```
 
-Required environment variables:
+如果你是第一次启用知识库，还要再跑一次：
+
+```bash
+npm run kb:sync
+```
+
+## 关键环境变量
+
+必填：
 
 - `MONGODB_URI`
-- `LLM_API_KEY` or `OPENAI_API_KEY`
+- `LLM_API_KEY` 或 `OPENAI_API_KEY`
 - `LLM_CHAT_MODEL`
 - `NAPCAT_API`
 
-Optional core runtime:
+常用可选项：
 
 - `LLM_BASE_URL`
 - `EMBEDDING_MODEL`
@@ -75,16 +81,16 @@ Optional core runtime:
 - `RETRY_ATTEMPTS`
 - `RETRY_DELAY_MS`
 
-Optional voice:
+语音相关：
 
+- `ENABLE_VOICE`
 - `TTS_API_KEY`
 - `TTS_BASE_URL`
 - `TTS_MODEL`
 - `YUNO_VOICE_URI`
-- `ENABLE_VOICE`
 - `FFMPEG_PATH`
 
-Optional retrieval:
+检索相关：
 
 - `QDRANT_URL`
 - `QDRANT_API_KEY`
@@ -93,7 +99,7 @@ Optional retrieval:
 - `QDRANT_MIN_SCORE`
 - `QDRANT_CHAR_LIMIT`
 
-Optional queueing:
+队列相关：
 
 - `ENABLE_QUEUE`
 - `REDIS_URL`
@@ -105,21 +111,7 @@ Optional queueing:
 - `QUEUE_CONCURRENCY_REPLY`
 - `QUEUE_CONCURRENCY_PERSIST`
 
-## Server Config Recipes
-
-If you run `node src/index.js` directly on the server host, start from [env.server.example](d:/code/QaQ_bot/yuno-qq-bot/env.server.example).
-
-If you run the app inside the same Docker / Compose network as MongoDB, NapCat, and Qdrant, start from [env.docker.example](d:/code/QaQ_bot/yuno-qq-bot/env.docker.example).
-
-Important deployment notes:
-
-- Host mode must use a host-reachable `MONGODB_URI`. Do not leave Docker-only service names such as `mongo` or `service-xxxxx` in `.env` unless Node runs inside that same container network.
-- Voice mode needs a real ffmpeg binary. On Linux servers this is usually `FFMPEG_PATH=/usr/bin/ffmpeg`. On Windows it is often `C:\\ffmpeg\\bin\\ffmpeg.exe`.
-- Retrieval is only active when both `QDRANT_URL` and `QDRANT_COLLECTION` are set. After filling them, run `npm run kb:sync` once to build the collection.
-- `SELF_QQ` should be set to the bot's own QQ number so CQ mentions and poke targeting can be resolved reliably even when upstream payloads omit `self_id`.
-- `npm run doctor` will now tell you whether Mongo, NapCat, the LLM provider, FFmpeg, Redis, and Qdrant are actually reachable with the current `.env`.
-
-Optional observability:
+观测相关：
 
 - `ENABLE_METRICS`
 - `METRICS_PATH`
@@ -127,7 +119,7 @@ Optional observability:
 - `LOG_LEVEL`
 - `TRACE_SAMPLE_RATE`
 
-Optional config overrides:
+个性化与功能开关：
 
 - `TRIGGER_POLICY_JSON`
 - `TOOL_CONFIG_JSON`
@@ -140,7 +132,27 @@ Optional config overrides:
 - `MEME_OPT_OUT_USERS`
 - `MEME_REQUIRE_ADMIN_FOR_AUTO_MODE`
 
-`SPECIAL_USERS_JSON` lets you bind special persona overlays by `userId`. Example:
+## 部署模式
+
+### 1. 服务器宿主机直接运行
+
+如果你是在 Linux 服务器上直接跑 `node src/index.js` 或 `npm start`，从 [env.server.example](./env.server.example) 开始。
+
+这个模式下要特别注意：
+
+- `MONGODB_URI` 必须填服务器能直接访问到的地址，不要保留 Docker 内部服务名
+- `FFMPEG_PATH` 要指向真实存在的 ffmpeg，可执行文件通常是 `/usr/bin/ffmpeg`
+- `SELF_QQ` 最好显式填写 bot 自己的 QQ 号，避免上游 notice 缺字段时无法正确识别 @ 与 poke 目标
+
+### 2. Docker / Compose 同网段运行
+
+如果 Node、MongoDB、NapCat、Qdrant 都在同一个容器网络里，从 [env.docker.example](./env.docker.example) 开始。
+
+这个模式下可以使用 `mongo`、`qdrant` 之类的服务名，但前提是 Node 进程真的运行在同一张容器网络里。
+
+## Special Users 配置示例
+
+`SPECIAL_USERS_JSON` 用来按 `userId` 绑定专属人格策略。示例：
 
 ```json
 [
@@ -155,13 +167,13 @@ Optional config overrides:
     "knowledgeTags": ["persona", "special_user:scathach", "scathach"],
     "triggerKeywords": ["教导我", "徒弟", "只看我", "别看别人", "师父"],
     "memorySeeds": ["约定", "教导", "由乃会记住斯卡哈的一切"],
-    "groupStyle": "群聊里更克制地护短、吃醋和偏爱，不刷屏。",
+    "groupStyle": "群聊里更克制地护短、偏爱和吃醋，不刷屏。",
     "privateStyle": "私聊里更黏人、更暧昧，喜欢引用记忆和约定，但不进入现实威胁。"
   }
 ]
 ```
 
-## Scripts
+## 常见检查命令
 
 ```bash
 npm test
@@ -171,58 +183,69 @@ npm run doctor
 npm run smoke
 ```
 
-- `npm test` runs legacy tests plus the Phase 1/2 workflow, trigger, queue, and retrieval tests.
-- `npm run kb:sync` reads Markdown documents from `knowledge/`, chunks them, embeds them, upserts them into Qdrant, writes a manifest, and removes orphan chunks.
-- `npm run doctor` checks the current runtime configuration and probes MongoDB, NapCat, the active LLM provider, optional Qdrant, optional Redis, and optional FFmpeg.
-- `npm run smoke` runs capture-only conversation scenarios against the active `runYunoConversation(...)` path without sending any live QQ messages or writing conversation state.
+用途分别是：
 
-## AstrBot Integration
+- `npm test`：跑当前主线和阶段性回归测试
+- `npm run eval`：跑轻量行为评估
+- `npm run kb:sync`：把 `knowledge/` 里的 Markdown 切块、向量化并同步到 Qdrant
+- `npm run doctor`：检查 Mongo、NapCat、LLM、Qdrant、Redis、FFmpeg 是否真的可达
+- `npm run smoke`：走真实 `runYunoConversation(...)` 主链，但不外发 QQ、不写会话状态
 
-- `src/yuno-core.js` is the stable integration surface for outer orchestrators.
-- `src/astrbot-yuno-plugin.js` is a minimal AstrBot-style wrapper that:
-  - adapts an AstrBot message context
-  - calls `runYunoConversation(...)`
-  - returns structured output while keeping persona formatting inside Yuno Core
-- `src/astrbot-plugin-router.js` provides same-process plugin routing for:
-  - `yuno-meme`
-  - `yuno-status`
-  - `yuno-knowledge`
-  - `yuno-schedule`
-  - `yuno-chat`
-- `deploy/astrbot/` contains deployment templates and examples for running AstrBot as the outer orchestration layer without vendoring AstrBot source code into this repository.
-- Recommended layering:
-  - AstrBot handles routing, plugins, permissions, and external tools.
-  - Yuno Core handles trigger analysis, memory, retrieval, emotion, special-user policy, and final reply style.
+## AstrBot 接入
 
-## Trigger Rules
+- `src/yuno-core.js` 是对外稳定入口
+- `src/astrbot-yuno-plugin.js` 是最小 AstrBot 风格包装层
+- `src/astrbot-plugin-router.js` 负责同进程插件路由
+- `deploy/astrbot/` 只放部署模板和接入说明，不 vendoring AstrBot 上游源码
 
-- Group chat is conservative by default and now requires an explicit trigger before replying:
-  - direct `@bot`
-  - known keywords
-  - slash commands such as `/profile`, `/emotion`, `/command`
-  - QQ poke notifications targeting the bot
-- Private chat still defaults to reply mode unless you override the trigger policy.
-- The built-in `/command` alias is available through the query tool registry and returns the current command list.
+推荐边界：
 
-## Meme Phase 1
+- AstrBot 负责插件、权限、编排、外部能力
+- Yuno Core 负责触发分析、记忆、情绪、检索、专属用户策略和最终回复风格
 
-- Same-process meme support is split into collection, retrieval, generation, and decision modules under `src/meme-*.js`.
-- Phase 1 supports:
-  - collecting image assets from enabled groups
-  - tagging and retrieving meme candidates
-  - generating a single-message fake chat screenshot as SVG
-  - routing the final text + image back through Yuno Core formatter
-- Automatic meme sending is disabled by default. Enable it explicitly with `MEME_AUTO_SEND=true`, and keep group allowlists / opt-out lists configured.
+## 群聊触发规则
 
-## Operational Notes
+群聊默认是保守模式，只有这些情况才会触发回复：
 
-- Retrieval is live, not just a boundary placeholder. The active knowledge path is `knowledge/ -> embeddings -> Qdrant -> retrieveKnowledge()`.
-- If `ENABLE_QUEUE=false` or BullMQ dependencies are unavailable, the app falls back to inline execution while keeping the same queue API.
-- `/ready` reports database and queue readiness. `/metrics` exposes Prometheus-style counters and histograms.
-- The active runtime path is `src/message-workflow.js`; the legacy group-message workflow has been removed.
+- 明确 `@bot`
+- 命中触发关键词
+- 显式 `/command` 命令
+- QQ 戳一戳，且目标确实是 bot 本体
 
-## Future Extension Points
+私聊保持默认可回复模式，除非你自己通过策略配置覆盖。
 
-- Add new tool definitions in `src/tool-config.js` and executors in `src/query-tools.js`.
-- Replace inline fallback with dedicated worker processes if you want reply/persist queues in separate runtimes.
-- Extend `knowledge/` with richer domain docs, FAQs, and roleplay/world references.
+## 表情包一期
+
+当前表情包能力拆成了几层：
+
+- 收集：群图片 / 素材入库
+- 检索：按标签、关键词、人物和情绪召回
+- 生成：单条消息仿聊天截图 SVG
+- 决策：判断是收藏、发库存、现做一张，还是这次不发图
+
+默认情况下，自动发图是关闭的。需要显式配置 `MEME_AUTO_SEND=true`，并配好群白名单或 opt-out 规则后再启用。
+
+## 用户文案规范
+
+所有用户可见文案现在都按同一套规则收口，详细约定见 [docs/copy-style.md](./docs/copy-style.md)。
+
+当前默认风格：
+
+- 中文主句，必要技术名词保留英文
+- 由乃视角，轻微观察感和偏爱感
+- 不走控制台面板腔，不用冷冰冰的系统公告口吻
+- 结果要清楚，但不要把气氛全打碎
+
+## 运行与运维说明
+
+- 检索是正式功能，不是占位边界。只有在 `QDRANT_URL` 和 `QDRANT_COLLECTION` 都配置后才会启用。
+- 如果 `ENABLE_QUEUE=false`，或者 BullMQ / Redis 不可用，系统会退回 inline 模式，但队列接口不变。
+- `/ready` 用于检查数据库和队列就绪情况，`/metrics` 暴露 Prometheus 风格指标。
+- 当前唯一活跃运行主线是 `src/message-workflow.js`，旧版群聊工作流已经移除。
+
+## 后续扩展点
+
+- 在 `src/tool-config.js` 里新增工具定义
+- 在 `src/query-tools.js` 里补对应执行器
+- 在 `knowledge/` 里继续补设定、FAQ、世界观或业务文档
+- 如果要把 reply/persist 队列拆到独立 worker，只需要在现有队列接口外再起单独进程

@@ -1,4 +1,4 @@
-function formatList(items, fallback = 'none') {
+﻿function formatList(items, fallback = '暂无') {
   return Array.isArray(items) && items.length > 0 ? items.join(' / ') : fallback;
 }
 
@@ -6,7 +6,7 @@ function pickLabel(policy = {}) {
   if (policy.specialUser?.addressUserAs) {
     return policy.specialUser.addressUserAs;
   }
-  return policy.specialUser ? 'you' : 'everyone';
+  return '你';
 }
 
 export function buildStructuredToolResult({
@@ -33,21 +33,21 @@ export function buildStructuredToolResult({
 
 function renderStatusReply(toolResult, policy) {
   const payload = toolResult.payload || {};
-  const prefix = policy.specialUser ? 'I checked it for you.' : 'I checked the current state.';
+  const prefix = policy.specialUser ? '我替你仔细看过了。' : '我刚替你看了一眼。';
 
   switch (toolResult.tool) {
     case 'get_relation':
-      return `${prefix} Affection is ${payload.affection ?? 'unknown'}/100, and the current emotion is ${payload.currentEmotion || 'CALM'}.`;
+      return `${prefix}现在的好感是 ${payload.affection ?? '未知'}/100，情绪偏向 ${payload.currentEmotion || 'CALM'}。`;
     case 'get_emotion':
-      return `${prefix} Current emotion is ${payload.emotion || 'CALM'} with intensity ${Number(payload.intensity || 0).toFixed(2)}.`;
+      return `${prefix}现在的情绪是 ${payload.emotion || 'CALM'}，强度大约 ${Number(payload.intensity || 0).toFixed(2)}。`;
     case 'get_group_state':
-      return `${prefix} Group mood is ${payload.mood || 'CALM'}, activity level ${Math.round(Number(payload.activityLevel || 0))}, recent topics ${formatList(payload.recentTopics, 'none')}.`;
+      return `${prefix}群里的气氛偏 ${payload.mood || 'CALM'}，活跃度 ${Math.round(Number(payload.activityLevel || 0))}，最近常提的话题是 ${formatList(payload.recentTopics)}。`;
     case 'get_profile':
-      return `${prefix} Profile summary: ${payload.memorySummary || 'No stable profile data yet.'}`;
+      return `${prefix}${payload.memorySummary || '稳定画像还不够多，我还在慢慢记。'}`;
     case 'get_help':
-      return `${prefix} Available commands: ${formatList(payload.commands, 'none')}.`;
+      return `${prefix}现在能直接叫我的命令有：${formatList(payload.commands)}。`;
     default:
-      return toolResult.summary || 'Done.';
+      return toolResult.summary || '这件事我先替你记下了。';
   }
 }
 
@@ -57,101 +57,105 @@ function renderReportReply(toolResult, policy) {
   if (toolResult.tool === 'group_report') {
     const topUser = payload.topUsers?.[0];
     const topTopic = payload.topTopics?.[0];
-    const prefix = policy.specialUser ? 'I sorted the group report for you.' : 'I sorted the group report.';
-    let text = `${prefix} In the last ${payload.windowHours || 24} hours, there were ${payload.totalMessages || 0} messages from ${payload.activeUsers || 0} active users.`;
+    const prefix = policy.specialUser ? '我替你把群里的动静理了一遍。' : '我把群里的动静理了一遍。';
+    let text = `${prefix}最近 ${payload.windowHours || 24} 小时里，一共出现了 ${payload.totalMessages || 0} 条消息，活跃了 ${payload.activeUsers || 0} 个人。`;
     if (topUser) {
-      text += ` Most active: ${topUser.name} (${topUser.count}).`;
+      text += ` 最活跃的是 ${topUser.name}，一共冒头 ${topUser.count} 次。`;
     }
     if (topTopic) {
-      text += ` Hottest topic: ${topTopic.name}.`;
+      text += ` 聊得最热的是 ${topTopic.name}。`;
     }
     if (payload.anomalies?.length) {
-      text += ` I also noticed ${payload.anomalies.length} anomaly signal(s).`;
+      text += ` 我还记到了 ${payload.anomalies.length} 个异常波动。`;
     }
     return text;
   }
 
   if (toolResult.tool === 'activity_leaderboard') {
-    const leaders = (payload.leaders || []).map((entry, index) => `#${index + 1} ${entry.name} (${entry.count})`).join(', ');
+    const leaders = (payload.leaders || []).map((entry, index) => `#${index + 1} ${entry.name} (${entry.count})`).join('、');
     return leaders
-      ? `Here is the recent activity leaderboard: ${leaders}.`
-      : 'There is no activity leaderboard data yet.';
+      ? `最近的活跃榜我排好了：${leaders}。`
+      : '这段时间还没有足够的活跃榜数据。';
   }
 
   if (toolResult.tool === 'group_daily_digest') {
-    const leaders = (payload.topUsers || []).map((entry) => `${entry.name}(${entry.count})`).join(', ');
-    const topics = (payload.topTopics || []).map((entry) => entry.name).join(', ');
-    return `Daily digest: ${payload.totalMessages || 0} messages, ${payload.activeUsers || 0} active users. Top people: ${leaders || 'none'}. Top topics: ${topics || 'none'}.`;
+    const leaders = (payload.topUsers || []).map((entry) => `${entry.name}(${entry.count})`).join('、');
+    const topics = (payload.topTopics || []).map((entry) => entry.name).join('、');
+    return `今天的群摘要我收好了：一共 ${payload.totalMessages || 0} 条消息，活跃了 ${payload.activeUsers || 0} 个人。最常冒头的是 ${leaders || '暂无'}，最热的话题是 ${topics || '暂无'}。`;
   }
 
-  return toolResult.summary || 'The report is ready.';
+  return toolResult.summary || '报告我已经替你理好了。';
 }
 
 function renderWatchReply(toolResult) {
   const payload = toolResult.payload || {};
   if (toolResult.tool === 'keyword_watch_added') {
-    return `I will watch "${payload.pattern || payload.keyword}" here. I will only nudge when it matters.`;
+    return `这个关键词我替你盯住了：${payload.pattern || payload.keyword}。真碰上时，我会提醒。`;
   }
   if (toolResult.tool === 'keyword_watch_removed') {
     return payload.removed
-      ? `I stopped watching "${payload.keyword}".`
-      : `I could not find an active watch for "${payload.keyword}".`;
+      ? `这个关键词我已经不再盯了：${payload.keyword}。`
+      : `我没找到还在生效的关键词盯梢：${payload.keyword}。`;
   }
   if (toolResult.tool === 'keyword_watch_list') {
     const rules = payload.rules || [];
     return rules.length > 0
-      ? `Current keyword watches: ${rules.map((rule) => rule.pattern).join(', ')}.`
-      : 'There are no keyword watches right now.';
+      ? `现在还挂着这些关键词盯梢：${rules.map((rule) => rule.pattern).join('、')}。`
+      : '现在还没有挂着的关键词盯梢。';
   }
   if (toolResult.tool === 'automation_keyword_alert') {
-    return `${payload.username || 'Someone'} mentioned "${payload.keyword}". Summary: ${payload.summary || 'no summary'}.`;
+    return `${payload.username || '有人'}刚刚提到了“${payload.keyword}”。我顺手记下的内容是：${payload.summary || '暂无'}。`;
   }
-  return toolResult.summary || 'Watch rule updated.';
+  return toolResult.summary || '盯梢规则我已经替你收好了。';
 }
 
 function renderReminderReply(toolResult, policy) {
   const payload = toolResult.payload || {};
   const address = pickLabel(policy);
   if (toolResult.tool === 'reminder_created') {
-    return `Noted, ${address}. I will remind you in ${payload.payload?.delayMinutes || payload.delayMinutes || 'a while'} minute(s).`;
+    const delay = payload.payload?.delayMinutes || payload.delayMinutes || '过一会儿';
+    const text = payload.payload?.text || payload.text;
+    return text
+      ? `好，我会在 ${delay} 分钟后提醒${address}：${text}。`
+      : `好，我会在 ${delay} 分钟后提醒${address}。`;
   }
   if (toolResult.tool === 'reminder_list') {
     const tasks = payload.tasks || [];
     return tasks.length > 0
-      ? `You still have ${tasks.length} reminder(s): ${tasks.map((task) => `${task.taskId}(${task.summary})`).join(', ')}.`
-      : 'You do not have any pending reminders.';
+      ? `${address}现在还挂着 ${tasks.length} 个提醒：${tasks.map((task) => `${task.taskId}（${task.summary}）`).join('、')}。`
+      : `${address}现在没有挂着的提醒。`;
   }
   if (toolResult.tool === 'reminder_cancelled') {
     return payload.cancelled
-      ? `Reminder ${payload.taskId} has been cancelled.`
-      : `I could not find reminder ${payload.taskId}.`;
+      ? `提醒 ${payload.taskId} 我已经替${address}撤掉了。`
+      : `我没找到编号为 ${payload.taskId} 的提醒。`;
   }
   if (toolResult.tool === 'reminder_due') {
-    return `Reminder time. ${payload.text || payload.summary || 'Do not forget what you asked me to keep in mind.'}`;
+    return `到时间了。${payload.text || payload.summary || '你要我记着的事，我没有忘。'}`;
   }
-  return toolResult.summary || 'Reminder updated.';
+  return toolResult.summary || '提醒这件事我已经替你理好了。';
 }
 
 function renderSubscriptionReply(toolResult) {
   const payload = toolResult.payload || {};
   if (toolResult.tool === 'subscription_created') {
-    return `Subscription created for ${payload.payload?.sourceType || payload.sourceType} ${payload.payload?.target || payload.target} every ${payload.repeatIntervalMinutes || payload.intervalMinutes} minute(s).`;
+    return `这条订阅我记下了：${payload.payload?.sourceType || payload.sourceType} / ${payload.payload?.target || payload.target}，每 ${payload.repeatIntervalMinutes || payload.intervalMinutes} 分钟看一遍。`;
   }
   if (toolResult.tool === 'subscription_list') {
     const tasks = payload.tasks || [];
     return tasks.length > 0
-      ? `Current subscriptions: ${tasks.map((task) => `${task.taskId}(${task.sourceType}:${task.target})`).join(', ')}.`
-      : 'There are no active subscriptions.';
+      ? `现在挂着的订阅有这些：${tasks.map((task) => `${task.taskId}（${task.sourceType}:${task.target}）`).join('、')}。`
+      : '现在没有生效中的订阅。';
   }
   if (toolResult.tool === 'subscription_cancelled') {
     return payload.cancelled
-      ? `Subscription ${payload.taskId} has been cancelled.`
-      : `I could not find subscription ${payload.taskId}.`;
+      ? `订阅 ${payload.taskId} 我已经替你停掉了。`
+      : `我没找到编号为 ${payload.taskId} 的订阅。`;
   }
   if (toolResult.tool === 'subscription_update') {
-    return `${payload.summary || 'A subscribed event matched.'}${payload.actionSuggestion ? ` ${payload.actionSuggestion}` : ''}`;
+    return `${payload.summary || '我替你盯着的订阅刚刚有了动静。'}${payload.actionSuggestion ? ` ${payload.actionSuggestion}` : ''}`;
   }
-  return toolResult.summary || 'Subscription updated.';
+  return toolResult.summary || '订阅这件事我已经替你安顿好了。';
 }
 
 function renderMemeReply(toolResult, policy) {
@@ -159,42 +163,42 @@ function renderMemeReply(toolResult, policy) {
 
   if (action === 'collect') {
     return policy.specialUser
-      ? 'I kept that meme asset aside for you.'
-      : 'I stored that meme asset for later.';
+      ? '这张梗图素材我替你单独留着了。'
+      : '这张梗图素材我先收进库里了。';
   }
 
   if (action === 'send-existing') {
     return policy.specialUser
-      ? 'This one fits the moment. I picked it for you.'
-      : 'This meme fits the moment.';
+      ? '这一张正合现在的气氛，我替你挑出来了。'
+      : '这一张刚好合适。';
   }
 
   if (action === 'generate-quote') {
     return policy.specialUser
-      ? 'I turned that line into an image and kept the mood intact.'
-      : 'I turned that line into a meme image.';
+      ? '那句话我已经替你做成图了，气氛一点都没丢。'
+      : '那句话我已经替你做成梗图了。';
   }
 
-  return toolResult.summary || 'Skipping the meme this time.';
+  return toolResult.summary || '这次先不发图，我替你压住了。';
 }
 
 function renderKnowledgeReply(toolResult, policy) {
   if (toolResult.summary) {
     return policy.specialUser
-      ? `I sorted the key points for you: ${toolResult.summary}`
+      ? `我替你把关键点理好了：${toolResult.summary}`
       : toolResult.summary;
   }
 
   return policy.specialUser
-    ? 'I pulled together the most relevant notes for you.'
-    : 'I pulled together the most relevant notes.';
+    ? '我替你把最相关的那部分整理出来了。'
+    : '我把最相关的那部分整理出来了。';
 }
 
 function renderScheduleReply(toolResult, policy) {
-  const reminderText = toolResult.payload?.text || 'that reminder';
+  const reminderText = toolResult.payload?.text || '那件事';
   return policy.specialUser
-    ? `I noted ${reminderText}. I will keep it in mind.`
-    : `I noted ${reminderText}.`;
+    ? `${reminderText}我已经记住了，会替你一直放在心上。`
+    : `${reminderText}我已经记住了。`;
 }
 
 function renderWelcomeReply(toolResult) {
@@ -202,12 +206,12 @@ function renderWelcomeReply(toolResult) {
   if (customMessage) {
     return customMessage;
   }
-  return `Welcome, ${toolResult.payload?.username || 'new member'}. Settle in first; I will keep an eye on the mood here.`;
+  return `欢迎你，${toolResult.payload?.username || '新成员'}。先慢慢熟悉这里，气氛这边我会替你看着。`;
 }
 
 export function formatToolResultAsYuno(toolResult, policy = {}) {
   if (!toolResult) {
-    return 'Done.';
+    return '这件事我先替你记下了。';
   }
 
   if (toolResult.tool?.startsWith('get_')) {
@@ -246,7 +250,7 @@ export function formatToolResultAsYuno(toolResult, policy = {}) {
     return renderScheduleReply(toolResult, policy);
   }
 
-  return toolResult.summary || 'Done.';
+  return toolResult.summary || '这件事我先替你记下了。';
 }
 
 export function normalizeFormatterOutputs(toolResult, text) {
@@ -281,15 +285,15 @@ export function summarizeToolPayload(toolResult) {
   const payload = toolResult?.payload || {};
 
   if (toolResult?.tool === 'meme_collect') {
-    return `Collected meme asset with tags ${formatList(payload.tags, 'untagged')}`;
+    return `已收下一张梗图素材，标签：${formatList(payload.tags, '未标记')}`;
   }
 
   if (toolResult?.tool === 'meme_retrieve') {
-    return `Matched meme asset ${payload.assetId || 'unknown'}`;
+    return `匹配到梗图素材 ${payload.assetId || '未知编号'}`;
   }
 
   if (toolResult?.tool === 'group_report') {
-    return `${payload.totalMessages || 0} messages / ${payload.activeUsers || 0} active users`;
+    return `${payload.totalMessages || 0} 条消息 / ${payload.activeUsers || 0} 人活跃`;
   }
 
   return toolResult?.summary || '';

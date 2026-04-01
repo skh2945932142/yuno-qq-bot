@@ -1,4 +1,4 @@
-import { config } from './config.js';
+﻿import { config } from './config.js';
 import { logger } from './logger.js';
 import { chat, tts } from './minimax.js';
 import { sendReply, sendStructuredReply, sendVoice } from './sender.js';
@@ -92,9 +92,9 @@ function resolveUserTurn(event) {
   const cleanText = stripCqCodes(event.rawText || event.text || '');
   if (cleanText) return cleanText;
 
-  if ((event.attachments || []).some((item) => item.type === 'face')) return `[${event.userName} sent a sticker]`;
-  if ((event.attachments || []).some((item) => item.type === 'image')) return `[${event.userName} sent an image]`;
-  if ((event.attachments || []).some((item) => item.type === 'record')) return `[${event.userName} sent a voice message]`;
+  if ((event.attachments || []).some((item) => item.type === 'face')) return `[${event.userName} 发来了一张表情]`;
+  if ((event.attachments || []).some((item) => item.type === 'image')) return `[${event.userName} 发来了一张图片]`;
+  if ((event.attachments || []).some((item) => item.type === 'record')) return `[${event.userName} 发来了一条语音]`;
   if ((event.attachments || []).some((item) => item.type === 'video')) return `[${event.userName} sent a video]`;
   if ((event.attachments || []).length > 0) return `[${event.userName} sent a message]`;
 
@@ -796,6 +796,7 @@ export async function processReplyJob(jobData, options = {}) {
 export async function processGroupMessage(event, precomputed = null, options = {}) {
   return processIncomingMessage(event, precomputed, options);
 }
+
 
 
 

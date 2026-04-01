@@ -1,4 +1,4 @@
-import { config } from './config.js';
+﻿import { config } from './config.js';
 import {
   buildActivityLeaderboard,
   buildDailyDigest,
@@ -19,7 +19,6 @@ import {
 } from './automation-tasks.js';
 import {
   findToolDefinitionByCommandType,
-  findToolDefinitionByName,
   getToolDefinitions,
 } from './tool-config.js';
 import { buildStructuredToolResult } from './yuno-formatter.js';
@@ -28,19 +27,15 @@ function numberOrZero(value) {
   return Number.isFinite(value) ? value : 0;
 }
 
-function formatList(items, fallback = 'none') {
-  return items?.length ? items.join(' / ') : fallback;
-}
-
 function ensureGroupContext(context, toolName) {
   if (context.event?.chatType !== 'group') {
-    throw new Error(`${toolName} is only available in group chat`);
+    throw new Error(`${toolName} 只能在群聊里使用`);
   }
 }
 
 function ensureAdmin(context, toolName) {
   if (String(context.event?.userId || '') !== String(config.adminQq || '')) {
-    throw new Error(`${toolName} requires admin permission`);
+    throw new Error(`${toolName} 需要管理员权限`);
   }
 }
 
@@ -55,10 +50,10 @@ function buildRelationToolResult(context) {
       activeScore: numberOrZero(relation.activeScore),
       currentEmotion: userState.currentEmotion,
     },
-    summary: `Affection ${relation.affection}/100, emotion ${userState.currentEmotion}.`,
+    summary: `当前好感 ${relation.affection}/100，情绪 ${userState.currentEmotion}。`,
     visibility: 'default',
     priority: 'normal',
-    followUpHint: 'Ask for /profile if you want the long-term summary too.',
+    followUpHint: '如果你还想看长期画像，可以继续用 /profile。',
     safetyFlags: [],
   });
 }
@@ -73,10 +68,10 @@ function buildEmotionToolResult(context) {
       intensity: numberOrZero(userState.intensity),
       triggerReason: userState.triggerReason,
     },
-    summary: `Emotion ${userState.currentEmotion} with intensity ${numberOrZero(userState.intensity).toFixed(2)}.`,
+    summary: `当前情绪是 ${userState.currentEmotion}，强度 ${numberOrZero(userState.intensity).toFixed(2)}。`,
     visibility: 'default',
     priority: 'normal',
-    followUpHint: 'Use /relation if you want the relationship context behind it.',
+    followUpHint: '如果你还想看关系变化，可以继续用 /relation。',
     safetyFlags: [],
   });
 }
@@ -91,10 +86,10 @@ function buildGroupToolResult(context) {
       activityLevel: numberOrZero(groupState?.activityLevel),
       recentTopics: groupState?.recentTopics || [],
     },
-    summary: `Group mood ${groupState?.mood || 'CALM'}, activity ${Math.round(numberOrZero(groupState?.activityLevel))}.`,
+    summary: `群气氛偏 ${groupState?.mood || 'CALM'}，活跃度 ${Math.round(numberOrZero(groupState?.activityLevel))}。`,
     visibility: 'group',
     priority: 'normal',
-    followUpHint: 'Try /groupreport 24 for a wider report.',
+    followUpHint: '想看更完整的群报告，可以试试 /groupreport 24。',
     safetyFlags: [],
   });
 }
@@ -114,10 +109,10 @@ function buildProfileToolResult(context) {
       favoriteTopics: userProfile?.favoriteTopics || relation.favoriteTopics || [],
       dislikes: userProfile?.dislikes || [],
     },
-    summary: userProfile?.profileSummary || relation.memorySummary || definition?.fallbackMessage || 'No stable profile data yet.',
+    summary: userProfile?.profileSummary || relation.memorySummary || definition?.fallbackMessage || '稳定画像还不够多，我还在慢慢记。',
     visibility: 'default',
     priority: 'normal',
-    followUpHint: 'Use /relation if you want the current bond reading too.',
+    followUpHint: '如果你还想看现在的关系读数，可以继续用 /relation。',
     safetyFlags: [],
   });
 }
@@ -129,10 +124,10 @@ function buildHelpToolResult() {
     payload: {
       commands,
     },
-    summary: `Available commands: ${commands.join(', ')}`,
+    summary: `现在可直接使用的命令有：${commands.join('、')}`,
     visibility: 'default',
     priority: 'low',
-    followUpHint: 'Use /groupreport, /leaderboard, /watch, /remind, or /subscribe.',
+    followUpHint: '常用的是 /groupreport、/leaderboard、/watch、/remind、/subscribe。',
     safetyFlags: [],
   });
 }
@@ -146,10 +141,10 @@ async function buildGroupReportToolResult(args, context) {
   return buildStructuredToolResult({
     tool: 'group_report',
     payload: report,
-    summary: `Last ${report.windowHours}h: ${report.totalMessages} messages from ${report.activeUsers} active users.`,
+    summary: `最近 ${report.windowHours} 小时里一共 ${report.totalMessages} 条消息，活跃了 ${report.activeUsers} 个人。`,
     visibility: 'group',
     priority: 'normal',
-    followUpHint: 'Use /leaderboard to see the most active members.',
+    followUpHint: '想看谁最活跃，可以继续用 /leaderboard。',
     safetyFlags: [],
   });
 }
@@ -164,10 +159,10 @@ async function buildLeaderboardToolResult(args, context) {
   return buildStructuredToolResult({
     tool: 'activity_leaderboard',
     payload: leaderboard,
-    summary: `Top ${leaderboard.leaders.length} active members in the last ${leaderboard.windowHours}h.`,
+    summary: `最近 ${leaderboard.windowHours} 小时的活跃榜已经排好了，共 ${leaderboard.leaders.length} 位。`,
     visibility: 'group',
     priority: 'normal',
-    followUpHint: 'Use /groupreport for the wider activity summary.',
+    followUpHint: '想看整体群活跃情况，可以继续用 /groupreport。',
     safetyFlags: [],
   });
 }
@@ -186,10 +181,10 @@ async function addKeywordWatch(args, context) {
   return buildStructuredToolResult({
     tool: 'keyword_watch_added',
     payload: rule,
-    summary: `Watching keyword "${rule.pattern}" in this group.`,
+    summary: `这个群里我已经开始盯着关键词“${rule.pattern}”。`,
     visibility: 'group',
     priority: 'normal',
-    followUpHint: 'Use /watch list to inspect current watch rules.',
+    followUpHint: '想看现在挂着哪些规则，可以用 /watch list。',
     safetyFlags: [],
   });
 }
@@ -203,10 +198,10 @@ async function removeKeywordWatch(args, context) {
     return buildStructuredToolResult({
       tool: 'keyword_watch_removed',
       payload: { keyword: args.keyword, removed: false },
-      summary: `No keyword watch matched "${args.keyword}".`,
+      summary: `我没找到正在盯着“${args.keyword}”的规则。`,
       visibility: 'group',
       priority: 'low',
-      followUpHint: 'Use /watch list to see active rules.',
+      followUpHint: '你可以先用 /watch list 看看当前规则。',
       safetyFlags: [],
     });
   }
@@ -215,10 +210,10 @@ async function removeKeywordWatch(args, context) {
   return buildStructuredToolResult({
     tool: 'keyword_watch_removed',
     payload: { keyword: args.keyword, removed: true },
-    summary: `Stopped watching keyword "${args.keyword}".`,
+    summary: `我已经不再盯着关键词“${args.keyword}”了。`,
     visibility: 'group',
     priority: 'normal',
-    followUpHint: 'Use /watch add <keyword> to add another one.',
+    followUpHint: '如果还要加新的，可以用 /watch add <关键词>。',
     safetyFlags: [],
   });
 }
@@ -234,11 +229,11 @@ async function listKeywordWatch(context) {
       rules,
     },
     summary: rules.length > 0
-      ? `Watching ${rules.length} keyword(s): ${rules.map((rule) => rule.pattern).join(', ')}`
-      : 'No keyword watches are active right now.',
+      ? `现在一共盯着 ${rules.length} 个关键词：${rules.map((rule) => rule.pattern).join('、')}`
+      : '现在还没有生效中的关键词盯梢。',
     visibility: 'group',
     priority: 'low',
-    followUpHint: 'Use /watch add <keyword> to create a new watch rule.',
+    followUpHint: '如果要新增，直接用 /watch add <关键词>。',
     safetyFlags: [],
   });
 }
@@ -257,10 +252,10 @@ async function addReminder(args, context) {
   return buildStructuredToolResult({
     tool: 'reminder_created',
     payload: task,
-    summary: `Reminder set for ${args.delayMinutes} minute(s) from now.`,
+    summary: `提醒已经记下了，${args.delayMinutes} 分钟后我会叫你。`,
     visibility: 'default',
     priority: 'normal',
-    followUpHint: 'Use /remind list if you want to inspect pending reminders.',
+    followUpHint: '想看还挂着哪些提醒，可以用 /remind list。',
     safetyFlags: [],
   });
 }
@@ -275,11 +270,11 @@ async function listReminders(context) {
     tool: 'reminder_list',
     payload: { tasks },
     summary: tasks.length > 0
-      ? `You have ${tasks.length} reminder(s) pending.`
-      : 'You do not have any pending reminders.',
+      ? `你现在还挂着 ${tasks.length} 个提醒。`
+      : '你现在没有挂着的提醒。',
     visibility: 'default',
     priority: 'low',
-    followUpHint: 'Use /remind add <minutes> <text> to create one.',
+    followUpHint: '如果要新建提醒，可以用 /remind add <分钟> <内容>。',
     safetyFlags: [],
   });
 }
@@ -289,7 +284,7 @@ async function cancelReminder(args, context) {
   return buildStructuredToolResult({
     tool: 'reminder_cancelled',
     payload: { taskId: args.taskId, cancelled: Boolean(task) },
-    summary: task ? `Reminder ${args.taskId} has been cancelled.` : `No reminder matched ${args.taskId}.`,
+    summary: task ? `提醒 ${args.taskId} 已经取消。` : `我没找到编号为 ${args.taskId} 的提醒。`,
     visibility: 'default',
     priority: 'low',
     followUpHint: '',
@@ -313,10 +308,10 @@ async function addSubscription(args, context) {
   return buildStructuredToolResult({
     tool: 'subscription_created',
     payload: task,
-    summary: `Subscription created for ${args.sourceType} ${args.target} every ${args.intervalMinutes} minute(s).`,
+    summary: `订阅已经挂上了：${args.sourceType} / ${args.target}，每 ${args.intervalMinutes} 分钟检查一次。`,
     visibility: 'default',
     priority: 'normal',
-    followUpHint: 'Use /subscribe list to inspect current subscriptions.',
+    followUpHint: '想看当前订阅，可以用 /subscribe list。',
     safetyFlags: [],
   });
 }
@@ -331,11 +326,11 @@ async function listSubscriptions(context) {
     tool: 'subscription_list',
     payload: { tasks },
     summary: tasks.length > 0
-      ? `You have ${tasks.length} subscription(s) active.`
-      : 'You do not have any active subscriptions.',
+      ? `你现在挂着 ${tasks.length} 条订阅。`
+      : '你现在没有生效中的订阅。',
     visibility: 'default',
     priority: 'low',
-    followUpHint: 'Use /subscribe add <type> <target> <minutes> to create one.',
+    followUpHint: '如果要新增订阅，可以用 /subscribe add <类型> <目标> <分钟>。',
     safetyFlags: [],
   });
 }
@@ -345,7 +340,7 @@ async function cancelSubscription(args) {
   return buildStructuredToolResult({
     tool: 'subscription_cancelled',
     payload: { taskId: args.taskId, cancelled: Boolean(task) },
-    summary: task ? `Subscription ${args.taskId} has been cancelled.` : `No subscription matched ${args.taskId}.`,
+    summary: task ? `订阅 ${args.taskId} 已经取消。` : `我没找到编号为 ${args.taskId} 的订阅。`,
     visibility: 'default',
     priority: 'low',
     followUpHint: '',
@@ -404,4 +399,3 @@ export function mapCommandToTool(command) {
     metadata: definition,
   };
 }
-

@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildActivityLeaderboard,
@@ -68,7 +68,7 @@ test('buildDailyDigest returns compact digest payload', async () => {
     events: createEvents(),
   });
 
-  assert.match(digest.summary, /3 messages/);
+  assert.match(digest.summary, /3 条消息/);
   assert.equal(digest.topUsers.length, 2);
 });
 
@@ -107,3 +107,4 @@ test('recordInboundGroupObservation extracts keyword hits and repeat anomaly', a
   assert.equal(stateUpdates.length, 1);
   assert.equal(result.summary, 'deploy issue');
 });
+

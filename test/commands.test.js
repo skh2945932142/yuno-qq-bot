@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildCommandResponse, parseCommand } from '../src/command-parser.js';
 
@@ -35,4 +35,5 @@ test('buildCommandResponse formats profile output', () => {
 
   assert.equal(text.includes('preferred name: tester'), true);
   assert.equal(text.includes('games'), true);
+  assert.equal(text.includes('我替你把画像翻出来了'), true);
 });

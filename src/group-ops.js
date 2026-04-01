@@ -1,4 +1,4 @@
-import { logger } from './logger.js';
+﻿import { logger } from './logger.js';
 import { recordWorkflowMetric } from './metrics.js';
 import { GroupEvent } from './models.js';
 import { extractTopics, inferSentiment, stripCqCodes, uniqueCompact } from './utils.js';
@@ -32,26 +32,26 @@ function normalizeSummary(text, fallback = '') {
 
 function buildFallbackSummary(event) {
   if (event.source?.noticeType === 'group_increase') {
-    return `${event.userName || event.userId} joined the group`;
+    return `${event.userName || event.userId} 加入了群聊`;
   }
 
   if (event.rawText === '[poke]' || event.text === '/poke') {
-    return `${event.userName || event.userId} poked the bot`;
+    return `${event.userName || event.userId} 戳了由乃一下`;
   }
 
   if ((event.attachments || []).some((item) => item.type === 'image')) {
-    return `${event.userName || event.userId} sent an image`;
+    return `${event.userName || event.userId} 发来了一张图片`;
   }
 
   if ((event.attachments || []).some((item) => item.type === 'face')) {
-    return `${event.userName || event.userId} sent a sticker`;
+    return `${event.userName || event.userId} 发来了一张表情`;
   }
 
   if ((event.attachments || []).length > 0) {
-    return `${event.userName || event.userId} sent a message`;
+    return `${event.userName || event.userId} 发来了一条消息`;
   }
 
-  return `${event.userName || event.userId} spoke in the group`;
+  return `${event.userName || event.userId} 在群里说了话`;
 }
 
 function findKeywordHits(text, keywords = DEFAULT_KEYWORD_TOPICS) {
@@ -265,17 +265,17 @@ export async function buildDailyDigest(groupId, options = {}, deps = {}) {
     topUsers: report.topUsers,
     topTopics: report.topTopics,
     anomalies: report.anomalies,
-    summary: `Last ${report.windowHours}h: ${report.totalMessages} messages from ${report.activeUsers} active users.`,
+    summary: `最近 ${report.windowHours} 小时里一共 ${report.totalMessages} 条消息，活跃了 ${report.activeUsers} 个人。`,
   };
 }
 
 export function buildGroupObservationSummary(event, observation = {}) {
   const pieces = [
     `${event.userName || event.userId}`,
-    observation.anomalyType ? `triggered ${observation.anomalyType}` : 'spoke',
+    observation.anomalyType ? `触发了 ${observation.anomalyType}` : '刚刚发言',
   ];
   if (observation.keywordHits?.length) {
-    pieces.push(`keywords=${observation.keywordHits.join('/')}`);
+    pieces.push(`关键词=${observation.keywordHits.join('/')}`);
   }
   return pieces.join(' ');
 }
@@ -283,6 +283,3 @@ export function buildGroupObservationSummary(event, observation = {}) {
 export function logGroupOps(category, message, meta = {}) {
   logger.info(category, message, meta);
 }
-
-
-

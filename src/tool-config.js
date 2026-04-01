@@ -1,6 +1,6 @@
-function buildCommandPattern(aliases) {
+﻿function buildCommandPattern(aliases) {
   const escaped = aliases.map((alias) => String(alias).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  return new RegExp(`^(?:\\/)?(?:����\\s*)?(?:${escaped.join('|')})(?:\\s+.*)?$`, 'i');
+  return new RegExp(`^(?:\\/)?(?:由乃\\s*)?(?:${escaped.join('|')})(?:\\s+.*)?$`, 'i');
 }
 
 export const TOOL_DEFINITIONS = Object.freeze([
@@ -8,52 +8,52 @@ export const TOOL_DEFINITIONS = Object.freeze([
     name: 'get_relation',
     commandType: 'relation',
     family: 'relation',
-    commandAliases: ['relation', '��ϵ', '�ø�'],
+    commandAliases: ['relation', '关系', '好感'],
     description: 'Read the current relation snapshot for the user.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['��ϵ', '�ø�', '���ܶ�'],
+    triggerKeywords: ['关系', '好感', '亲密度'],
     allowIn: ['group', 'private'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not read the relation snapshot right now.',
+    fallbackMessage: '关系快照我暂时还没读出来。',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'get_emotion',
     commandType: 'emotion',
     family: 'emotion',
-    commandAliases: ['emotion', '����', '״̬'],
+    commandAliases: ['emotion', '情绪', '状态'],
     description: 'Read the current emotion state for the user.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['����', '״̬'],
+    triggerKeywords: ['情绪', '状态'],
     allowIn: ['group', 'private'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not read the emotion state right now.',
+    fallbackMessage: '当前情绪我暂时还没读出来。',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'get_group_state',
     commandType: 'group',
     family: 'group',
-    commandAliases: ['group', 'groupstate', 'Ⱥ״̬'],
+    commandAliases: ['group', 'groupstate', '群状态'],
     description: 'Read the current group state summary.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['Ⱥ״̬', 'Ⱥ�����'],
+    triggerKeywords: ['群状态', '群里情况'],
     allowIn: ['group'],
     rateLimitMs: 0,
-    fallbackMessage: 'There is no group state summary yet.',
+    fallbackMessage: '群状态摘要还没有攒够。',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'get_group_report',
     commandType: 'group_report',
     family: 'groupreport',
-    commandAliases: ['groupreport', 'report', 'Ⱥ�ձ�', 'Ⱥ����'],
+    commandAliases: ['groupreport', 'report', '群日报', '群报告'],
     description: 'Read a recent activity report for the current group.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['Ⱥ�ձ�', 'Ⱥ����'],
+    triggerKeywords: ['群日报', '群报告'],
     allowIn: ['group'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not build the group report yet.',
+    fallbackMessage: '群报告我暂时还没整理出来。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -66,13 +66,13 @@ export const TOOL_DEFINITIONS = Object.freeze([
     name: 'get_activity_leaderboard',
     commandType: 'activity_leaderboard',
     family: 'leaderboard',
-    commandAliases: ['leaderboard', 'top', '��Ծ��'],
+    commandAliases: ['leaderboard', 'top', '活跃榜'],
     description: 'Read the recent activity leaderboard for the current group.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['��Ծ��', '���а�'],
+    triggerKeywords: ['活跃榜', '排行榜'],
     allowIn: ['group'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not build the leaderboard yet.',
+    fallbackMessage: '活跃榜我暂时还没排出来。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -86,13 +86,13 @@ export const TOOL_DEFINITIONS = Object.freeze([
     name: 'get_profile',
     commandType: 'profile',
     family: 'profile',
-    commandAliases: ['profile', '����', '����'],
+    commandAliases: ['profile', '画像', '记忆'],
     description: 'Read the current long-term profile summary for the user.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['����', '����', '����ժҪ'],
+    triggerKeywords: ['画像', '记忆', '画像摘要'],
     allowIn: ['group', 'private'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not read the profile summary right now.',
+    fallbackMessage: '画像摘要我暂时还没读出来。',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -105,7 +105,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
     triggerKeywords: ['watch'],
     allowIn: ['group'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not add that keyword watch.',
+    fallbackMessage: '这个关键词盯梢我暂时没加上。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -124,7 +124,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
     triggerKeywords: ['watch'],
     allowIn: ['group'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not remove that keyword watch.',
+    fallbackMessage: '这个关键词盯梢我暂时没撤掉。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -143,7 +143,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
     triggerKeywords: ['watch'],
     allowIn: ['group'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not list keyword watches.',
+    fallbackMessage: '关键词盯梢列表我暂时没列出来。',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -153,10 +153,10 @@ export const TOOL_DEFINITIONS = Object.freeze([
     commandAliases: ['remind', 'reminder'],
     description: 'Create a reminder task.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['����'],
+    triggerKeywords: ['提醒'],
     allowIn: ['group', 'private'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not create that reminder.',
+    fallbackMessage: '这个提醒我暂时还没记上。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -173,10 +173,10 @@ export const TOOL_DEFINITIONS = Object.freeze([
     commandAliases: ['remind', 'reminder'],
     description: 'List current reminders.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['����'],
+    triggerKeywords: ['提醒'],
     allowIn: ['group', 'private'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not list reminders.',
+    fallbackMessage: '提醒列表我暂时还没翻出来。',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -186,10 +186,10 @@ export const TOOL_DEFINITIONS = Object.freeze([
     commandAliases: ['remind', 'reminder'],
     description: 'Cancel a reminder by task id.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['����'],
+    triggerKeywords: ['提醒'],
     allowIn: ['group', 'private'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not cancel that reminder.',
+    fallbackMessage: '这个提醒我暂时还没撤掉。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -205,10 +205,10 @@ export const TOOL_DEFINITIONS = Object.freeze([
     commandAliases: ['subscribe', 'sub'],
     description: 'Create a subscription task.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['����'],
+    triggerKeywords: ['订阅'],
     allowIn: ['group', 'private'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not create that subscription.',
+    fallbackMessage: '这条订阅我暂时还没挂上。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -226,10 +226,10 @@ export const TOOL_DEFINITIONS = Object.freeze([
     commandAliases: ['subscribe', 'sub'],
     description: 'List current subscriptions.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['����'],
+    triggerKeywords: ['订阅'],
     allowIn: ['group', 'private'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not list subscriptions.',
+    fallbackMessage: '订阅列表我暂时还没翻出来。',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -239,10 +239,10 @@ export const TOOL_DEFINITIONS = Object.freeze([
     commandAliases: ['subscribe', 'sub'],
     description: 'Cancel a subscription by task id.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['����'],
+    triggerKeywords: ['订阅'],
     allowIn: ['group', 'private'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not cancel that subscription.',
+    fallbackMessage: '这条订阅我暂时还没停掉。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -255,13 +255,13 @@ export const TOOL_DEFINITIONS = Object.freeze([
     name: 'get_help',
     commandType: 'help',
     family: 'help',
-    commandAliases: ['help', 'command', 'commands', '����', '����'],
+    commandAliases: ['help', 'command', 'commands', '命令', '帮助'],
     description: 'Read the available command list.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['help', 'command', '����', '����'],
+    triggerKeywords: ['help', 'command', '命令', '帮助'],
     allowIn: ['group', 'private'],
     rateLimitMs: 0,
-    fallbackMessage: 'I could not list commands right now.',
+    fallbackMessage: '命令列表我暂时还没整理出来。',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
 ]);
