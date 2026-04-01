@@ -1,19 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCommandResponse, parseCommand } from '../src/services/commands.js';
+import { buildCommandResponse, parseCommand } from '../src/command-parser.js';
 
-test('parseCommand recognizes relation query', () => {
-  assert.deepEqual(parseCommand('/关系'), { type: 'relation' });
-  assert.deepEqual(parseCommand('/profile'), { type: 'profile' });
-  assert.deepEqual(parseCommand('由乃 群状态'), { type: 'group' });
+test('parseCommand recognizes relation, profile, and report commands', () => {
+  assert.deepEqual(parseCommand('/relation'), { type: 'relation', toolName: 'get_relation', toolArgs: {} });
+  assert.deepEqual(parseCommand('/profile'), { type: 'profile', toolName: 'get_profile', toolArgs: {} });
+  assert.deepEqual(parseCommand('/groupreport 48'), { type: 'group_report', toolName: 'get_group_report', toolArgs: { windowHours: 48 } });
 });
 
 test('buildCommandResponse formats profile output', () => {
   const text = buildCommandResponse({ type: 'profile' }, {
     relation: {
-      memorySummary: '偏好:猫；常聊:游戏',
-      preferences: ['猫'],
-      favoriteTopics: ['游戏'],
+      memorySummary: 'prefs: cats / topics: games',
+      preferences: ['cats'],
+      favoriteTopics: ['games'],
       affection: 65,
       activeScore: 44,
     },
@@ -22,13 +22,17 @@ test('buildCommandResponse formats profile output', () => {
       intensity: 0.55,
       triggerReason: 'positive-message',
     },
+    userProfile: {
+      profileSummary: 'preferred name: tester',
+      favoriteTopics: ['games'],
+    },
     groupState: {
       mood: 'CALM',
       activityLevel: 32,
-      recentTopics: ['游戏'],
+      recentTopics: ['games'],
     },
   });
 
-  assert.match(text, /画像摘要/);
-  assert.match(text, /偏好/);
+  assert.equal(text.includes('preferred name: tester'), true);
+  assert.equal(text.includes('games'), true);
 });

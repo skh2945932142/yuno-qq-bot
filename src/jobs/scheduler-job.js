@@ -10,8 +10,8 @@ import {
   markProactiveSent,
   planScheduledInteraction,
 } from '../state/group-state.js';
-import { buildScheduledPrompt } from '../prompts/index.js';
-import { createTraceContext, failTrace, finalizeTrace, withTraceSpan } from '../observability/tracing.js';
+import { buildScheduledPrompt } from '../prompt-builder.js';
+import { createTraceContext, failTrace, finalizeTrace, withTraceSpan } from '../runtime-tracing.js';
 import { buildDailyDigest } from '../group-ops.js';
 import { getDueAutomationTasks, markAutomationTaskDelivered } from '../automation-tasks.js';
 import { isWithinQuietHours, listGroupRules } from '../group-automation.js';

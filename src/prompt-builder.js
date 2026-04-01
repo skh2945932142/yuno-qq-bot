@@ -27,6 +27,17 @@ function formatKnowledgeDocuments(documents) {
     .join('\n');
 }
 
+function formatEventSummaries(events, limit = 5) {
+  if (!events?.length) {
+    return 'none';
+  }
+
+  return events
+    .slice(0, limit)
+    .map((event) => `- ${event.summary}`)
+    .join('\n');
+}
+
 function buildSceneSection(event, route, specialUser, replyLengthProfile) {
   const isPrivate = event.chatType === 'private';
   const lines = [
@@ -232,5 +243,35 @@ export function buildReplyContext({
     buildCurrentTurnSection(messageAnalysis, route, groupState, recentEvents, event, replyLengthProfile),
     '',
     buildOutputRules(event, route),
+  ].join('\n');
+}
+
+export function buildScheduledPrompt({ groupState, recentEvents, plan }) {
+  return [
+    'Persona',
+    '- You are Yuno, sending a proactive group message that still sounds like a real participant.',
+    '- Output only the final message. No analysis, no hidden reasoning, no <think> tags.',
+    '- Keep it short, natural, and slightly emotionally colored, but never spammy or preachy.',
+    '',
+    'Schedule Context',
+    `- slot=${plan.slot}`,
+    `- topic=${plan.topic}`,
+    `- tone=${plan.tone}`,
+    `- maxLines=${plan.maxLines || 2}`,
+    `- textHint=${plan.textHint || 'Keep it natural and on-theme.'}`,
+    '',
+    'Group Snapshot',
+    `- mood=${groupState?.mood || 'CALM'}`,
+    `- activity=${Math.round(groupState?.activityLevel || 0)}`,
+    `- recentTopics=${formatList(groupState?.recentTopics, 'none')}`,
+    '- recentEvents:',
+    formatEventSummaries(recentEvents),
+    '',
+    'Output Rules',
+    '- Write 1 to 2 short lines only.',
+    '- Morning reminders can be slightly annoyed or teasing, but the core is to get people moving.',
+    '- Late-night reminders should be softer and nudge people to rest without sounding like a lecture.',
+    '- If recent group topics fit naturally, weave in one light reference instead of summarizing the chat.',
+    '- No emoji, no system-notice tone, no long motivational speech.',
   ].join('\n');
 }

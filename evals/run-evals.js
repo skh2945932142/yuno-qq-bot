@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { analyzeTrigger } from '../src/services/analysis.js';
-import { validateGroupMessageEvent } from '../src/schemas/group-message-event.js';
-import { planIncomingTask } from '../src/agents/task-router.js';
-import { parseCommand } from '../src/services/commands.js';
+import { analyzeTrigger } from '../src/message-analysis.js';
+import { validateOnebotMessageEvent } from '../src/adapters/onebot-event.js';
+import { planIncomingTask } from '../src/task-router.js';
+import { parseCommand } from '../src/command-parser.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,18 +17,18 @@ async function loadScenarios() {
 
 async function evaluateScenario(scenario) {
   if (scenario.type === 'schema') {
-    const validation = validateGroupMessageEvent(scenario.event);
+    const validation = validateOnebotMessageEvent(scenario.event);
     return validation.ok === scenario.expected.valid
       ? null
       : `Expected valid=${scenario.expected.valid}, got ${validation.ok}`;
   }
 
-  const validation = validateGroupMessageEvent(scenario.event);
+  const validation = validateOnebotMessageEvent(scenario.event);
   if (!validation.ok) {
     return `Validation failed unexpectedly: ${validation.errors.join('; ')}`;
   }
 
-  const command = parseCommand(validation.value.raw_message);
+  const command = parseCommand(validation.value.rawText);
   const analysis = command
     ? {
         shouldRespond: true,
@@ -41,7 +41,14 @@ async function evaluateScenario(scenario) {
         ruleSignals: ['command'],
         replyStyle: 'calm',
       }
-    : await analyzeTrigger(validation.value, scenario.context, {
+    : await analyzeTrigger(validation.value, {
+        relation: scenario.context?.relation || { affection: 30, activeScore: 0, userId: validation.value.userId },
+        userState: scenario.context?.userState || { currentEmotion: 'CALM', intensity: 0.3 },
+        conversationState: scenario.context?.conversationState || { messages: [], rollingSummary: '' },
+        groupState: scenario.context?.groupState || null,
+        specialUser: null,
+        isAdmin: false,
+      }, {
         messageAnalyzer: async () => ({
           intent: 'chat',
           sentiment: 'neutral',
@@ -53,9 +60,12 @@ async function evaluateScenario(scenario) {
           replyStyle: 'calm',
         }),
       });
+
   const task = planIncomingTask({
-    text: validation.value.raw_message,
+    event: validation.value,
+    text: validation.value.rawText,
     analysis,
+    conversationState: scenario.context?.conversationState || { messages: [], rollingSummary: '' },
   });
 
   if (analysis.shouldRespond !== scenario.expected.shouldRespond) {

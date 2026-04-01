@@ -30,3 +30,4 @@ await import('./phase1-task-router-vnext.test.js');
 await import('./phase1-onebot-notice.test.js');
 
 
+await import('./phase1-persist-job.test.js');

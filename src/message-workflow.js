@@ -373,6 +373,58 @@ async function persistReplyState(context, payload, trace, deps) {
   }
 }
 
+function buildPersistContextSnapshot(context) {
+  return {
+    session: { ...context.session },
+    isAdvanced: Boolean(context.isAdvanced),
+    specialUser: context.specialUser || null,
+    contextMode: context.contextMode || 'full',
+    relation: context.relation ? {
+      _id: context.relation._id,
+      platform: context.relation.platform,
+      chatType: context.relation.chatType,
+      chatId: context.relation.chatId,
+      groupId: context.relation.groupId,
+      userId: context.relation.userId,
+      affection: context.relation.affection,
+      tags: context.relation.tags || [],
+      memorySummary: context.relation.memorySummary || '',
+      preferences: context.relation.preferences || [],
+      favoriteTopics: context.relation.favoriteTopics || [],
+      activeScore: context.relation.activeScore || 0,
+    } : null,
+    userState: context.userState ? {
+      _id: context.userState._id,
+      platform: context.userState.platform,
+      chatType: context.userState.chatType,
+      chatId: context.userState.chatId,
+      groupId: context.userState.groupId,
+      userId: context.userState.userId,
+      currentEmotion: context.userState.currentEmotion,
+      intensity: context.userState.intensity,
+      triggerReason: context.userState.triggerReason,
+    } : null,
+    userProfile: context.userProfile ? {
+      _id: context.userProfile._id,
+      platform: context.userProfile.platform,
+      userId: context.userProfile.userId,
+      profileKey: context.userProfile.profileKey,
+      displayName: context.userProfile.displayName || '',
+      preferredName: context.userProfile.preferredName || '',
+      tonePreference: context.userProfile.tonePreference || '',
+      favoriteTopics: context.userProfile.favoriteTopics || [],
+      dislikes: context.userProfile.dislikes || [],
+      roleplaySettings: context.userProfile.roleplaySettings || [],
+      relationshipPreference: context.userProfile.relationshipPreference || '',
+      personaMode: context.userProfile.personaMode || '',
+      specialBondSummary: context.userProfile.specialBondSummary || '',
+      bondMemories: context.userProfile.bondMemories || [],
+      specialNicknames: context.userProfile.specialNicknames || [],
+      profileSummary: context.userProfile.profileSummary || '',
+    } : null,
+  };
+}
+
 function buildPersistJobData(context, payload) {
   return {
     event: context.event,
@@ -383,6 +435,7 @@ function buildPersistJobData(context, payload) {
     rawText: payload.rawText,
     userTurn: payload.userTurn,
     nextMessages: payload.nextMessages,
+    contextSnapshot: buildPersistContextSnapshot(context),
   };
 }
 
@@ -398,7 +451,23 @@ export async function processPersistJob(jobData, options = {}) {
   });
 
   try {
-    const context = await buildWorkflowContext(event, trace, deps);
+    const snapshot = jobData.contextSnapshot || {};
+    const context = {
+      event,
+      session: snapshot.session || {
+        platform: event.platform,
+        chatType: event.chatType,
+        chatId: event.chatId,
+        userId: event.userId,
+      },
+      relation: snapshot.relation,
+      userState: snapshot.userState,
+      userProfile: snapshot.userProfile,
+      specialUser: snapshot.specialUser || getSpecialUserByUserId(event.userId),
+      isAdvanced: Boolean(snapshot.isAdvanced),
+      contextMode: snapshot.contextMode || 'persist',
+    };
+
     await persistReplyState(context, {
       nextMessages: jobData.nextMessages,
       rawText: jobData.rawText,
@@ -409,11 +478,17 @@ export async function processPersistJob(jobData, options = {}) {
       username: jobData.username,
     }, trace, deps);
 
+    recordWorkflowMetric('yuno_trigger_context_reused_total', 1, {
+      chat_type: event.chatType,
+      mode: 'persist-job',
+    });
+
     finalizeTrace(trace, {
       replyType: 'persist',
       shouldRespond: true,
       queueJobId: options.queueJobId,
       messageId: event.messageId,
+      contextMode: context.contextMode,
     });
     return true;
   } catch (error) {
@@ -603,7 +678,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       promptProfile: replyLengthProfile.promptProfile,
     });
 
-    const visibleReplyText = stripHiddenReasoning(rawReplyText) || '??????????????????';
+    const visibleReplyText = stripHiddenReasoning(rawReplyText) || 'I swallowed that one. Say it to me again.';
     if (visibleReplyText !== String(rawReplyText || '').trim()) {
       recordWorkflowMetric('yuno_hidden_reasoning_stripped_total', 1, {
         chat_type: normalizedEvent.chatType,

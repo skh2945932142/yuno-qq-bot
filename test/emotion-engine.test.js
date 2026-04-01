@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveEmotion, shouldSendVoiceForEmotion } from '../src/services/emotion-engine.js';
+import { resolveEmotion, shouldSendVoiceForEmotion } from '../src/emotion-engine.js';
 
 test('resolveEmotion picks protective for help requests with decent affection', () => {
   const result = resolveEmotion({
@@ -12,6 +12,7 @@ test('resolveEmotion picks protective for help requests with decent affection', 
       sentiment: 'neutral',
       confidence: 0.8,
       relevance: 0.8,
+      ruleSignals: [],
     },
   });
 
@@ -31,6 +32,7 @@ test('resolveEmotion becomes angry on hostile low-affection input', () => {
       sentiment: 'negative',
       confidence: 0.9,
       relevance: 0.8,
+      ruleSignals: [],
     },
   });
 
@@ -49,6 +51,7 @@ test('resolveEmotion allows a small soft emoji budget for affectionate state', (
       sentiment: 'positive',
       confidence: 0.75,
       relevance: 0.7,
+      ruleSignals: [],
     },
   });
 

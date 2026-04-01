@@ -219,7 +219,7 @@ npm run smoke
 - Retrieval is live, not just a boundary placeholder. The active knowledge path is `knowledge/ -> embeddings -> Qdrant -> retrieveKnowledge()`.
 - If `ENABLE_QUEUE=false` or BullMQ dependencies are unavailable, the app falls back to inline execution while keeping the same queue API.
 - `/ready` reports database and queue readiness. `/metrics` exposes Prometheus-style counters and histograms.
-- The old `src/workflows/group-message-workflow.js` remains only as compatibility code; the active runtime path is `src/message-workflow.js`.
+- The active runtime path is `src/message-workflow.js`; the legacy group-message workflow has been removed.
 
 ## Future Extension Points
 
