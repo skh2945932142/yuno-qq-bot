@@ -20,7 +20,7 @@ test('retrieveKnowledge safely returns empty results for empty queries', async (
 });
 
 test('retrieveKnowledge prioritizes preferred special-user tags when reranking hits', async () => {
-  const result = await retrieveKnowledge('教导我', {
+  const result = await retrieveKnowledge('teach me', {
     createEmbeddings: async () => [{ embedding: [0.1, 0.2, 0.3] }],
     getQdrantStatus: () => ({ enabled: true }),
     searchKnowledge: async () => ([
@@ -28,9 +28,9 @@ test('retrieveKnowledge prioritizes preferred special-user tags when reranking h
         id: 'general',
         score: 0.92,
         payload: {
-          text: '普通人格设定',
+          text: 'general persona settings',
           category: 'persona',
-          title: '普通人格',
+          title: 'general persona',
           tags: ['persona'],
           source: 'knowledge/persona/core.md',
         },
@@ -39,9 +39,9 @@ test('retrieveKnowledge prioritizes preferred special-user tags when reranking h
         id: 'special',
         score: 0.8,
         payload: {
-          text: 'Scathach 专属关系设定',
+          text: 'Scathach special relationship settings',
           category: 'persona',
-          title: '专属关系',
+          title: 'special relationship',
           tags: ['persona', 'special_user:scathach'],
           source: 'knowledge/persona/scathach.md',
         },
@@ -52,4 +52,40 @@ test('retrieveKnowledge prioritizes preferred special-user tags when reranking h
 
   assert.equal(result.enabled, true);
   assert.equal(result.documents[0].id, 'special');
+});
+
+test('retrieveKnowledge returns embedding-empty when embedding provider returns no rows', async () => {
+  const result = await retrieveKnowledge('who are you', {
+    createEmbeddings: async () => [],
+    getQdrantStatus: () => ({ enabled: true }),
+  });
+
+  assert.equal(result.enabled, false);
+  assert.equal(result.reason, 'embedding-empty');
+  assert.deepEqual(result.documents, []);
+});
+
+test('retrieveKnowledge returns embedding-invalid when embedding payload is malformed', async () => {
+  const result = await retrieveKnowledge('who are you', {
+    createEmbeddings: async () => [{ vector: [0.1, 0.2] }],
+    getQdrantStatus: () => ({ enabled: true }),
+  });
+
+  assert.equal(result.enabled, false);
+  assert.equal(result.reason, 'embedding-invalid');
+  assert.deepEqual(result.documents, []);
+});
+
+test('retrieveKnowledge returns retrieval-failed when qdrant search throws', async () => {
+  const result = await retrieveKnowledge('who are you', {
+    createEmbeddings: async () => [{ embedding: [0.1, 0.2, 0.3] }],
+    getQdrantStatus: () => ({ enabled: true }),
+    searchKnowledge: async () => {
+      throw new Error('qdrant unavailable');
+    },
+  });
+
+  assert.equal(result.enabled, false);
+  assert.equal(result.reason, 'retrieval-failed');
+  assert.deepEqual(result.documents, []);
 });

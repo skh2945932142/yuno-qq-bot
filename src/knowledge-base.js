@@ -140,6 +140,65 @@ function createKnowledgeVersion(documents) {
   return crypto.createHash('sha1').update(input).digest('hex');
 }
 
+function isFiniteNumberArray(value) {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((item) => Number.isFinite(item));
+}
+
+function validateEmbeddingRows(rows, expectedCount) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return {
+      ok: false,
+      reason: 'embedding-empty',
+      message: 'Embedding provider returned an empty vector set',
+    };
+  }
+
+  if (expectedCount !== undefined && rows.length !== expectedCount) {
+    return {
+      ok: false,
+      reason: 'embedding-count-mismatch',
+      message: `Embedding provider returned ${rows.length} vectors for ${expectedCount} inputs`,
+    };
+  }
+
+  const vectors = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const vector = rows[index]?.embedding;
+    if (!Array.isArray(vector)) {
+      return {
+        ok: false,
+        reason: 'embedding-invalid',
+        message: `Embedding provider returned an invalid embedding payload at index ${index}`,
+      };
+    }
+
+    if (vector.length === 0) {
+      return {
+        ok: false,
+        reason: 'embedding-empty',
+        message: `Embedding provider returned an empty embedding vector at index ${index}`,
+      };
+    }
+
+    if (!isFiniteNumberArray(vector)) {
+      return {
+        ok: false,
+        reason: 'embedding-invalid',
+        message: `Embedding provider returned a non-numeric embedding vector at index ${index}`,
+      };
+    }
+
+    vectors.push(vector);
+  }
+
+  return {
+    ok: true,
+    vectors,
+  };
+}
+
 async function listMarkdownFiles(rootDir) {
   const entries = await fs.readdir(rootDir, { withFileTypes: true });
   const files = [];
@@ -274,16 +333,18 @@ export async function syncKnowledgeBase(options = {}) {
     { model: options.embeddingModel || config.embeddingModel }
   );
 
-  const vectorSize = embeddingRows[0]?.embedding?.length;
-  if (!vectorSize) {
-    throw new Error('Embedding provider returned an empty vector set');
+  const validation = validateEmbeddingRows(embeddingRows, documents.length);
+  if (!validation.ok) {
+    recordWorkflowMetric('yuno_knowledge_sync_total', 1, { result: 'error' });
+    throw new Error(validation.message);
   }
+  const vectorSize = validation.vectors[0].length;
 
   await ensureCollection(vectorSize);
   const version = createKnowledgeVersion(documents);
   await upsertPoints(documents.map((item, index) => ({
     id: item.id,
-    vector: embeddingRows[index].embedding,
+    vector: validation.vectors[index],
     payload: {
       type: 'knowledge',
       version,
@@ -356,13 +417,54 @@ export async function retrieveKnowledge(query, options = {}) {
     };
   }
 
+  let embeddingRows;
   try {
-    const [embedding] = await embed([query], {
+    embeddingRows = await embed([query], {
       model: options.embeddingModel || config.embeddingModel,
       operation: 'retrieval-embedding',
     });
+  } catch (error) {
+    recordWorkflowMetric('yuno_retrieval_queries_total', 1, {
+      result: 'error',
+    });
+    logger.warn('retrieval', 'Knowledge retrieval failed', {
+      message: error.message,
+      query,
+    });
 
-    const hits = await search(embedding.embedding, {
+    return {
+      enabled: false,
+      query,
+      source: 'none',
+      documents: [],
+      reason: 'retrieval-failed',
+    };
+  }
+
+  const validation = validateEmbeddingRows(embeddingRows, 1);
+  if (!validation.ok) {
+    recordWorkflowMetric('yuno_retrieval_queries_total', 1, {
+      result: 'error',
+    });
+    logger.warn('retrieval', 'Knowledge retrieval embedding invalid', {
+      query,
+      reason: validation.reason,
+      message: validation.message,
+    });
+
+    return {
+      enabled: false,
+      query,
+      source: 'none',
+      documents: [],
+      reason: validation.reason,
+    };
+  }
+
+  try {
+    const [embeddingVector] = validation.vectors;
+
+    const hits = await search(embeddingVector, {
       limit: options.limit || config.qdrantTopK,
       scoreThreshold: options.scoreThreshold ?? config.qdrantMinScore,
       filter: {
@@ -426,7 +528,7 @@ export async function retrieveKnowledge(query, options = {}) {
       query,
       source: 'none',
       documents: [],
-      reason: error.message || 'retrieval-failed',
+      reason: 'retrieval-failed',
     };
   }
 }

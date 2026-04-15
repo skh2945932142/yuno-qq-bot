@@ -4,6 +4,8 @@ await import('./phase1-message-analysis.test.js');
 await import('./phase1-conversation-memory.test.js');
 await import('./phase1-profile-memory.test.js');
 await import('./phase1-knowledge-base.test.js');
+await import('./phase1-config-defaults.test.js');
+await import('./phase1-doctor.test.js');
 await import('./phase1-task-router.test.js');
 await import('./phase1-workflow.test.js');
 await import('./phase1-reply-length.test.js');

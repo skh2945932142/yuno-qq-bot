@@ -141,8 +141,9 @@ npm run kb:sync
 这个模式下要特别注意：
 
 - `MONGODB_URI` 必须填服务器能直接访问到的地址，不要保留 Docker 内部服务名
-- `FFMPEG_PATH` 要指向真实存在的 ffmpeg，可执行文件通常是 `/usr/bin/ffmpeg`
+- 文本链路建议先跑通，语音默认保持关闭；只有在显式设置 `ENABLE_VOICE=true` 后，`FFMPEG_PATH` 才需要指向真实存在的 ffmpeg，可执行文件通常是 `/usr/bin/ffmpeg`
 - `SELF_QQ` 最好显式填写 bot 自己的 QQ 号，避免上游 notice 缺字段时无法正确识别 @ 与 poke 目标
+- 检索不是默认开启的；只有在填好 `QDRANT_URL`、`QDRANT_COLLECTION` 并执行 `npm run kb:sync` 之后，RAG 才会真正参与回复
 
 ### 2. Docker / Compose 同网段运行
 
@@ -188,7 +189,7 @@ npm run smoke
 - `npm test`：跑当前主线和阶段性回归测试
 - `npm run eval`：跑轻量行为评估
 - `npm run kb:sync`：把 `knowledge/` 里的 Markdown 切块、向量化并同步到 Qdrant
-- `npm run doctor`：检查 Mongo、NapCat、LLM、Qdrant、Redis、FFmpeg 是否真的可达
+- `npm run doctor`：检查 Mongo、NapCat、LLM、Qdrant、Redis、FFmpeg 是否真的可达；语音关闭和未配置检索显示 `skip` 属于正常状态
 - `npm run smoke`：走真实 `runYunoConversation(...)` 主链，但不外发 QQ、不写会话状态
 
 ## AstrBot 接入
@@ -238,7 +239,7 @@ npm run smoke
 
 ## 运行与运维说明
 
-- 检索是正式功能，不是占位边界。只有在 `QDRANT_URL` 和 `QDRANT_COLLECTION` 都配置后才会启用。
+- 检索是正式功能，不是占位边界。只有在 `QDRANT_URL` 和 `QDRANT_COLLECTION` 都配置后，并且执行过 `npm run kb:sync`，它才会真正启用。
 - 如果 `ENABLE_QUEUE=false`，或者 BullMQ / Redis 不可用，系统会退回 inline 模式，但队列接口不变。
 - `/ready` 用于检查数据库和队列就绪情况，`/metrics` 暴露 Prometheus 风格指标。
 - 当前唯一活跃运行主线是 `src/message-workflow.js`，旧版群聊工作流已经移除。

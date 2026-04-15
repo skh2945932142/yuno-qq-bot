@@ -56,7 +56,7 @@ export const config = Object.freeze({
   // direct-mention detection ([CQ:at,qq=SELF_QQ]) never silently fails.
   selfQq: process.env.SELF_QQ ? String(process.env.SELF_QQ) : '',
   yunoVoiceUri: process.env.YUNO_VOICE_URI || '',
-  enableVoice: readBoolean('ENABLE_VOICE', true),
+  enableVoice: readBoolean('ENABLE_VOICE', false),
   ffmpegPath: process.env.FFMPEG_PATH || '',
   voiceSampleRate: readNumber('VOICE_SAMPLE_RATE', 24000),
   voiceBitrate: readNumber('VOICE_BITRATE', 24000),

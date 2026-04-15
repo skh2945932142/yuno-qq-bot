@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import axios from 'axios';
 import OpenAI from 'openai';
 import Redis from 'ioredis';
+import { pathToFileURL } from 'node:url';
 import { config, validateRuntimeConfig } from './src/config.js';
 import { resolveFfmpegPath } from './src/services/audio.js';
 
@@ -121,10 +122,11 @@ async function runCheck(name, executor) {
   }
 }
 
-async function checkRuntimeConfig() {
+async function checkRuntimeConfig(options = {}) {
+  const runtimeConfig = options.config || config;
   validateRuntimeConfig();
   return {
-    detail: `model=${config.llmChatModel}, baseUrl=${config.llmBaseUrl}, queue=${config.enableQueue ? 'on' : 'off'}, retrieval=${config.qdrantUrl ? 'on' : 'off'}, voice=${config.enableVoice ? 'on' : 'off'}`,
+    detail: `model=${runtimeConfig.llmChatModel}, baseUrl=${runtimeConfig.llmBaseUrl}, queue=${runtimeConfig.enableQueue ? 'on' : 'off'}, retrieval=${runtimeConfig.qdrantUrl ? 'on' : 'off'}, voice=${runtimeConfig.enableVoice ? 'on' : 'off'}`,
   };
 }
 
@@ -212,24 +214,26 @@ async function checkLlm() {
   };
 }
 
-async function checkQdrant() {
-  if (!config.qdrantUrl || !config.qdrantCollection) {
+async function checkQdrant(options = {}) {
+  const runtimeConfig = options.config || config;
+  const httpGet = options.httpGet || axios.get;
+  if (!runtimeConfig.qdrantUrl || !runtimeConfig.qdrantCollection) {
     return {
       status: 'skip',
-      detail: 'retrieval is not configured; set QDRANT_URL and QDRANT_COLLECTION, then run npm run kb:sync',
+      detail: 'retrieval is not configured. This is fine for text-only mode; set QDRANT_URL and QDRANT_COLLECTION, then run npm run kb:sync when you want RAG.',
     };
   }
 
-  const headers = config.qdrantApiKey
-    ? { 'api-key': config.qdrantApiKey }
+  const headers = runtimeConfig.qdrantApiKey
+    ? { 'api-key': runtimeConfig.qdrantApiKey }
     : {};
 
   try {
-    const response = await axios.get(
-      `${config.qdrantUrl}/collections/${config.qdrantCollection}`,
+    const response = await httpGet(
+      `${runtimeConfig.qdrantUrl}/collections/${runtimeConfig.qdrantCollection}`,
       {
         headers,
-        timeout: config.requestTimeoutMs,
+        timeout: runtimeConfig.requestTimeoutMs,
       }
     );
     const vectorConfig = response.data?.result?.config?.params?.vectors;
@@ -241,29 +245,31 @@ async function checkQdrant() {
 
     return {
       detail: size
-        ? `collection ${config.qdrantCollection} reachable (vectorSize=${size})`
-        : `collection ${config.qdrantCollection} reachable`,
+        ? `collection ${runtimeConfig.qdrantCollection} reachable (vectorSize=${size})`
+        : `collection ${runtimeConfig.qdrantCollection} reachable`,
     };
   } catch (error) {
     if (error.response?.status === 404) {
       return {
         status: 'warn',
-        detail: `Qdrant reachable but collection ${config.qdrantCollection} is missing; run npm run kb:sync`,
+        detail: `Qdrant reachable but collection ${runtimeConfig.qdrantCollection} is missing; run npm run kb:sync`,
       };
     }
     throw error;
   }
 }
 
-async function checkVoiceRuntime() {
-  if (!config.enableVoice) {
+async function checkVoiceRuntime(options = {}) {
+  const runtimeConfig = options.config || config;
+  const resolveFfmpegPathFn = options.resolveFfmpegPathFn || resolveFfmpegPath;
+  if (!runtimeConfig.enableVoice) {
     return {
       status: 'skip',
-      detail: 'voice is disabled',
+      detail: 'voice is disabled. This is fine for text-only mode; enable it only after ffmpeg and TTS are configured.',
     };
   }
 
-  const ffmpegPath = await resolveFfmpegPath({ skipCache: true });
+  const ffmpegPath = await resolveFfmpegPathFn({ skipCache: true });
   if (!ffmpegPath) {
     throw new Error(
       'voice is enabled but ffmpeg could not be resolved. Install ffmpeg and set FFMPEG_PATH (Linux usually /usr/bin/ffmpeg, Windows usually C:\\ffmpeg\\bin\\ffmpeg.exe).'
@@ -334,7 +340,26 @@ async function main() {
   process.exitCode = hasFailures(results) ? 1 : 0;
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+export {
+  checkRuntimeConfig,
+  checkMongo,
+  checkNapCat,
+  checkLlm,
+  checkQdrant,
+  checkVoiceRuntime,
+  checkQueueRuntime,
+  runCheck,
+  summarizeResults,
+  hasFailures,
+  main as runDoctor,
+};
+
+const isDirectExecution = process.argv[1]
+  && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectExecution) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
