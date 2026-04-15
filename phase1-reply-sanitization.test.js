@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { processIncomingMessage, stripHiddenReasoning } from './src/message-workflow.js';
 
@@ -122,4 +122,20 @@ test('processIncomingMessage falls back to a Chinese retry line when only hidden
 
   assert.equal(reply, '刚才那句被我吞掉了，你再说一遍。');
   assert.equal(sentReplies[0], '刚才那句被我吞掉了，你再说一遍。');
+});
+
+test('processIncomingMessage flattens line-by-line chat replies before sending', async () => {
+  const sentReplies = [];
+
+  const reply = await processIncomingMessage(createEvent(), createContext(), {
+    deps: createDeps(
+      async (_target, text) => {
+        sentReplies.push(text);
+      },
+      async () => '嗯...？！又饿了？！\n你之前不是说在吃晚饭吗...\n怎么还在饿...\n快去吃东西...'
+    ),
+  });
+
+  assert.equal(reply, '嗯...？！又饿了？！你之前不是说在吃晚饭吗...怎么还在饿...快去吃东西...');
+  assert.equal(sentReplies[0], '嗯...？！又饿了？！你之前不是说在吃晚饭吗...怎么还在饿...快去吃东西...');
 });

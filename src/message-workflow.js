@@ -77,6 +77,53 @@ export function enforceEmojiBudget(text, emotionResult) {
     .trim();
 }
 
+function isLikelyStructuredLine(line) {
+  const normalized = String(line || '').trim();
+  if (!normalized) return false;
+  return /^([*-]|#{1,6}\s|\d+[.)]|[A-Za-z0-9_/-]+\s*:|```)/.test(normalized);
+}
+
+function joinReplyLines(lines) {
+  return lines.reduce((result, line, index) => {
+    const current = String(line || '').trim();
+    if (!current) return result;
+    if (index === 0) return current;
+
+    const previous = result.slice(-1);
+    const needsSpace = /[A-Za-z0-9]$/.test(result) && /^[A-Za-z0-9]/.test(current);
+    return `${result}${needsSpace ? ' ' : ''}${current}`;
+  }, '');
+}
+
+export function normalizeReplyFormatting(text) {
+  const normalized = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+
+  if (!normalized.includes('\n')) {
+    return normalized;
+  }
+
+  const lines = normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length <= 1) {
+    return lines[0] || '';
+  }
+
+  if (lines.some(isLikelyStructuredLine)) {
+    return lines.join('\n');
+  }
+
+  return joinReplyLines(lines)
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
 export function stripHiddenReasoning(text) {
   return String(text || '')
     .replace(THINK_BLOCK_REGEX, ' ')
@@ -706,7 +753,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       });
     }
 
-    const replyText = enforceEmojiBudget(visibleReplyText, emotionResult);
+    const replyText = normalizeReplyFormatting(enforceEmojiBudget(visibleReplyText, emotionResult));
     const nextMessages = [
       { role: 'user', content: userTurn },
       { role: 'assistant', content: replyText },
