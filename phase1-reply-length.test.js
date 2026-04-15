@@ -12,8 +12,8 @@ function createEvent(overrides = {}) {
     chatId: '10001',
     userId: '10001',
     userName: 'Alice',
-    rawText: 'Today feels a little tiring.',
-    text: 'Today feels a little tiring.',
+    rawText: '今天有点累，想和你说会儿话。',
+    text: '今天有点累，想和你说会儿话。',
     attachments: [],
     mentionsBot: false,
     timestamp: Date.now(),
@@ -39,13 +39,15 @@ test('resolveReplyLengthProfile expands knowledge answers more than normal group
   });
 
   assert.equal(groupProfile.tier, 'balanced');
-  assert.equal(groupProfile.maxTokens, config.groupChatMaxTokens);
-  assert.equal(groupProfile.promptProfile, 'compact');
-  assert.equal(groupProfile.historyLimit, 4);
+  assert.equal(groupProfile.maxTokens, 240);
+  assert.equal(groupProfile.promptProfile, 'fast');
+  assert.equal(groupProfile.historyLimit, 2);
+  assert.equal(groupProfile.performanceProfile, 'fast_chat');
   assert.equal(knowledgeProfile.tier, 'expanded');
   assert.equal(knowledgeProfile.maxTokens, config.knowledgeReplyMaxTokens);
   assert.equal(knowledgeProfile.promptProfile, 'standard');
   assert.equal(knowledgeProfile.historyLimit, 5);
+  assert.equal(knowledgeProfile.performanceProfile, 'knowledge_chat');
 });
 
 test('buildReplyContext includes reply length guidance and prompt profile', () => {
@@ -73,15 +75,35 @@ test('buildReplyContext includes reply length guidance and prompt profile', () =
       maxTokens: 520,
       historyLimit: 6,
       promptProfile: 'standard',
-      guidance: 'Length mode: expanded. In private chat, give a fuller and more emotionally complete reply.',
+      performanceProfile: 'standard_chat',
+      guidance: '这一轮可以写得更完整。私聊先回答，再顺一层情绪或细节，必要时轻轻追问。',
     },
   });
 
-  assert.match(prompt, /Reply Length/);
-  assert.match(prompt, /tier=expanded/);
-  assert.match(prompt, /maxTokens=520/);
-  assert.match(prompt, /historyLimit=6/);
-  assert.match(prompt, /promptProfile=standard/);
+  assert.match(prompt, /回复节奏/);
+  assert.match(prompt, /性能档=standard_chat/);
+  assert.match(prompt, /长度档=expanded/);
+  assert.match(prompt, /上限=520 tokens/);
+  assert.match(prompt, /历史窗口=6/);
+  assert.match(prompt, /默认使用中文/);
+});
+
+test('resolveReplyLengthProfile uses fast_chat for ordinary private openings', () => {
+  const profile = resolveReplyLengthProfile({
+    event: createEvent({
+      rawText: '今天终于忙完了，想和你说会儿话。',
+      text: '今天终于忙完了，想和你说会儿话。',
+    }),
+    route: { category: 'private_chat' },
+    analysis: { intent: 'social', sentiment: 'positive', relevance: 0.55 },
+    emotionResult: { emotion: 'CALM' },
+    conversationState: { rollingSummary: '', messages: [] },
+  });
+
+  assert.equal(profile.performanceProfile, 'fast_chat');
+  assert.equal(profile.promptProfile, 'fast');
+  assert.equal(profile.historyLimit, 3);
+  assert.equal(profile.maxTokens, 320);
 });
 
 test('processIncomingMessage passes route-specific generation profile to chat', async () => {
@@ -90,8 +112,8 @@ test('processIncomingMessage passes route-specific generation profile to chat', 
   await processIncomingMessage(createEvent({
     chatType: 'group',
     chatId: '20001',
-    rawText: 'Yuno, what do you think about tonight\'s plan?',
-    text: 'Yuno, what do you think about tonight\'s plan?',
+    rawText: '由乃，今晚你怎么看？',
+    text: '由乃，今晚你怎么看？',
     mentionsBot: true,
   }), {
     relation: { _id: 'r1', affection: 55, activeScore: 20, preferences: [], favoriteTopics: [], userId: '10001', platform: 'qq', chatType: 'group', chatId: '20001' },
@@ -101,14 +123,14 @@ test('processIncomingMessage passes route-specific generation profile to chat', 
     groupState: null,
     recentEvents: [],
     isAdmin: false,
-    isAdvanced: false,
-    event: createEvent({
-      chatType: 'group',
-      chatId: '20001',
-      rawText: 'Yuno, what do you think about tonight\'s plan?',
-      text: 'Yuno, what do you think about tonight\'s plan?',
-      mentionsBot: true,
-    }),
+      isAdvanced: false,
+      event: createEvent({
+        chatType: 'group',
+        chatId: '20001',
+        rawText: '由乃，今晚你怎么看？',
+        text: '由乃，今晚你怎么看？',
+        mentionsBot: true,
+      }),
     analysis: {
       shouldRespond: true,
       confidence: 0.92,
@@ -125,14 +147,14 @@ test('processIncomingMessage passes route-specific generation profile to chat', 
       sendReply: async () => null,
       sendVoice: async () => false,
       retrieveKnowledge: async () => ({ enabled: false, documents: [], reason: 'disabled' }),
-      chat: async (_messages, _systemPrompt, _userTurn, options) => {
-        captured.push({
-          maxTokens: options.maxTokens,
-          historyLimit: options.historyLimit,
-          temperature: options.temperature,
-        });
-        return 'Put the important thing first and leave a little margin.';
-      },
+        chat: async (_messages, _systemPrompt, _userTurn, options) => {
+          captured.push({
+            maxTokens: options.maxTokens,
+            historyLimit: options.historyLimit,
+            temperature: options.temperature,
+          });
+          return '先把重点说出来，再留一点余地。';
+        },
       appendConversationMessages: async () => null,
       updateRelationProfile: async () => null,
       updateUserState: async () => null,
@@ -143,5 +165,5 @@ test('processIncomingMessage passes route-specific generation profile to chat', 
 
   assert.equal(captured[0].maxTokens, 420);
   assert.equal(captured[0].historyLimit, 5);
-  assert.equal(captured[0].temperature, 0.58);
+  assert.equal(captured[0].temperature, 0.54);
 });

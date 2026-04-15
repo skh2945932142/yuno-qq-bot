@@ -16,6 +16,26 @@ const client = new OpenAI({
   baseURL: config.llmBaseUrl,
 });
 
+function recordModelUsage(traceContext, payload, response, operation) {
+  if (!traceContext) {
+    return;
+  }
+
+  const usage = {
+    operation: operation || 'chat',
+    model: payload.model,
+    promptTokens: response.usage?.prompt_tokens ?? null,
+    completionTokens: response.usage?.completion_tokens ?? null,
+    totalTokens: response.usage?.total_tokens ?? null,
+  };
+
+  traceContext.lastModelUsage = usage;
+  if (!Array.isArray(traceContext.modelUsages)) {
+    traceContext.modelUsages = [];
+  }
+  traceContext.modelUsages.push(usage);
+}
+
 async function createChatCompletion(messages, options = {}) {
   const startedAt = Date.now();
   const payload = {
@@ -59,6 +79,7 @@ async function createChatCompletion(messages, options = {}) {
     totalTokens: response.usage?.total_tokens,
   });
 
+  recordModelUsage(options.traceContext, payload, response, options.operation);
   return response;
 }
 
@@ -101,9 +122,10 @@ export async function chat(messages, systemPrompt, userMessage = null, options =
     {
       role: 'system',
       content: [
-        'Write the final user-facing reply only.',
-        'Do not output hidden reasoning, analysis, planning notes, role labels, or any <think>/<thinking> tags.',
-        'Start immediately with the actual reply text.',
+        '只输出最终给用户看的回复。',
+        '默认使用中文，除非用户明确要求英文。',
+        '不要输出隐藏思考、分析过程、规划说明、角色标签，或者任何 <think>/<thinking> 标签。',
+        '直接开始回复正文，不要先写解释。',
         systemPrompt,
       ].join('\n'),
     },
@@ -115,7 +137,7 @@ export async function chat(messages, systemPrompt, userMessage = null, options =
   } else if (conversation.length === 1) {
     conversation.push({
       role: 'user',
-      content: '请基于上面的设定直接生成一条自然、简短的回复。',
+      content: '请根据上面的设定直接给出一条自然、简洁的中文回复。',
     });
   }
 
@@ -213,7 +235,7 @@ export async function analyzeMessage(text, context = {}, options = {}) {
 
 function fallbackTriggerClassification(text, context = {}) {
   const sanitized = stripCqCodes(text);
-  const question = /[?？]$/.test(sanitized) || /(怎么|如何|为什么|为啥|吗|么)\b/i.test(sanitized);
+  const question = /[?？]$/.test(sanitized) || /(怎么|如何|为什么|为啥|可以吗|行吗|呢|吗)\b/i.test(sanitized);
   const keyword = /(帮助|命令|问题|状态|关系|好感|画像|群状态|情绪|设定|规则|世界观|faq)/i.test(sanitized);
   const admin = Boolean(context.isAdmin);
   const shouldRespond = Boolean(admin || question || keyword);

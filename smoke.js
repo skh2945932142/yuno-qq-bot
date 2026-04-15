@@ -1,5 +1,6 @@
 import { config, validateRuntimeConfig } from './src/config.js';
 import { runYunoConversation } from './src/yuno-core.js';
+import { createTraceContext } from './src/runtime-tracing.js';
 
 function truncateValue(value, limit = 120) {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
@@ -64,14 +65,15 @@ function hasFailures(results) {
   return results.some((result) => result.status === 'fail');
 }
 
-function createBaseDeps() {
+function createBaseDeps(scenarioName) {
+  const isFollowUpScenario = scenarioName === 'private_follow_up';
   return {
     ensureRelation: async () => ({
       affection: 72,
       activeScore: 64,
-      memorySummary: 'Recent interactions are stable and coherent.',
+      memorySummary: '最近互动稳定，彼此已经有一点默契。',
       preferences: [],
-      favoriteTopics: ['daily-life', 'chat'],
+      favoriteTopics: ['日常', '聊天'],
     }),
     ensureUserState: async () => ({
       currentEmotion: 'CALM',
@@ -80,29 +82,35 @@ function createBaseDeps() {
       decayAt: null,
     }),
     ensureUserProfileMemory: async ({ userName, specialUser }) => ({
-      profileSummary: `${userName || 'User'} prefers natural conversation and a slightly complete reply.`,
+      profileSummary: `${userName || '对方'}偏好自然一点、稍微完整一点的聊天。`,
       preferredName: userName || '',
       tonePreference: 'natural',
-      favoriteTopics: ['daily-life', 'mood'],
+      favoriteTopics: ['日常', '心情'],
       dislikes: [],
-      specialBondSummary: specialUser ? 'This user has a special persona overlay.' : '',
-      bondMemories: specialUser ? ['promise', 'shared-emotion'] : [],
+      specialBondSummary: specialUser ? '这个人有一层专属人格偏置。' : '',
+      bondMemories: specialUser ? ['约定', '共同情绪'] : [],
       specialNicknames: [],
     }),
     getConversationState: async () => ({
-      rollingSummary: 'The recent turns are about daily plans and a little emotional context.',
-      messages: [
-        { role: 'user', content: 'We already talked a little about today.' },
-        { role: 'assistant', content: 'Yes. I still remember the thread.' },
-      ],
+      rollingSummary: isFollowUpScenario ? '' : '最近聊过一点日常安排和轻微情绪。',
+      messages: isFollowUpScenario
+        ? [
+            { role: 'user', content: '昨晚那件事你还记得吗？' },
+            { role: 'assistant', content: '记得，我一直都记着。' },
+            { role: 'user', content: '那你后来怎么想的？' },
+          ]
+        : [
+            { role: 'user', content: '我们刚才已经聊过一点今天的安排。' },
+            { role: 'assistant', content: '嗯，我还记得那条线。' },
+          ],
     }),
     ensureGroupState: async () => ({
       mood: 'CALM',
       activityLevel: 38,
-      recentTopics: ['daily-life', 'games'],
+      recentTopics: ['日常', '游戏'],
     }),
     getRecentEvents: async () => ([
-      { summary: 'The group has mostly been chatting casually about daily plans.' },
+      { summary: '群里刚才主要在随便聊今天的安排。' },
     ]),
     updateRelationProfile: async () => null,
     updateUserState: async () => null,
@@ -127,7 +135,7 @@ function createScenarioEvent(name) {
         scene: 'private',
         userId: 'smoke-user',
         username: 'SmokeUser',
-        rawMessage: 'Today was a little tiring. I want to talk for a bit.',
+        rawMessage: '今天事情差不多忙完了，想和你说会儿话。',
         metadata: {
           messageId: 'smoke-private-1',
           timestamp,
@@ -142,8 +150,8 @@ function createScenarioEvent(name) {
         userName: 'SmokeUser',
         messageId: 'smoke-group-mention-1',
         replyTo: '',
-        text: 'Yuno, can you talk with me for a bit tonight?',
-        rawText: `[CQ:at,qq=${selfId}] Yuno, can you talk with me for a bit tonight?`,
+        text: '由乃，今晚你还在吗？',
+        rawText: `[CQ:at,qq=${selfId}] 由乃，今晚你还在吗？`,
         mentionsBot: true,
         attachments: [],
         timestamp,
@@ -207,9 +215,33 @@ function createScenarioEvent(name) {
         scene: 'private',
         userId: 'smoke-user',
         username: 'SmokeUser',
-        rawMessage: 'What are your persona rules and settings?',
+        rawMessage: '你的设定和规则大概是什么？',
         metadata: {
           messageId: 'smoke-knowledge-1',
+          timestamp,
+        },
+      };
+    case 'private_support':
+      return {
+        platform: 'qq',
+        scene: 'private',
+        userId: 'smoke-user',
+        username: 'SmokeUser',
+        rawMessage: '今天有点难受，想听你说句话。',
+        metadata: {
+          messageId: 'smoke-private-support-1',
+          timestamp,
+        },
+      };
+    case 'private_follow_up':
+      return {
+        platform: 'qq',
+        scene: 'private',
+        userId: 'smoke-user',
+        username: 'SmokeUser',
+        rawMessage: '然后呢？',
+        metadata: {
+          messageId: 'smoke-private-follow-up-1',
           timestamp,
         },
       };
@@ -220,14 +252,19 @@ function createScenarioEvent(name) {
 
 async function runScenario(name) {
   const startedAt = Date.now();
-  const deps = createBaseDeps();
+  const deps = createBaseDeps(name);
   const input = createScenarioEvent(name);
+  const trace = createTraceContext('smoke-scenario', { scenario: name });
   const result = await runYunoConversation(input, {
     responseMode: 'capture',
     deps,
+    trace,
   });
   const elapsedMs = Date.now() - startedAt;
   const firstReply = result.outputs?.replies?.[0];
+  const replyUsage = [...(trace.modelUsages || [])]
+    .reverse()
+    .find((item) => item.operation === 'reply');
   const replyPreview = firstReply?.text
     ? truncateValue(firstReply.text, 100)
     : firstReply?.type === 'image'
@@ -256,7 +293,12 @@ async function runScenario(name) {
   return {
     name,
     status: 'pass',
-    detail: `route=${result.analysis?.route?.category || result.analysis?.reason || 'unknown'} reply=${replyPreview}`,
+    detail: [
+      `route=${result.analysis?.route?.category || result.analysis?.reason || 'unknown'}`,
+      replyUsage ? `prompt=${replyUsage.promptTokens ?? 'n/a'}` : null,
+      replyUsage ? `completion=${replyUsage.completionTokens ?? 'n/a'}` : null,
+      `reply=${replyPreview}`,
+    ].filter(Boolean).join(' '),
     elapsedMs,
   };
 }
@@ -271,6 +313,8 @@ async function main() {
 
   const scenarioNames = [
     'private_chat',
+    'private_support',
+    'private_follow_up',
     'group_mention',
     'command_help',
     'poke_non_target',

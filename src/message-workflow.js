@@ -95,8 +95,8 @@ function resolveUserTurn(event) {
   if ((event.attachments || []).some((item) => item.type === 'face')) return `[${event.userName} 发来了一张表情]`;
   if ((event.attachments || []).some((item) => item.type === 'image')) return `[${event.userName} 发来了一张图片]`;
   if ((event.attachments || []).some((item) => item.type === 'record')) return `[${event.userName} 发来了一条语音]`;
-  if ((event.attachments || []).some((item) => item.type === 'video')) return `[${event.userName} sent a video]`;
-  if ((event.attachments || []).length > 0) return `[${event.userName} sent a message]`;
+  if ((event.attachments || []).some((item) => item.type === 'video')) return `[${event.userName} 发来了一段视频]`;
+  if ((event.attachments || []).length > 0) return `[${event.userName} 发来了一条消息]`;
 
   return cleanText;
 }
@@ -140,6 +140,13 @@ function shouldUseLightweightContext(event, analysis = null) {
   }
 
   if (analysis?.reason === 'command-trigger') {
+    return true;
+  }
+
+  if (
+    event?.chatType === 'group'
+    && ['basic-direct-mention-pass', 'keyword-pass'].includes(analysis?.reason)
+  ) {
     return true;
   }
 
@@ -558,7 +565,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
           chatId: normalizedEvent.chatId,
         };
 
-        let replyText = toolResult?.text || toolResult?.summary || 'Done.';
+        let replyText = toolResult?.text || toolResult?.summary || '已经处理好了。';
         if (toolResult?.tool) {
           const policy = resolveUserPersonaPolicy({
             userId: normalizedEvent.userId,
@@ -635,7 +642,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       conversationState: workflowContext.conversationState,
     });
 
-    const systemPrompt = deps.buildReplyContext({
+    const systemPrompt = await withTraceSpan(trace, 'build-prompt', () => Promise.resolve(deps.buildReplyContext({
       event: normalizedEvent,
       route: task,
       relation: workflowContext.relation,
@@ -650,6 +657,10 @@ export async function processIncomingMessage(event, precomputed = null, options 
       isAdmin: workflowContext.isAdmin,
       specialUser: workflowContext.specialUser,
       replyLengthProfile,
+    })), {
+      route: task.category,
+      promptProfile: replyLengthProfile.promptProfile,
+      performanceProfile: replyLengthProfile.performanceProfile,
     });
 
     const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => deps.chat(
@@ -661,7 +672,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       userTurn,
       {
         traceContext: trace,
-        promptVersion: 'reply-context/v5',
+        promptVersion: 'reply-context/v6',
         operation: 'reply',
         maxTokens: replyLengthProfile.maxTokens,
         historyLimit: replyLengthProfile.historyLimit,
@@ -672,13 +683,14 @@ export async function processIncomingMessage(event, precomputed = null, options 
       route: task.category,
       advancedMode: workflowContext.isAdvanced,
       replyLengthTier: replyLengthProfile.tier,
+      replyPerformanceProfile: replyLengthProfile.performanceProfile,
       replyMaxTokens: replyLengthProfile.maxTokens,
       replyHistoryLimit: replyLengthProfile.historyLimit,
       replyTemperature: replyLengthProfile.temperature,
       promptProfile: replyLengthProfile.promptProfile,
     });
 
-    const visibleReplyText = stripHiddenReasoning(rawReplyText) || 'I swallowed that one. Say it to me again.';
+    const visibleReplyText = stripHiddenReasoning(rawReplyText) || '刚才那句被我吞掉了，你再说一遍。';
     if (visibleReplyText !== String(rawReplyText || '').trim()) {
       recordWorkflowMetric('yuno_hidden_reasoning_stripped_total', 1, {
         chat_type: normalizedEvent.chatType,
@@ -768,6 +780,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       decisionReason: analysis.reason,
       contextMode: workflowContext.contextMode || 'full',
       replyLengthTier: replyLengthProfile.tier,
+      replyPerformanceProfile: replyLengthProfile.performanceProfile,
       replyMaxTokens: replyLengthProfile.maxTokens,
     });
     return replyText;

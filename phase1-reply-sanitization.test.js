@@ -19,15 +19,8 @@ function createEvent(overrides = {}) {
   };
 }
 
-test('stripHiddenReasoning removes think tags and keeps visible reply text', () => {
-  const result = stripHiddenReasoning('<think>internal plan</think>\n我也喜欢你。');
-  assert.equal(result, '我也喜欢你。');
-});
-
-test('processIncomingMessage strips hidden reasoning before sending the reply', async () => {
-  const sentReplies = [];
-
-  const reply = await processIncomingMessage(createEvent(), {
+function createContext(overrides = {}) {
+  return {
     relation: { _id: 'r1', affection: 72, activeScore: 20, preferences: [], favoriteTopics: [], userId: '10001', platform: 'qq', chatType: 'private', chatId: '10001' },
     userState: { _id: 'u1', currentEmotion: 'AFFECTIONATE', intensity: 0.4, triggerReason: 'baseline', userId: '10001', platform: 'qq', chatType: 'private', chatId: '10001' },
     userProfile: { _id: 'p1', profileSummary: '', favoriteTopics: [], dislikes: [], preferredName: '', tonePreference: '' },
@@ -48,27 +41,85 @@ test('processIncomingMessage strips hidden reasoning before sending the reply', 
       ruleSignals: ['private-chat'],
       replyStyle: 'calm',
     },
-  }, {
-    deps: {
-      sendReply: async (_target, text) => {
+    ...overrides,
+  };
+}
+
+function createDeps(sendReply, chat) {
+  return {
+    sendReply,
+    sendVoice: async () => false,
+    retrieveKnowledge: async () => ({
+      enabled: false,
+      documents: [],
+      reason: 'disabled',
+    }),
+    chat,
+    appendConversationMessages: async () => null,
+    updateRelationProfile: async () => null,
+    updateUserState: async () => null,
+    updateUserProfileMemory: async () => null,
+    shouldSendVoiceForEmotion: () => false,
+  };
+}
+
+test('stripHiddenReasoning removes think tags and keeps visible reply text', () => {
+  const result = stripHiddenReasoning('<think>internal plan</think>\n我也喜欢你。');
+  assert.equal(result, '我也喜欢你。');
+});
+
+test('processIncomingMessage strips hidden reasoning before sending the reply', async () => {
+  const sentReplies = [];
+
+  const reply = await processIncomingMessage(createEvent(), createContext(), {
+    deps: createDeps(
+      async (_target, text) => {
         sentReplies.push(text);
       },
-      sendVoice: async () => false,
-      retrieveKnowledge: async () => ({
-        enabled: false,
-        documents: [],
-        reason: 'disabled',
-      }),
-      chat: async () => '<think>用户在表白，需要先分析语气。</think>\n我也喜欢你。',
-      appendConversationMessages: async () => null,
-      updateRelationProfile: async () => null,
-      updateUserState: async () => null,
-      updateUserProfileMemory: async () => null,
-      shouldSendVoiceForEmotion: () => false,
-    },
+      async () => '<think>用户在表白，先分析语气。</think>\n我也喜欢你。'
+    ),
   });
 
   assert.equal(reply, '我也喜欢你。');
   assert.equal(sentReplies[0], '我也喜欢你。');
   assert.equal(sentReplies[0].includes('<think>'), false);
+});
+
+test('processIncomingMessage falls back to a Chinese retry line when only hidden reasoning is returned', async () => {
+  const sentReplies = [];
+
+  const reply = await processIncomingMessage(
+    createEvent({
+      rawText: '你还在吗？',
+      text: '你还在吗？',
+    }),
+    createContext({
+      event: createEvent({
+        rawText: '你还在吗？',
+        text: '你还在吗？',
+      }),
+      analysis: {
+        shouldRespond: true,
+        confidence: 0.95,
+        intent: 'chat',
+        sentiment: 'neutral',
+        relevance: 0.82,
+        reason: 'private-default-reply',
+        topics: ['在吗'],
+        ruleSignals: ['private-chat'],
+        replyStyle: 'calm',
+      },
+    }),
+    {
+      deps: createDeps(
+        async (_target, text) => {
+          sentReplies.push(text);
+        },
+        async () => '<think>这里只有隐藏思考</think>'
+      ),
+    }
+  );
+
+  assert.equal(reply, '刚才那句被我吞掉了，你再说一遍。');
+  assert.equal(sentReplies[0], '刚才那句被我吞掉了，你再说一遍。');
 });
