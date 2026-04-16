@@ -16,10 +16,73 @@ const client = new OpenAI({
   baseURL: config.llmBaseUrl,
 });
 
-function recordModelUsage(traceContext, payload, response, operation) {
-  if (!traceContext) {
-    return;
+const breakerState = {
+  consecutiveFailures: 0,
+  openUntil: 0,
+};
+
+function createTimeoutError(operation, timeoutMs) {
+  const error = new Error(`Model ${operation} timed out after ${timeoutMs}ms`);
+  error.code = 'MODEL_TIMEOUT';
+  error.operation = operation;
+  error.timeoutMs = timeoutMs;
+  return error;
+}
+
+async function withTimeout(task, timeoutMs, operation) {
+  const safeTimeout = Math.max(1000, Number(timeoutMs || config.requestTimeoutMs || 15000));
+  let timer = null;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(createTimeoutError(operation, safeTimeout)), safeTimeout);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
+}
+
+function isCircuitOpen() {
+  return Date.now() < breakerState.openUntil;
+}
+
+function raiseCircuitOpenError(operation) {
+  const remainingMs = Math.max(0, breakerState.openUntil - Date.now());
+  const error = new Error(`Model circuit open for ${remainingMs}ms`);
+  error.code = 'MODEL_CIRCUIT_OPEN';
+  error.operation = operation;
+  error.retryAfterMs = remainingMs;
+  return error;
+}
+
+function markModelSuccess() {
+  breakerState.consecutiveFailures = 0;
+  breakerState.openUntil = 0;
+}
+
+function markModelFailure(error, operation, traceContext) {
+  if (error?.code === 'MODEL_CIRCUIT_OPEN') return;
+
+  breakerState.consecutiveFailures += 1;
+  const threshold = Math.max(2, Number(config.modelCircuitFailureThreshold || 3));
+  if (breakerState.consecutiveFailures < threshold) return;
+
+  const openMs = Math.max(5000, Number(config.modelCircuitOpenMs || 20000));
+  breakerState.openUntil = Date.now() + openMs;
+  breakerState.consecutiveFailures = 0;
+
+  logger.warn('model', 'Circuit opened after consecutive failures', {
+    traceId: traceContext?.traceId,
+    operation,
+    openMs,
+    reason: error?.code || error?.message || 'unknown',
+  });
+}
+
+function recordModelUsage(traceContext, payload, response, operation) {
+  if (!traceContext) return;
 
   const usage = {
     operation: operation || 'chat',
@@ -38,6 +101,7 @@ function recordModelUsage(traceContext, payload, response, operation) {
 
 async function createChatCompletion(messages, options = {}) {
   const startedAt = Date.now();
+  const operation = options.operation || 'chat';
   const payload = {
     model: options.model || config.llmChatModel,
     messages,
@@ -57,30 +121,44 @@ async function createChatCompletion(messages, options = {}) {
     throw new Error('Missing LLM chat model configuration');
   }
 
-  const response = await withRetry(
-    () => client.chat.completions.create(payload),
-    {
-      retries: config.retryAttempts,
-      delayMs: config.retryDelayMs,
-      category: 'model',
-      label: 'chat completion',
-      logger,
-    }
-  );
+  if (isCircuitOpen()) {
+    throw raiseCircuitOpenError(operation);
+  }
 
-  logger.info('model', 'Chat completion finished', {
-    traceId: options.traceContext?.traceId,
-    operation: options.operation || 'chat',
-    promptVersion: options.promptVersion,
-    model: payload.model,
-    elapsedMs: Date.now() - startedAt,
-    promptTokens: response.usage?.prompt_tokens,
-    completionTokens: response.usage?.completion_tokens,
-    totalTokens: response.usage?.total_tokens,
-  });
+  try {
+    const response = await withRetry(
+      () => withTimeout(
+        () => client.chat.completions.create(payload),
+        options.timeoutMs || config.requestTimeoutMs,
+        operation
+      ),
+      {
+        retries: config.retryAttempts,
+        delayMs: config.retryDelayMs,
+        category: 'model',
+        label: 'chat completion',
+        logger,
+      }
+    );
 
-  recordModelUsage(options.traceContext, payload, response, options.operation);
-  return response;
+    markModelSuccess();
+    logger.info('model', 'Chat completion finished', {
+      traceId: options.traceContext?.traceId,
+      operation,
+      promptVersion: options.promptVersion,
+      model: payload.model,
+      elapsedMs: Date.now() - startedAt,
+      promptTokens: response.usage?.prompt_tokens,
+      completionTokens: response.usage?.completion_tokens,
+      totalTokens: response.usage?.total_tokens,
+    });
+
+    recordModelUsage(options.traceContext, payload, response, operation);
+    return response;
+  } catch (error) {
+    markModelFailure(error, operation, options.traceContext);
+    throw error;
+  }
 }
 
 function readFirstChoiceContent(response, fallback = '') {
@@ -90,30 +168,45 @@ function readFirstChoiceContent(response, fallback = '') {
 export async function createEmbeddings(input, options = {}) {
   const startedAt = Date.now();
   const normalizedInput = Array.isArray(input) ? input : [input];
+  const operation = options.operation || 'embedding';
 
-  const response = await withRetry(
-    () => client.embeddings.create({
+  if (isCircuitOpen()) {
+    throw raiseCircuitOpenError(operation);
+  }
+
+  try {
+    const response = await withRetry(
+      () => withTimeout(
+        () => client.embeddings.create({
+          model: options.model || config.embeddingModel,
+          input: normalizedInput,
+        }),
+        options.timeoutMs || config.requestTimeoutMs,
+        operation
+      ),
+      {
+        retries: config.retryAttempts,
+        delayMs: config.retryDelayMs,
+        category: 'model',
+        label: 'embeddings',
+        logger,
+      }
+    );
+
+    markModelSuccess();
+    logger.info('model', 'Embeddings finished', {
+      traceId: options.traceContext?.traceId,
+      operation,
       model: options.model || config.embeddingModel,
-      input: normalizedInput,
-    }),
-    {
-      retries: config.retryAttempts,
-      delayMs: config.retryDelayMs,
-      category: 'model',
-      label: 'embeddings',
-      logger,
-    }
-  );
+      elapsedMs: Date.now() - startedAt,
+      inputCount: normalizedInput.length,
+    });
 
-  logger.info('model', 'Embeddings finished', {
-    traceId: options.traceContext?.traceId,
-    operation: options.operation || 'embedding',
-    model: options.model || config.embeddingModel,
-    elapsedMs: Date.now() - startedAt,
-    inputCount: normalizedInput.length,
-  });
-
-  return response.data || [];
+    return response.data || [];
+  } catch (error) {
+    markModelFailure(error, operation, options.traceContext);
+    throw error;
+  }
 }
 
 export async function chat(messages, systemPrompt, userMessage = null, options = {}) {
@@ -122,10 +215,10 @@ export async function chat(messages, systemPrompt, userMessage = null, options =
     {
       role: 'system',
       content: [
-        '只输出最终给用户看的回复。',
+        '只输出最终回复文本。',
         '默认使用中文，除非用户明确要求英文。',
-        '不要输出隐藏思考、分析过程、规划说明、角色标签，或者任何 <think>/<thinking> 标签。',
-        '直接开始回复正文，不要先写解释。',
+        '不要输出分析过程、规则说明、角色标签，不要输出 <think>/<thinking>。',
+        '先回答用户当前这句话，再补一层必要延展。',
         systemPrompt,
       ].join('\n'),
     },
@@ -137,7 +230,7 @@ export async function chat(messages, systemPrompt, userMessage = null, options =
   } else if (conversation.length === 1) {
     conversation.push({
       role: 'user',
-      content: '请根据上面的设定直接给出一条自然、简洁的中文回复。',
+      content: '请按上述设定直接给出一条自然、简洁的中文回复。',
     });
   }
 
@@ -363,3 +456,4 @@ export async function tts(text, options = {}) {
 
   return Buffer.from(response.data);
 }
+

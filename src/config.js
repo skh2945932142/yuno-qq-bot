@@ -61,6 +61,8 @@ export const config = Object.freeze({
   voiceSampleRate: readNumber('VOICE_SAMPLE_RATE', 24000),
   voiceBitrate: readNumber('VOICE_BITRATE', 24000),
   requestTimeoutMs: readNumber('REQUEST_TIMEOUT_MS', 15000),
+  modelCircuitFailureThreshold: readNumber('MODEL_CIRCUIT_FAILURE_THRESHOLD', 3),
+  modelCircuitOpenMs: readNumber('MODEL_CIRCUIT_OPEN_MS', 20000),
   retryAttempts: readNumber('RETRY_ATTEMPTS', 2),
   retryDelayMs: readNumber('RETRY_DELAY_MS', 400),
   groupChatMaxTokens: readNumber('GROUP_CHAT_MAX_TOKENS', 360),

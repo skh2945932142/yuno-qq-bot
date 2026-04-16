@@ -39,14 +39,14 @@ test('resolveReplyLengthProfile expands knowledge answers more than normal group
   });
 
   assert.equal(groupProfile.tier, 'balanced');
-  assert.equal(groupProfile.maxTokens, 240);
+  assert.equal(groupProfile.maxTokens, 180);
   assert.equal(groupProfile.promptProfile, 'fast');
-  assert.equal(groupProfile.historyLimit, 2);
+  assert.equal(groupProfile.historyLimit, 1);
   assert.equal(groupProfile.performanceProfile, 'fast_chat');
   assert.equal(knowledgeProfile.tier, 'expanded');
   assert.equal(knowledgeProfile.maxTokens, config.knowledgeReplyMaxTokens);
   assert.equal(knowledgeProfile.promptProfile, 'standard');
-  assert.equal(knowledgeProfile.historyLimit, 5);
+  assert.equal(knowledgeProfile.historyLimit, 4);
   assert.equal(knowledgeProfile.performanceProfile, 'knowledge_chat');
 });
 
@@ -85,11 +85,9 @@ test('buildReplyContext includes reply length guidance and prompt profile', () =
     },
   });
 
-  assert.match(prompt, /回复节奏/);
-  assert.match(prompt, /性能档=standard_chat/);
-  assert.match(prompt, /长度档=expanded/);
-  assert.match(prompt, /上限=520 tokens/);
-  assert.match(prompt, /历史窗口=6/);
+  assert.match(prompt, /场景/);
+  assert.match(prompt, /会话=私聊 路由=private_chat 模式=standard_chat/);
+  assert.match(prompt, /长度要求=这一轮可更完整/);
   assert.match(prompt, /默认使用中文/);
   assert.match(prompt, /接话规划/);
 });
@@ -108,8 +106,8 @@ test('resolveReplyLengthProfile uses fast_chat for ordinary private openings', (
 
   assert.equal(profile.performanceProfile, 'fast_chat');
   assert.equal(profile.promptProfile, 'fast');
-  assert.equal(profile.historyLimit, 3);
-  assert.equal(profile.maxTokens, 320);
+  assert.equal(profile.historyLimit, 2);
+  assert.equal(profile.maxTokens, 260);
 });
 
 test('processIncomingMessage passes route-specific generation profile to chat', async () => {
@@ -169,8 +167,7 @@ test('processIncomingMessage passes route-specific generation profile to chat', 
     },
   });
 
-  assert.equal(captured[0].maxTokens, 420);
-  assert.equal(captured[0].historyLimit, 5);
-  assert.equal(captured[0].temperature, 0.54);
+  assert.equal(captured[0].maxTokens, 360);
+  assert.equal(captured[0].historyLimit, 4);
+  assert.equal(captured[0].temperature, 0.52);
 });
-

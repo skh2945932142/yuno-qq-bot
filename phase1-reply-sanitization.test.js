@@ -195,3 +195,53 @@ test('group chat uses lightweight throttle hint for burst triggers from same use
   assert.equal(third, '我在听，慢一点说，我一条条接住。');
   assert.equal(sentReplies[2], '我在听，慢一点说，我一条条接住。');
 });
+
+test('processIncomingMessage degrades gracefully when model times out', async () => {
+  const sentReplies = [];
+
+  const timeoutError = new Error('Model reply timed out');
+  timeoutError.code = 'MODEL_TIMEOUT';
+
+  const reply = await processIncomingMessage(createEvent({
+    chatType: 'group',
+    chatId: 'group-timeout',
+    userId: 'timeout-user',
+    mentionsBot: true,
+    rawText: '@由乃 你在吗',
+    text: '@由乃 你在吗',
+  }), createContext({
+    relation: { _id: 'r1', affection: 55, activeScore: 10, preferences: [], favoriteTopics: [], userId: 'timeout-user', platform: 'qq', chatType: 'group', chatId: 'group-timeout' },
+    userState: { _id: 'u1', currentEmotion: 'CALM', intensity: 0.2, triggerReason: 'baseline', userId: 'timeout-user', platform: 'qq', chatType: 'group', chatId: 'group-timeout' },
+    event: createEvent({
+      chatType: 'group',
+      chatId: 'group-timeout',
+      userId: 'timeout-user',
+      mentionsBot: true,
+      rawText: '@由乃 你在吗',
+      text: '@由乃 你在吗',
+    }),
+    analysis: {
+      shouldRespond: true,
+      confidence: 0.9,
+      intent: 'chat',
+      sentiment: 'neutral',
+      relevance: 0.8,
+      reason: 'basic-direct-mention-pass',
+      topics: ['chat'],
+      ruleSignals: ['direct-mention'],
+      replyStyle: 'calm',
+    },
+  }), {
+    deps: createDeps(
+      async (_target, text) => {
+        sentReplies.push(text);
+      },
+      async () => {
+        throw timeoutError;
+      }
+    ),
+  });
+
+  assert.match(reply, /刚卡了一下|有点抖动/);
+  assert.equal(sentReplies.length, 1);
+});

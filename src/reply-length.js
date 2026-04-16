@@ -79,25 +79,25 @@ function buildGuidance(event, tier, performanceProfile) {
 
   if (performanceProfile === 'fast_chat') {
     return isPrivate
-      ? '这是轻量私聊回复：先接住当前这句话，用 2 到 4 句中文说明白，少铺垫。'
-      : '这是轻量群聊回复：先接话，再补一句态度，控制在 2 到 3 句。';
+      ? '这是轻量私聊回复：先接住当前输入，2-4 句内回答清楚，少铺垫。'
+      : '这是轻量群聊回复：先短接话，最多补一层，2-3 句内收住。';
   }
 
   if (tier === 'concise') {
     return isPrivate
-      ? '这一轮偏短：私聊直接回应重点，保持温度但不拖长。'
-      : '这一轮偏短：群聊利落接话，不刷屏。';
+      ? '这一轮偏短：先回应重点，再给一句情绪承接。'
+      : '这一轮偏短：群聊短接话，不刷屏。';
   }
 
   if (tier === 'expanded') {
     return isPrivate
-      ? '这一轮可更完整：私聊先回答，再补一层情绪或细节，必要时轻追问。'
-      : '这一轮可适度展开：群聊最多补一层，不写成长文。';
+      ? '这一轮可更完整：先回答，再补一层细节或情绪，必要时轻追问。'
+      : '这一轮可适度展开：群聊最多补一层，不写长文。';
   }
 
   return isPrivate
-    ? '这一轮保持均衡：私聊自然回答，必要时顺手追问一条。'
-    : '这一轮保持均衡：群聊会接话但收得住。';
+    ? '这一轮保持均衡：自然回答，必要时顺手追问一条。'
+    : '这一轮保持均衡：会接话，但收得住。';
 }
 
 function buildGenerationProfile({
@@ -108,46 +108,46 @@ function buildGenerationProfile({
   hasRecentContext,
   performanceProfile,
 }) {
-  let historyLimit = isPrivate ? 5 : 4;
-  let temperature = isPrivate ? 0.64 : 0.54;
+  let historyLimit = isPrivate ? 4 : 3;
+  let temperature = isPrivate ? 0.62 : 0.52;
   let promptProfile = 'compact';
 
   if (performanceProfile === 'knowledge_chat' || routeCategory === 'knowledge_qa') {
-    historyLimit = isPrivate ? 8 : 5;
-    temperature = 0.38;
+    historyLimit = isPrivate ? 6 : 4;
+    temperature = 0.36;
     promptProfile = 'standard';
   } else if (performanceProfile === 'fast_chat') {
-    historyLimit = isPrivate ? 3 : 2;
-    temperature = isPrivate ? 0.56 : 0.48;
+    historyLimit = isPrivate ? 2 : 1;
+    temperature = isPrivate ? 0.54 : 0.46;
     promptProfile = 'fast';
   } else if (routeCategory === 'follow_up' && hasRecentContext) {
-    historyLimit = isPrivate ? 7 : 5;
-    temperature = isPrivate ? 0.62 : 0.54;
-    promptProfile = 'standard';
-  } else if (routeCategory === 'cold_start') {
     historyLimit = isPrivate ? 5 : 4;
-    temperature = isPrivate ? 0.68 : 0.56;
+    temperature = isPrivate ? 0.6 : 0.52;
+    promptProfile = 'compact';
+  } else if (routeCategory === 'cold_start') {
+    historyLimit = isPrivate ? 4 : 3;
+    temperature = isPrivate ? 0.66 : 0.54;
     promptProfile = 'compact';
   } else if (routeCategory === 'poke') {
-    historyLimit = 2;
+    historyLimit = 1;
     temperature = 0.5;
     promptProfile = 'fast';
   }
 
   if (needsSupport(analysis)) {
-    historyLimit = Math.max(historyLimit, isPrivate ? 7 : 5);
-    temperature = Math.min(temperature, 0.56);
-    promptProfile = 'standard';
+    historyLimit = Math.max(historyLimit, isPrivate ? 5 : 4);
+    temperature = Math.min(temperature, 0.54);
+    promptProfile = 'compact';
   }
 
   if ((analysis?.relevance || 0) >= 0.85 && routeCategory === 'group_chat') {
-    historyLimit = Math.max(historyLimit, 5);
-    promptProfile = 'standard';
+    historyLimit = Math.max(historyLimit, 4);
+    promptProfile = 'compact';
   }
 
   if (isStrongEmotion(emotionResult)) {
-    historyLimit = Math.max(historyLimit, isPrivate ? 7 : 5);
-    promptProfile = 'standard';
+    historyLimit = Math.max(historyLimit, isPrivate ? 5 : 4);
+    promptProfile = 'compact';
   }
 
   return {
@@ -182,38 +182,38 @@ export function resolveReplyLengthProfile({
     reason = 'knowledge-route';
   } else if (routeCategory === 'follow_up' && hasRecentContext) {
     tier = 'expanded';
-    maxTokens = isPrivate ? config.privateChatMaxTokens : Math.max(config.groupChatMaxTokens, 420);
+    maxTokens = isPrivate ? Math.min(config.privateChatMaxTokens, 420) : Math.max(config.groupChatMaxTokens, 360);
     reason = 'follow-up-route';
   } else if (routeCategory === 'cold_start') {
-    tier = isPrivate ? 'expanded' : 'balanced';
-    maxTokens = isPrivate ? config.privateChatMaxTokens : config.groupChatMaxTokens;
+    tier = isPrivate ? 'balanced' : 'balanced';
+    maxTokens = isPrivate ? Math.min(config.privateChatMaxTokens, 380) : config.groupChatMaxTokens;
     reason = 'cold-start-route';
   } else if (routeCategory === 'poke') {
     tier = 'concise';
-    maxTokens = isPrivate ? 160 : 96;
+    maxTokens = isPrivate ? 120 : 80;
     reason = 'poke-fast-path';
   }
 
   if (analysis?.intent === 'help') {
     tier = 'expanded';
-    maxTokens = Math.max(maxTokens, isPrivate ? config.privateChatMaxTokens : 420);
+    maxTokens = Math.max(maxTokens, isPrivate ? 420 : 360);
     reason = 'supportive-intent';
   } else if (
     analysis?.intent === 'social'
     && analysis?.sentiment === 'positive'
     && routeCategory !== 'knowledge_qa'
   ) {
-    tier = isPrivate ? 'expanded' : 'balanced';
-    maxTokens = Math.max(maxTokens, isPrivate ? config.privateChatMaxTokens : config.groupChatMaxTokens);
+    tier = isPrivate ? 'balanced' : 'balanced';
+    maxTokens = Math.max(maxTokens, isPrivate ? 360 : config.groupChatMaxTokens);
     reason = 'positive-social-intent';
   } else if ((analysis?.relevance || 0) >= 0.85 && routeCategory === 'group_chat') {
-    tier = 'expanded';
-    maxTokens = Math.max(maxTokens, 420);
+    tier = 'balanced';
+    maxTokens = Math.max(maxTokens, 360);
     reason = 'high-relevance-group';
   }
 
   if (isStrongEmotion(emotionResult)) {
-    maxTokens = Math.max(maxTokens, isPrivate ? config.privateChatMaxTokens : config.groupChatMaxTokens);
+    maxTokens = Math.max(maxTokens, isPrivate ? 360 : config.groupChatMaxTokens);
     if (tier === 'concise') tier = 'balanced';
   }
 
@@ -228,7 +228,7 @@ export function resolveReplyLengthProfile({
 
   if (performanceProfile === 'fast_chat') {
     tier = tier === 'expanded' ? 'balanced' : tier;
-    maxTokens = Math.min(maxTokens, isPrivate ? 320 : 240);
+    maxTokens = Math.min(maxTokens, isPrivate ? 260 : 180);
     reason = `${reason}+fast-chat`;
   }
 

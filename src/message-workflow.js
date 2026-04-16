@@ -135,6 +135,45 @@ function dedupeConsecutiveShortSentences(text) {
   return kept.join('');
 }
 
+function isModelUnavailableError(error) {
+  const code = String(error?.code || '').toUpperCase();
+  const status = Number(error?.status || error?.response?.status || 0);
+  return code === 'MODEL_TIMEOUT'
+    || code === 'MODEL_CIRCUIT_OPEN'
+    || code === 'ECONNRESET'
+    || code === 'ETIMEDOUT'
+    || status === 429
+    || status >= 500;
+}
+
+function buildModelFallbackReply(event, task, error) {
+  const route = task?.category || 'chat';
+  const reason = String(error?.code || '').toUpperCase();
+  const isPrivate = event?.chatType === 'private';
+
+  if (route === 'knowledge_qa') {
+    return isPrivate
+      ? '我这边刚才查资料有点卡住了。你把问题再发我一次，我优先给你补全。'
+      : '我这边刚才查资料卡了一下，你再说一次，我马上补上。';
+  }
+
+  if (reason === 'MODEL_CIRCUIT_OPEN') {
+    return isPrivate
+      ? '我这边刚刚短暂拥堵了，但我还在。你再发一次，我优先接你这条。'
+      : '我这边刚刚短暂拥堵了，你再发一次，我立刻接上。';
+  }
+
+  if (reason === 'MODEL_TIMEOUT') {
+    return isPrivate
+      ? '我刚才卡了一下，还在听你。把刚刚那句再发我一次，我马上接。'
+      : '我这边刚卡了一下，你再说一次，我马上接。';
+  }
+
+  return isPrivate
+    ? '我这边刚才有点抖动，但我还在。你再发一次，我接着说。'
+    : '我这边刚才有点抖动，你再说一次，我马上接。';
+}
+
 export function shapeChatReplyText(text, emotionResult) {
   let output = normalizeReplyFormatting(enforceEmojiBudget(text, emotionResult));
   output = normalizeEllipsis(output, config.chatEllipsisLimit);
@@ -541,7 +580,35 @@ async function persistReplyState(context, payload, trace, deps) {
   });
 
   if (failures.length > 0) {
-    const failureDetails = failures.map((item) => ({
+    const retryResults = await Promise.allSettled(
+      failures.map((item) => namedTasks.find((task) => task.name === item.name)?.run?.())
+    );
+    const finalFailures = retryResults
+      .map((result, index) => ({ result, task: failures[index]?.name }))
+      .filter((item) => item.result.status === 'rejected');
+
+    const failureDetails = finalFailures.map((item) => ({
+      task: item.task,
+      error: item.result.reason?.message || String(item.result.reason || 'unknown-error'),
+    }));
+
+    if (failureDetails.length === 0) {
+      recordWorkflowMetric('yuno_persist_retry_recovered_total', 1, {
+        chat_type: context.event.chatType,
+      });
+      logger.info('memory', 'Post-reply state updates recovered after retry', {
+        traceId: trace.traceId,
+        chatType: context.event.chatType,
+        chatId: context.event.chatId,
+        userId: context.event.userId,
+        messageId: context.event.messageId,
+        failed: failures.length,
+        decisionReason: payload.analysis.reason,
+      });
+      return;
+    }
+
+    const firstFailureDetails = failures.map((item) => ({
       task: item.name,
       error: item.result.reason?.message || String(item.result.reason || 'unknown-error'),
     }));
@@ -552,9 +619,10 @@ async function persistReplyState(context, payload, trace, deps) {
       chatId: context.event.chatId,
       userId: context.event.userId,
       messageId: context.event.messageId,
-      failed: failures.length,
+      failed: finalFailures.length,
       decisionReason: payload.analysis.reason,
       failures: failureDetails,
+      firstAttemptFailures: firstFailureDetails,
     });
   }
 }
@@ -875,47 +943,72 @@ export async function processIncomingMessage(event, precomputed = null, options 
       replyPlanType: replyPlan.type,
     });
 
-    const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => deps.chat(
-      (workflowContext.conversationState.messages || []).map((item) => ({
-        role: item.role,
-        content: item.content,
-      })),
-      systemPrompt,
-      userTurn,
-      {
-        traceContext: trace,
-        promptVersion: 'reply-context/v6',
-        operation: 'reply',
-        maxTokens: replyLengthProfile.maxTokens,
-        historyLimit: replyLengthProfile.historyLimit,
-        temperature: replyLengthProfile.temperature,
-      }
-    ), {
-      historySize: workflowContext.conversationState.messages.length,
-      route: task.category,
-      advancedMode: workflowContext.isAdvanced,
-      replyLengthTier: replyLengthProfile.tier,
-      replyPerformanceProfile: replyLengthProfile.performanceProfile,
-      replyMaxTokens: replyLengthProfile.maxTokens,
-      replyHistoryLimit: replyLengthProfile.historyLimit,
-      replyTemperature: replyLengthProfile.temperature,
-      promptProfile: replyLengthProfile.promptProfile,
-    });
+    let visibleReplyText = '';
+    try {
+      const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => deps.chat(
+        (workflowContext.conversationState.messages || []).map((item) => ({
+          role: item.role,
+          content: item.content,
+        })),
+        systemPrompt,
+        userTurn,
+        {
+          traceContext: trace,
+          promptVersion: 'reply-context/v6',
+          operation: 'reply',
+          maxTokens: replyLengthProfile.maxTokens,
+          historyLimit: replyLengthProfile.historyLimit,
+          temperature: replyLengthProfile.temperature,
+        }
+      ), {
+        historySize: workflowContext.conversationState.messages.length,
+        route: task.category,
+        advancedMode: workflowContext.isAdvanced,
+        replyLengthTier: replyLengthProfile.tier,
+        replyPerformanceProfile: replyLengthProfile.performanceProfile,
+        replyMaxTokens: replyLengthProfile.maxTokens,
+        replyHistoryLimit: replyLengthProfile.historyLimit,
+        replyTemperature: replyLengthProfile.temperature,
+        promptProfile: replyLengthProfile.promptProfile,
+      });
 
-    const visibleReplyText = stripHiddenReasoning(rawReplyText) || '刚才那句被我吞掉了，你再说一遍。';
-    if (visibleReplyText !== String(rawReplyText || '').trim()) {
-      recordWorkflowMetric('yuno_hidden_reasoning_stripped_total', 1, {
+      visibleReplyText = stripHiddenReasoning(rawReplyText) || '刚才那句被我吞掉了，你再说一遍。';
+      if (visibleReplyText !== String(rawReplyText || '').trim()) {
+        recordWorkflowMetric('yuno_hidden_reasoning_stripped_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          route: task.category,
+        });
+        logger.info('model', 'Hidden reasoning was stripped from reply output', {
+          traceId: trace.traceId,
+          chatType: normalizedEvent.chatType,
+          chatId: normalizedEvent.chatId,
+          userId: normalizedEvent.userId,
+          messageId: normalizedEvent.messageId,
+          route: task.category,
+        });
+      }
+    } catch (error) {
+      if (!isModelUnavailableError(error)) {
+        throw error;
+      }
+
+      recordWorkflowMetric('yuno_model_fallback_total', 1, {
         chat_type: normalizedEvent.chatType,
         route: task.category,
+        reason: String(error.code || error.status || 'model-unavailable').toLowerCase(),
       });
-      logger.info('model', 'Hidden reasoning was stripped from reply output', {
+      logger.warn('model', 'Reply generation fell back to canned response', {
         traceId: trace.traceId,
         chatType: normalizedEvent.chatType,
         chatId: normalizedEvent.chatId,
         userId: normalizedEvent.userId,
         messageId: normalizedEvent.messageId,
         route: task.category,
+        code: error.code,
+        status: error.status || error.response?.status,
+        message: error.message,
       });
+      visibleReplyText = buildModelFallbackReply(normalizedEvent, task, error);
     }
 
     const replyText = shapeChatReplyText(visibleReplyText, emotionResult);
