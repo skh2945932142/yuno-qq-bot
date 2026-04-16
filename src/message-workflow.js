@@ -478,38 +478,74 @@ async function runToolTask(task, context, trace, deps) {
 }
 
 async function persistReplyState(context, payload, trace, deps) {
-  const tasks = [
-    deps.appendConversationMessages(context.session, payload.nextMessages),
-    deps.updateRelationProfile(context.relation, { text: payload.rawText, analysis: payload.analysis }),
-    deps.updateUserState(context.userState, payload.emotionResult, payload.analysis),
-    deps.updateUserProfileMemory(context.userProfile, {
-      text: payload.userTurn,
-      analysis: payload.analysis,
-      userName: payload.username,
-      userId: context.event.userId,
-      specialUser: context.specialUser,
-    }),
-  ];
+  const namedTasks = [];
 
-
-  if (context.isAdvanced) {
-    tasks.push(deps.updateGroupStateFromAnalysis({
-      groupId: context.event.chatId,
-      analysis: payload.analysis,
-      summary: payload.summary,
-    }));
-  }
-
-  const results = await withTraceSpan(trace, 'persist-state', () => Promise.allSettled(tasks), {
-    taskCount: tasks.length,
+  namedTasks.push({
+    name: 'append-conversation-messages',
+    run: () => deps.appendConversationMessages(context.session, payload.nextMessages),
   });
 
-  const failures = results.filter((item) => item.status === 'rejected');
+  if (context.relation?._id) {
+    namedTasks.push({
+      name: 'update-relation-profile',
+      run: () => deps.updateRelationProfile(context.relation, {
+        text: payload.rawText,
+        analysis: payload.analysis,
+      }),
+    });
+  }
+
+  if (context.userState?._id) {
+    namedTasks.push({
+      name: 'update-user-state',
+      run: () => deps.updateUserState(context.userState, payload.emotionResult, payload.analysis),
+    });
+  }
+
+  if (context.userProfile?._id) {
+    namedTasks.push({
+      name: 'update-user-profile-memory',
+      run: () => deps.updateUserProfileMemory(context.userProfile, {
+        text: payload.userTurn,
+        analysis: payload.analysis,
+        userName: payload.username,
+        userId: context.event.userId,
+        specialUser: context.specialUser,
+      }),
+    });
+  }
+
+  if (context.isAdvanced) {
+    namedTasks.push({
+      name: 'update-group-state',
+      run: () => deps.updateGroupStateFromAnalysis({
+        groupId: context.event.chatId,
+        analysis: payload.analysis,
+        summary: payload.summary,
+      }),
+    });
+  }
+
+  const results = await withTraceSpan(
+    trace,
+    'persist-state',
+    () => Promise.allSettled(namedTasks.map((item) => item.run())),
+    { taskCount: namedTasks.length }
+  );
+
+  const failures = results
+    .map((item, index) => ({ name: namedTasks[index]?.name || `task-${index}`, result: item }))
+    .filter((item) => item.result.status === 'rejected');
   recordWorkflowMetric('yuno_persist_failures_total', failures.length, {
     chat_type: context.event.chatType,
   });
 
   if (failures.length > 0) {
+    const failureDetails = failures.map((item) => ({
+      task: item.name,
+      error: item.result.reason?.message || String(item.result.reason || 'unknown-error'),
+    }));
+
     logger.warn('memory', 'Post-reply state updates partially failed', {
       traceId: trace.traceId,
       chatType: context.event.chatType,
@@ -518,6 +554,7 @@ async function persistReplyState(context, payload, trace, deps) {
       messageId: context.event.messageId,
       failed: failures.length,
       decisionReason: payload.analysis.reason,
+      failures: failureDetails,
     });
   }
 }
@@ -871,7 +908,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
         chat_type: normalizedEvent.chatType,
         route: task.category,
       });
-      logger.warn('model', 'Hidden reasoning was stripped from reply output', {
+      logger.info('model', 'Hidden reasoning was stripped from reply output', {
         traceId: trace.traceId,
         chatType: normalizedEvent.chatType,
         chatId: normalizedEvent.chatId,
