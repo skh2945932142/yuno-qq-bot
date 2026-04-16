@@ -9,6 +9,7 @@ await import('./phase1-doctor.test.js');
 await import('./phase1-task-router.test.js');
 await import('./phase1-workflow.test.js');
 await import('./phase1-reply-length.test.js');
+await import('./phase1-reply-intent-plan.test.js');
 await import('./phase1-reply-sanitization.test.js');
 await import('./phase1-emotion-engine-v2.test.js');
 await import('./phase1-prompt-builder.test.js');

@@ -33,6 +33,7 @@ import { getSpecialUserByUserId, getSpecialUserKnowledgeTags } from './special-u
 import { resolveUserPersonaPolicy } from './persona-policy.js';
 import { formatToolResultAsYuno, normalizeFormatterOutputs } from './yuno-formatter.js';
 import { resolveReplyLengthProfile } from './reply-length.js';
+import { resolveReplyIntentPlan } from './reply-intent-plan.js';
 
 registerQueryTools(toolRegistry);
 
@@ -40,6 +41,11 @@ const ALLOWED_SOFT_EMOJIS = new Set(['\u2764', '\u2665', '\u{1F495}', '\u{1F49E}
 const EMOJI_REGEX = /\p{Extended_Pictographic}/gu;
 const THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*?<\/\1>/gi;
 const OPEN_THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*$/i;
+const GROUP_REPLY_THROTTLE_WINDOW_MS = 25 * 1000;
+const GROUP_REPLY_THROTTLE_AFTER = 2;
+const GROUP_REPLY_THROTTLE_HINT = '我在听，慢一点说，我一条条接住。';
+const GROUP_REPLY_THROTTLE_CACHE_TTL_MS = 10 * 60 * 1000;
+const groupReplyBursts = new Map();
 
 function summarizeIncomingMessage(username, text) {
   const cleaned = stripCqCodes(text).slice(0, 80);
@@ -95,6 +101,54 @@ function joinReplyLines(lines) {
   }, '');
 }
 
+function normalizeEllipsis(text, limit = 2) {
+  const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.round(Number(limit))) : 2;
+  const target = '…'.repeat(Math.min(safeLimit, 3));
+  return String(text || '').replace(/(\.{3,}|…{2,}|\.{2,}…+|…+\.{2,})/g, target);
+}
+
+function dedupeConsecutiveShortSentences(text) {
+  const input = String(text || '').trim();
+  if (!input) return '';
+  const segments = input.match(/[^。！？!?…]+[。！？!?…]?/g);
+  if (!segments || segments.length < 2) return input;
+
+  const kept = [];
+  let previousCanonical = '';
+  for (const segment of segments) {
+    const normalized = segment.trim();
+    if (!normalized) continue;
+
+    const canonical = normalized
+      .replace(/[，,。！？!?…\s]/g, '')
+      .toLowerCase()
+      .slice(0, 24);
+    const shortSegment = normalized.length <= 26;
+    if (shortSegment && canonical && canonical === previousCanonical) {
+      continue;
+    }
+
+    kept.push(normalized);
+    previousCanonical = canonical;
+  }
+
+  return kept.join('');
+}
+
+export function shapeChatReplyText(text, emotionResult) {
+  let output = normalizeReplyFormatting(enforceEmojiBudget(text, emotionResult));
+  output = normalizeEllipsis(output, config.chatEllipsisLimit);
+
+  if (config.chatStyleRepeatGuard) {
+    output = dedupeConsecutiveShortSentences(output);
+  }
+
+  return output
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export function normalizeReplyFormatting(text) {
   const normalized = String(text || '')
     .replace(/\r\n/g, '\n')
@@ -146,6 +200,47 @@ function resolveUserTurn(event) {
   if ((event.attachments || []).length > 0) return `[${event.userName} 发来了一条消息]`;
 
   return cleanText;
+}
+
+function pruneReplyThrottleCache(now = Date.now()) {
+  const cutoff = now - GROUP_REPLY_THROTTLE_CACHE_TTL_MS;
+  for (const [key, value] of groupReplyBursts.entries()) {
+    if ((value?.lastSeenAt || 0) < cutoff) {
+      groupReplyBursts.delete(key);
+    }
+  }
+}
+
+function consumeGroupReplyThrottle(event, task) {
+  if (event?.chatType !== 'group' || task?.type !== 'chat') {
+    return { throttled: false };
+  }
+
+  const now = Date.now();
+  pruneReplyThrottleCache(now);
+  const key = `${event.chatId}:${event.userId}`;
+  const previous = groupReplyBursts.get(key);
+
+  if (!previous || now - previous.lastSeenAt > GROUP_REPLY_THROTTLE_WINDOW_MS) {
+    groupReplyBursts.set(key, { count: 1, lastSeenAt: now });
+    return { throttled: false, count: 1 };
+  }
+
+  const next = {
+    count: previous.count + 1,
+    lastSeenAt: now,
+  };
+  groupReplyBursts.set(key, next);
+
+  if (next.count > GROUP_REPLY_THROTTLE_AFTER) {
+    return {
+      throttled: true,
+      count: next.count,
+      hint: GROUP_REPLY_THROTTLE_HINT,
+    };
+  }
+
+  return { throttled: false, count: next.count };
 }
 
 function createWorkflowDeps(deps = {}) {
@@ -688,6 +783,37 @@ export async function processIncomingMessage(event, precomputed = null, options 
       emotionResult,
       conversationState: workflowContext.conversationState,
     });
+    const replyPlan = resolveReplyIntentPlan({
+      event: normalizedEvent,
+      route: task,
+      analysis,
+      conversationState: workflowContext.conversationState,
+    });
+
+    const throttleState = consumeGroupReplyThrottle(normalizedEvent, task);
+    if (throttleState.throttled) {
+      const throttledReply = shapeChatReplyText(throttleState.hint, emotionResult);
+      await withTraceSpan(trace, 'send-text-throttled', () => deps.sendReply({
+        platform: normalizedEvent.platform,
+        chatType: normalizedEvent.chatType,
+        chatId: normalizedEvent.chatId,
+      }, throttledReply));
+
+      recordWorkflowMetric('yuno_group_reply_throttled_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        route: task.category,
+      });
+
+      finalizeTrace(trace, {
+        replyType: 'chat-throttled',
+        shouldRespond: true,
+        route: task.category,
+        queueJobId: options.queueJobId,
+        messageId: normalizedEvent.messageId,
+        decisionReason: 'group-reply-throttle',
+      });
+      return throttledReply;
+    }
 
     const systemPrompt = await withTraceSpan(trace, 'build-prompt', () => Promise.resolve(deps.buildReplyContext({
       event: normalizedEvent,
@@ -704,10 +830,12 @@ export async function processIncomingMessage(event, precomputed = null, options 
       isAdmin: workflowContext.isAdmin,
       specialUser: workflowContext.specialUser,
       replyLengthProfile,
+      replyPlan,
     })), {
       route: task.category,
       promptProfile: replyLengthProfile.promptProfile,
       performanceProfile: replyLengthProfile.performanceProfile,
+      replyPlanType: replyPlan.type,
     });
 
     const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => deps.chat(
@@ -753,7 +881,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       });
     }
 
-    const replyText = normalizeReplyFormatting(enforceEmojiBudget(visibleReplyText, emotionResult));
+    const replyText = shapeChatReplyText(visibleReplyText, emotionResult);
     const nextMessages = [
       { role: 'user', content: userTurn },
       { role: 'assistant', content: replyText },
@@ -829,6 +957,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
       replyLengthTier: replyLengthProfile.tier,
       replyPerformanceProfile: replyLengthProfile.performanceProfile,
       replyMaxTokens: replyLengthProfile.maxTokens,
+      replyPlanType: replyPlan.type,
+      replyPlanDepth: replyPlan.depth,
+      replyPlanQuestionNeeded: replyPlan.questionNeeded,
     });
     return replyText;
   } catch (error) {

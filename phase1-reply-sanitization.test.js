@@ -1,6 +1,6 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
-import { processIncomingMessage, stripHiddenReasoning } from './src/message-workflow.js';
+import { processIncomingMessage, shapeChatReplyText, stripHiddenReasoning } from './src/message-workflow.js';
 
 function createEvent(overrides = {}) {
   return {
@@ -136,6 +136,62 @@ test('processIncomingMessage flattens line-by-line chat replies before sending',
     ),
   });
 
-  assert.equal(reply, '嗯...？！又饿了？！你之前不是说在吃晚饭吗...怎么还在饿...快去吃东西...');
-  assert.equal(sentReplies[0], '嗯...？！又饿了？！你之前不是说在吃晚饭吗...怎么还在饿...快去吃东西...');
+  assert.equal(reply.includes('\n'), false);
+  assert.equal(sentReplies[0].includes('\n'), false);
+  assert.match(reply, /你之前不是说在吃晚饭吗/);
+  assert.match(sentReplies[0], /快去吃东西/);
+});
+
+test('shapeChatReplyText compresses repeated short lines and excessive ellipsis', () => {
+  const output = shapeChatReplyText('好呀...\n好呀...\n我在呢......\n我在呢......', {
+    emojiBudget: 0,
+    emojiStyle: 'none',
+  });
+
+  assert.equal(output.includes('\n'), false);
+  assert.equal((output.match(/好呀/g) || []).length, 1);
+  assert.equal((output.match(/我在呢/g) || []).length, 1);
+  assert.match(output, /…/);
+});
+
+test('group chat uses lightweight throttle hint for burst triggers from same user', async () => {
+  const sentReplies = [];
+  const event = createEvent({
+    chatType: 'group',
+    chatId: 'group-1',
+    userId: 'user-1',
+    mentionsBot: true,
+    rawText: '@由乃 在吗',
+    text: '@由乃 在吗',
+  });
+  const context = createContext({
+    relation: { _id: 'r1', affection: 40, activeScore: 10, preferences: [], favoriteTopics: [], userId: 'user-1', platform: 'qq', chatType: 'group', chatId: 'group-1' },
+    userState: { _id: 'u1', currentEmotion: 'CALM', intensity: 0.2, triggerReason: 'baseline', userId: 'user-1', platform: 'qq', chatType: 'group', chatId: 'group-1' },
+    event,
+    analysis: {
+      shouldRespond: true,
+      confidence: 0.91,
+      intent: 'chat',
+      sentiment: 'neutral',
+      relevance: 0.75,
+      reason: 'basic-direct-mention-pass',
+      topics: ['chat'],
+      ruleSignals: ['direct-mention'],
+      replyStyle: 'calm',
+    },
+  });
+
+  const deps = createDeps(
+    async (_target, text) => {
+      sentReplies.push(text);
+    },
+    async () => '我在。'
+  );
+
+  await processIncomingMessage(event, context, { deps });
+  await processIncomingMessage(event, context, { deps });
+  const third = await processIncomingMessage(event, context, { deps });
+
+  assert.equal(third, '我在听，慢一点说，我一条条接住。');
+  assert.equal(sentReplies[2], '我在听，慢一点说，我一条条接住。');
 });

@@ -8,7 +8,7 @@ function normalizeTier(value, fallback) {
 }
 
 function isStrongEmotion(emotionResult) {
-  return ['PROTECTIVE', 'AFFECTIONATE', 'FIXATED'].includes(emotionResult?.emotion || '');
+  return ['PROTECTIVE', 'AFFECTIONATE', 'FIXATED', 'DEVOTED'].includes(emotionResult?.emotion || '');
 }
 
 function needsSupport(analysis) {
@@ -28,13 +28,8 @@ function resolvePerformanceProfile({
   const recentMessageCount = conversationState?.messages?.length || 0;
   const hasDeepFollowUpContext = recentMessageCount >= 4 || Boolean(conversationState?.rollingSummary);
 
-  if (routeCategory === 'knowledge_qa') {
-    return 'knowledge_chat';
-  }
-
-  if (routeCategory === 'poke') {
-    return 'fast_chat';
-  }
+  if (routeCategory === 'knowledge_qa') return 'knowledge_chat';
+  if (routeCategory === 'poke') return 'fast_chat';
 
   if (
     routeCategory === 'group_chat'
@@ -79,30 +74,30 @@ function resolvePerformanceProfile({
 function buildGuidance(event, tier, performanceProfile) {
   const isPrivate = event.chatType === 'private';
   if (performanceProfile === 'knowledge_chat') {
-    return '这是知识或设定类回复。先把信息讲清楚，再保留一点由乃的语气。';
+    return '这是知识/设定类回复。先把信息说清楚，再保留一点由乃语气。';
   }
 
   if (performanceProfile === 'fast_chat') {
     return isPrivate
-      ? '这是轻量私聊回复。先接住当前这句话，用 2 到 4 句中文直接说清楚，不要铺垫太久。'
-      : '这是轻量群聊回复。先接话，再补一句态度，2 到 3 句内收住，不要拖成长段。';
+      ? '这是轻量私聊回复：先接住当前这句话，用 2 到 4 句中文说明白，少铺垫。'
+      : '这是轻量群聊回复：先接话，再补一句态度，控制在 2 到 3 句。';
   }
 
   if (tier === 'concise') {
     return isPrivate
-      ? '这一轮偏短。私聊直接回应重点，保持温度，但不要写成长段。'
-      : '这一轮偏短。群聊利落接话就够了，不要刷屏。';
+      ? '这一轮偏短：私聊直接回应重点，保持温度但不拖长。'
+      : '这一轮偏短：群聊利落接话，不刷屏。';
   }
 
   if (tier === 'expanded') {
     return isPrivate
-      ? '这一轮可以写得更完整。私聊先回答，再顺一层情绪或细节，必要时轻轻追问。'
-      : '这一轮可以比平时更展开一点，但群聊仍然要有节奏，别写成墙。';
+      ? '这一轮可更完整：私聊先回答，再补一层情绪或细节，必要时轻追问。'
+      : '这一轮可适度展开：群聊最多补一层，不写成长文。';
   }
 
   return isPrivate
-    ? '这一轮保持均衡。私聊答完整一点，语气自然，必要时可以顺手接一句。'
-    : '这一轮保持均衡。群聊要像在场的人一样会接话，但仍然收得住。';
+    ? '这一轮保持均衡：私聊自然回答，必要时顺手追问一条。'
+    : '这一轮保持均衡：群聊会接话但收得住。';
 }
 
 function buildGenerationProfile({
@@ -219,9 +214,7 @@ export function resolveReplyLengthProfile({
 
   if (isStrongEmotion(emotionResult)) {
     maxTokens = Math.max(maxTokens, isPrivate ? config.privateChatMaxTokens : config.groupChatMaxTokens);
-    if (tier === 'concise') {
-      tier = 'balanced';
-    }
+    if (tier === 'concise') tier = 'balanced';
   }
 
   const performanceProfile = resolvePerformanceProfile({
@@ -260,3 +253,4 @@ export function resolveReplyLengthProfile({
     performanceProfile,
   };
 }
+

@@ -54,29 +54,34 @@ test('buildReplyContext includes reply length guidance and prompt profile', () =
   const prompt = buildReplyContext({
     event: createEvent(),
     route: { category: 'private_chat', allowFollowUp: true },
-    relation: { affection: 72, memorySummary: 'Familiar conversation partner.' },
+    relation: { affection: 72, memorySummary: '熟悉的聊天对象。' },
     userState: { currentEmotion: 'AFFECTIONATE' },
     userProfile: {
-      profileSummary: 'Prefers a softer tone.',
-      preferredName: 'Ali',
-      favoriteTopics: ['daily-life'],
+      profileSummary: '偏好更柔和的语气。',
+      preferredName: '阿离',
+      favoriteTopics: ['日常'],
       dislikes: [],
     },
-    conversationState: { rollingSummary: 'They were just talking about today.', messages: [] },
+    conversationState: { rollingSummary: '刚刚聊到今天有点累。', messages: [] },
     groupState: null,
     recentEvents: [],
     messageAnalysis: { intent: 'social', sentiment: 'positive', relevance: 0.82, ruleSignals: ['private-chat'] },
-    emotionResult: { intensity: 0.75, promptStyle: 'warm and complete', toneHints: ['preference', 'comfort'] },
+    emotionResult: { intensity: 0.75, promptStyle: 'warm and complete', toneHints: ['comfort'] },
     knowledge: { documents: [] },
     isAdmin: false,
     specialUser: null,
+    replyPlan: {
+      type: 'direct_followup',
+      depth: 'medium',
+      questionNeeded: true,
+    },
     replyLengthProfile: {
       tier: 'expanded',
       maxTokens: 520,
       historyLimit: 6,
       promptProfile: 'standard',
       performanceProfile: 'standard_chat',
-      guidance: '这一轮可以写得更完整。私聊先回答，再顺一层情绪或细节，必要时轻轻追问。',
+      guidance: '这一轮可更完整：私聊先回答，再补一层情绪或细节，必要时轻追问。',
     },
   });
 
@@ -86,6 +91,7 @@ test('buildReplyContext includes reply length guidance and prompt profile', () =
   assert.match(prompt, /上限=520 tokens/);
   assert.match(prompt, /历史窗口=6/);
   assert.match(prompt, /默认使用中文/);
+  assert.match(prompt, /接话规划/);
 });
 
 test('resolveReplyLengthProfile uses fast_chat for ordinary private openings', () => {
@@ -123,14 +129,14 @@ test('processIncomingMessage passes route-specific generation profile to chat', 
     groupState: null,
     recentEvents: [],
     isAdmin: false,
-      isAdvanced: false,
-      event: createEvent({
-        chatType: 'group',
-        chatId: '20001',
-        rawText: '由乃，今晚你怎么看？',
-        text: '由乃，今晚你怎么看？',
-        mentionsBot: true,
-      }),
+    isAdvanced: false,
+    event: createEvent({
+      chatType: 'group',
+      chatId: '20001',
+      rawText: '由乃，今晚你怎么看？',
+      text: '由乃，今晚你怎么看？',
+      mentionsBot: true,
+    }),
     analysis: {
       shouldRespond: true,
       confidence: 0.92,
@@ -147,14 +153,14 @@ test('processIncomingMessage passes route-specific generation profile to chat', 
       sendReply: async () => null,
       sendVoice: async () => false,
       retrieveKnowledge: async () => ({ enabled: false, documents: [], reason: 'disabled' }),
-        chat: async (_messages, _systemPrompt, _userTurn, options) => {
-          captured.push({
-            maxTokens: options.maxTokens,
-            historyLimit: options.historyLimit,
-            temperature: options.temperature,
-          });
-          return '先把重点说出来，再留一点余地。';
-        },
+      chat: async (_messages, _systemPrompt, _userTurn, options) => {
+        captured.push({
+          maxTokens: options.maxTokens,
+          historyLimit: options.historyLimit,
+          temperature: options.temperature,
+        });
+        return '先把重点说出来，再留一点余地。';
+      },
       appendConversationMessages: async () => null,
       updateRelationProfile: async () => null,
       updateUserState: async () => null,
@@ -167,3 +173,4 @@ test('processIncomingMessage passes route-specific generation profile to chat', 
   assert.equal(captured[0].historyLimit, 5);
   assert.equal(captured[0].temperature, 0.54);
 });
+

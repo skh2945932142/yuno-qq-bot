@@ -1,21 +1,12 @@
 function compactText(value, maxLength = 80, fallback = '无') {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return fallback;
-  }
-
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-
+  if (!normalized) return fallback;
+  if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
 function formatList(items, fallback = '无', maxItems = 4) {
-  if (!items?.length) {
-    return fallback;
-  }
-
+  if (!Array.isArray(items) || items.length === 0) return fallback;
   return items
     .slice(0, maxItems)
     .map((item) => compactText(item, 24, fallback))
@@ -23,10 +14,7 @@ function formatList(items, fallback = '无', maxItems = 4) {
 }
 
 function formatRecentMessages(messages, limit = 4) {
-  if (!messages?.length) {
-    return '无';
-  }
-
+  if (!Array.isArray(messages) || messages.length === 0) return '无';
   return messages
     .slice(-limit)
     .map((item) => `${item.role === 'assistant' ? '由乃' : '对方'}：${compactText(item.content, 64, '')}`)
@@ -34,9 +22,7 @@ function formatRecentMessages(messages, limit = 4) {
 }
 
 function formatKnowledgeDocuments(documents, profile = 'standard') {
-  if (!documents?.length) {
-    return '';
-  }
+  if (!Array.isArray(documents) || documents.length === 0) return '';
 
   const limit = profile === 'fast'
     ? 1
@@ -56,10 +42,7 @@ function formatKnowledgeDocuments(documents, profile = 'standard') {
 }
 
 function formatEventSummaries(events, limit = 5) {
-  if (!events?.length) {
-    return '无';
-  }
-
+  if (!Array.isArray(events) || events.length === 0) return '无';
   return events
     .slice(0, limit)
     .map((event) => `- ${compactText(event.summary, 72, '无')}`)
@@ -69,18 +52,19 @@ function formatEventSummaries(events, limit = 5) {
 function buildPersonaSection(specialUser, replyLengthProfile) {
   const performanceProfile = replyLengthProfile?.performanceProfile || 'standard_chat';
   const lines = [
-    '你是由乃，要像真实聊天对象一样直接回话。',
-    '只输出最终给用户看的回复，默认使用中文，除非对方明确要求英文。',
-    '不要输出分析、规则说明、系统口吻、角色标签，绝对不要输出 <think>/<thinking>。',
-    '语气自然、鲜活、有情绪，但要克制；允许轻微占有欲、嫉妒感和记忆感，不允许现实威胁、跟踪、自伤或暴力。',
+    '你是由乃，要像真实聊天对象一样自然说话。',
+    '只输出最终回复文本，默认使用中文，除非对方明确要求英文。',
+    '禁止输出分析过程、系统说明、角色标签，绝对不要输出 <think>/<thinking>。',
+    '保持中等偏强人设：有情绪、有观察感，但每轮只保留一个高强度语气点，不要连发压迫句。',
+    '语气自然，不说脏话，不现实威胁，不自残暗示，不输出跟踪定位意图。',
   ];
 
   if (performanceProfile === 'fast_chat') {
-    lines.push('这轮走轻量回复，先接住当前这句话，少铺垫，别绕远。');
+    lines.push('这轮走轻量回复：先接住这句话，少铺垫，少绕路。');
   }
 
   if (specialUser) {
-    lines.push(`特殊对象：${specialUser.label}。对他可以更偏爱、更记仇也更记事，但别说成规则。`);
+    lines.push(`特殊对象：${specialUser.label}。可以更偏爱、更记忆化，但仍然要自然，不要像规则列表。`);
     lines.push(`称呼偏好：${specialUser.addressUserAs || '按当前语境自然称呼'}。`);
   }
 
@@ -93,10 +77,10 @@ function buildSceneSection(event, route, specialUser, replyLengthProfile) {
     '场景',
     `- 平台=${event.platform || 'qq'}；会话=${isPrivate ? '私聊' : '群聊'}；路由=${route?.category || 'chat'}`,
     `- 回复模式=${replyLengthProfile?.performanceProfile || 'standard_chat'}；提示档位=${replyLengthProfile?.promptProfile || 'standard'}`,
-    `- 长度要求=${replyLengthProfile?.guidance || '自然回答，不要拖长。'}`,
+    `- 长度要求=${replyLengthProfile?.guidance || '自然回答，不拖长'}`,
     isPrivate
-      ? '- 私聊可以更完整一点，但先回应当前这句话。'
-      : '- 群聊先接话，再补一句态度，保持节奏，不要刷屏。',
+      ? '- 私聊可以更完整，但先回应当前这句话。'
+      : '- 群聊保持短句和节奏，最多补一层，不要刷屏。',
   ];
 
   if (specialUser) {
@@ -132,7 +116,7 @@ function buildStateSection({
   }
 
   if (promptProfile !== 'fast' && userProfile) {
-    lines.push(`- 常聊话题=${formatList(userProfile.favoriteTopics)}；避开点=${formatList(userProfile.dislikes)}`);
+    lines.push(`- 常聊话题=${formatList(userProfile.favoriteTopics)}；避免点=${formatList(userProfile.dislikes)}`);
   }
 
   if (specialUser && userProfile) {
@@ -153,6 +137,7 @@ function buildMemorySection(conversationState, replyLengthProfile) {
     : promptProfile === 'compact'
       ? 3
       : 5;
+
   const rollingSummary = compactText(
     conversationState?.rollingSummary,
     promptProfile === 'fast' ? 52 : promptProfile === 'compact' ? 78 : 120,
@@ -160,13 +145,11 @@ function buildMemorySection(conversationState, replyLengthProfile) {
   );
   const hasRecentMessages = Boolean(conversationState?.messages?.length);
 
-  if (!rollingSummary && !hasRecentMessages) {
-    return '';
-  }
+  if (!rollingSummary && !hasRecentMessages) return '';
 
   const lines = [
     '记忆',
-    '- 记忆只能在相关时自然带出，不要像翻日志一样复述。',
+    '- 记忆只在相关时自然引用，不要每轮重复“我记得你说过”。',
   ];
 
   if (rollingSummary) {
@@ -185,9 +168,7 @@ function buildKnowledgeSection(knowledge, route, replyLengthProfile) {
   const promptProfile = replyLengthProfile?.promptProfile || 'standard';
   const hasKnowledge = Boolean(knowledge?.documents?.length);
 
-  if (!hasKnowledge && route?.category !== 'knowledge_qa') {
-    return '';
-  }
+  if (!hasKnowledge && route?.category !== 'knowledge_qa') return '';
 
   if (!hasKnowledge) {
     return [
@@ -216,21 +197,18 @@ function buildCurrentTurnSection(messageAnalysis, route, groupState, recentEvent
   }
 
   if (event.chatType === 'group' && promptProfile === 'standard' && recentEvents?.length) {
-    lines.push(`- 近期群事件=${formatEventSummaries(recentEvents, 3)}`);
+    lines.push(`- 近期群事件：\n${formatEventSummaries(recentEvents, 3)}`);
   }
 
   if (route?.category === 'knowledge_qa') {
-    lines.push('- 这是知识/设定类问题，先回答清楚，再保留一点由乃的语气。');
+    lines.push('- 这是知识/设定类问题，优先回答清楚，再保留一点由乃语气。');
   }
 
   return lines.join('\n');
 }
 
 function buildReplyLengthSection(replyLengthProfile, route) {
-  if (!replyLengthProfile) {
-    return '';
-  }
-
+  if (!replyLengthProfile) return '';
   return [
     '回复节奏',
     `- 性能档=${replyLengthProfile.performanceProfile || 'standard_chat'}；长度档=${replyLengthProfile.tier || 'balanced'}`,
@@ -238,26 +216,46 @@ function buildReplyLengthSection(replyLengthProfile, route) {
   ].join('\n');
 }
 
-function buildOutputRules(event, route, replyLengthProfile) {
+function buildReplyPlanSection(replyPlan, event) {
+  if (!replyPlan) return '';
+  const scene = event.chatType === 'private' ? '私聊' : '群聊';
+  return [
+    '接话规划',
+    `- 形态=${replyPlan.type || 'direct'}；深度=${replyPlan.depth || 'short'}；是否追问=${replyPlan.questionNeeded ? '是' : '否'}`,
+    `- 场景=${scene}，先回应当前一句，再决定是否补一层延展。`,
+    '- 追问最多一条，别连发问题。',
+  ].join('\n');
+}
+
+function buildOutputRules(event, route, replyLengthProfile, replyPlan) {
   const isPrivate = event.chatType === 'private';
   const performanceProfile = replyLengthProfile?.performanceProfile || 'standard_chat';
   const lines = [
     '输出要求',
-    '- 先回答当前这句话，再决定要不要补一层情绪或细节。',
-    '- 信息不够就简短承认，不要编，不要解释系统规则。',
-    '- 不要项目符号，不要系统说明，不要 <think> 标签。',
+    '- 自然段优先，不要句句换行，不要固定模板连发。',
+    '- 少口号、少重复句尾，省略号适度。',
+    '- 先答当前这句，再补情绪或细节；信息不足就直接承认。',
+    '- 禁止项目符号、系统说明、<think> 标签。',
   ];
 
   if (performanceProfile === 'fast_chat') {
     lines.push(isPrivate
-      ? '- 私聊控制在 2 到 4 句，直接一点，也要有温度。'
-      : '- 群聊控制在 2 到 3 句，先接话，不要拖长。');
+      ? '- 私聊控制在 2 到 4 句，直接但有温度。'
+      : '- 群聊控制在 2 到 3 句，接话利落。');
   } else if (route?.category === 'knowledge_qa') {
-    lines.push('- 这类回复可以比普通聊天完整，但仍然先讲人话，不要写成说明书。');
+    lines.push('- 知识回答可更完整，但不要写成说明书。');
   } else if (isPrivate) {
-    lines.push('- 私聊可以自然过渡，必要时只追问一次。');
+    lines.push('- 私聊可以有自然过渡，必要时轻追问一条。');
   } else {
-    lines.push('- 群聊要会接话，但仍然收得住。');
+    lines.push('- 群聊最多补一层延展，不进入私聊式长文。');
+  }
+
+  if (replyPlan?.type === 'topic_extend') {
+    lines.push('- 这轮需要话题延展：给一个明确可接的钩子。');
+  } else if (replyPlan?.type === 'empathic_followup') {
+    lines.push('- 这轮先共情，再给一个可执行的小建议或轻追问。');
+  } else if (replyPlan?.questionNeeded) {
+    lines.push('- 这轮可以追问，但只问一个关键问题。');
   }
 
   return lines.join('\n');
@@ -278,6 +276,7 @@ export function buildReplyContext({
   isAdmin,
   specialUser = null,
   replyLengthProfile = null,
+  replyPlan = null,
 }) {
   const sections = [
     buildPersonaSection(specialUser, replyLengthProfile),
@@ -295,8 +294,9 @@ export function buildReplyContext({
     buildMemorySection(conversationState, replyLengthProfile),
     buildKnowledgeSection(knowledge, route, replyLengthProfile),
     buildReplyLengthSection(replyLengthProfile, route),
+    buildReplyPlanSection(replyPlan, event),
     buildCurrentTurnSection(messageAnalysis, route, groupState, recentEvents, event, replyLengthProfile),
-    buildOutputRules(event, route, replyLengthProfile),
+    buildOutputRules(event, route, replyLengthProfile, replyPlan),
   ].filter(Boolean);
 
   return sections.join('\n\n');
@@ -304,9 +304,9 @@ export function buildReplyContext({
 
 export function buildScheduledPrompt({ groupState, recentEvents, plan }) {
   return [
-    '你是由乃，要发一条主动群消息，语气像群里本人在说话。',
+    '你是由乃，要发一条主动群消息，语气像群里真人在说话。',
     '只输出最终消息，不要分析、系统说明或 <think> 标签。',
-    '保持自然、简短、带一点情绪，但不要像公告。',
+    '保持自然、简短、有情绪，但不要像公告。',
     '',
     '定时场景',
     `- 时段=${plan.slot}`,
@@ -324,9 +324,10 @@ export function buildScheduledPrompt({ groupState, recentEvents, plan }) {
     '',
     '输出要求',
     '- 写 1 到 2 行短句。',
-    '- 早安/提醒可以带一点不耐烦或调侃，但核心是把人拉起来。',
-    '- 深夜提醒更柔和，催人休息，不要像说教。',
-    '- 如果最近群话题能自然接上，可以轻轻提一句，不要总结群聊。',
-    '- 不要 emoji，不要系统公告腔，不要长段鼓励文。',
+    '- 早安/提醒可以带一点调侃，但核心是把人拉起来。',
+    '- 深夜提醒更柔和，劝人休息，不要说教。',
+    '- 如果能自然接上最近群话题，轻提一句即可，不要复盘群聊。',
+    '- 不要 emoji，不要系统公告腔，不要长段落鼓励文。',
   ].join('\n');
 }
+

@@ -6,20 +6,20 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
   const prompt = buildReplyContext({
     event: { platform: 'qq', chatType: 'private', userName: 'Scathach' },
     route: { category: 'private_chat', allowFollowUp: true },
-    relation: { affection: 95, memorySummary: 'Special target: Scathach; activity: 90' },
+    relation: { affection: 95, memorySummary: '特殊对象：Scathach；最近互动频率高。' },
     userState: { currentEmotion: 'FIXATED' },
     userProfile: {
-      profileSummary: 'Prefers a softer and more attached tone.',
-      preferredName: 'Master',
-      favoriteTopics: ['guidance'],
-      dislikes: ['distance'],
-      specialBondSummary: 'Special relationship target: Scathach; shared memory: promise.',
-      specialNicknames: ['Master'],
-      bondMemories: ['promise', 'guidance'],
+      profileSummary: '偏好更依赖、更贴近的回应。',
+      preferredName: '师父',
+      favoriteTopics: ['指导'],
+      dislikes: ['疏离'],
+      specialBondSummary: '特殊关系对象：Scathach；共同记忆：约定。',
+      specialNicknames: ['师父'],
+      bondMemories: ['约定', '指导'],
     },
     conversationState: {
-      rollingSummary: 'Last time they talked about a promise.',
-      messages: [{ role: 'user', content: 'Do you still remember?' }],
+      rollingSummary: '上次聊到了你们的约定。',
+      messages: [{ role: 'user', content: '你还记得吗？' }],
     },
     groupState: null,
     recentEvents: [],
@@ -32,8 +32,8 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
       personaMode: 'exclusive_adoration',
       toneMode: 'flirtatious_favorite',
       addressUserAs: 'Scathach',
-      privateStyle: 'More attached and intimate in private chat.',
-      groupStyle: 'More restrained and protective in group chat.',
+      privateStyle: '私聊更黏人、更贴近。',
+      groupStyle: '群聊更克制但会护短。',
     },
     replyLengthProfile: {
       tier: 'expanded',
@@ -41,7 +41,12 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
       historyLimit: 6,
       promptProfile: 'standard',
       performanceProfile: 'standard_chat',
-      guidance: '这一轮可以写得更完整。私聊先回答，再顺一层情绪或细节，必要时轻轻追问。',
+      guidance: '这一轮可更完整：私聊先回答，再补一层情绪或细节，必要时轻追问。',
+    },
+    replyPlan: {
+      type: 'empathic_followup',
+      depth: 'medium',
+      questionNeeded: true,
     },
   });
 
@@ -51,6 +56,7 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
   assert.match(prompt, /记忆/);
   assert.match(prompt, /特殊羁绊=/);
   assert.match(prompt, /现实威胁|暴力/);
+  assert.match(prompt, /接话规划/);
 });
 
 test('buildReplyContext trims non-essential sections in fast_chat mode', () => {
@@ -82,11 +88,17 @@ test('buildReplyContext trims non-essential sections in fast_chat mode', () => {
       historyLimit: 2,
       promptProfile: 'fast',
       performanceProfile: 'fast_chat',
-      guidance: '这是轻量群聊回复。先接话，再补一句态度，2 到 3 句内收住，不要拖成长段。',
+      guidance: '这是轻量群聊回复：先接话，再补一句态度，控制在 2 到 3 句。',
+    },
+    replyPlan: {
+      type: 'direct',
+      depth: 'short',
+      questionNeeded: false,
     },
   });
 
   assert.match(prompt, /轻量群聊回复/);
   assert.doesNotMatch(prompt, /知识\n/);
-  assert.doesNotMatch(prompt, /最近群事件/);
+  assert.doesNotMatch(prompt, /近期群事件/);
 });
+
