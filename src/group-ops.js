@@ -6,7 +6,7 @@ import {
   getRecentEvents,
   recordGroupEvent,
   updateGroupStateFromAnalysis,
-} from './state/group-state.js';
+} from './state/group-state-runtime.js';
 
 const DEFAULT_KEYWORD_TOPICS = [
   'deploy',

@@ -82,6 +82,8 @@ npm run kb:sync
 - `RETRY_DELAY_MS`
 - `MODEL_CIRCUIT_FAILURE_THRESHOLD`
 - `MODEL_CIRCUIT_OPEN_MS`
+- `REPLY_TIME_BUDGET_MS`
+- `MODEL_FALLBACK_CHAT_MODEL`
 - `CHAT_FOLLOWUP_RATE_PRIVATE`
 - `CHAT_FOLLOWUP_RATE_GROUP`
 - `CHAT_STYLE_REPEAT_GUARD`
@@ -104,6 +106,7 @@ npm run kb:sync
 - `QDRANT_TOP_K`
 - `QDRANT_MIN_SCORE`
 - `QDRANT_CHAR_LIMIT`
+- `KNOWLEDGE_QUERY_CACHE_TTL_MS`
 
 队列相关：
 
@@ -116,6 +119,8 @@ npm run kb:sync
 - `QUEUE_CONCURRENCY_DEFAULT`
 - `QUEUE_CONCURRENCY_REPLY`
 - `QUEUE_CONCURRENCY_PERSIST`
+- `AUTOMATION_TASK_CONCURRENCY`
+- `GROUP_EVENT_RETENTION_COUNT`
 
 观测相关：
 
@@ -188,6 +193,8 @@ npm run eval
 npm run kb:sync
 npm run doctor
 npm run smoke
+npm run smoke:mock
+npm run benchmark:reply
 ```
 
 用途分别是：
@@ -197,6 +204,8 @@ npm run smoke
 - `npm run kb:sync`：把 `knowledge/` 里的 Markdown 切块、向量化并同步到 Qdrant
 - `npm run doctor`：检查 Mongo、NapCat、LLM、Qdrant、Redis、FFmpeg 是否真的可达；语音关闭和未配置检索显示 `skip` 属于正常状态
 - `npm run smoke`：走真实 `runYunoConversation(...)` 主链，但不外发 QQ、不写会话状态
+- `npm run smoke:mock`：跑不依赖外部服务的轻量 smoke，适合 CI 快速兜底
+- `npm run benchmark:reply`：本地基准脚本，输出 group/private/knowledge 的 P50/P95
 
 ## AstrBot 接入
 
@@ -247,7 +256,7 @@ npm run smoke
 
 - 检索是正式功能，不是占位边界。只有在 `QDRANT_URL` 和 `QDRANT_COLLECTION` 都配置后，并且执行过 `npm run kb:sync`，它才会真正启用。
 - 如果 `ENABLE_QUEUE=false`，或者 BullMQ / Redis 不可用，系统会退回 inline 模式，但队列接口不变。
-- `/ready` 用于检查数据库和队列就绪情况，`/metrics` 暴露 Prometheus 风格指标。
+- `/ready` 用于检查数据库和队列就绪情况，并返回 voice/qdrant 的降级原因；`/metrics` 暴露 Prometheus 风格指标。
 - 当前唯一活跃运行主线是 `src/message-workflow.js`，旧版群聊工作流已经移除。
 
 ## 后续扩展点

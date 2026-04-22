@@ -1,0 +1,62 @@
+name: Performance Feedback
+description: Report latency or throughput regressions with traceable context.
+title: "[perf] "
+labels:
+  - performance
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please provide enough context for trace-based investigation.
+  - type: input
+    id: symptom
+    attributes:
+      label: Symptom
+      description: What did users feel (slow reply, delayed reminder, timeout, etc.)?
+      placeholder: Group mention replies became noticeably slower.
+    validations:
+      required: true
+  - type: input
+    id: trace_id
+    attributes:
+      label: Trace ID (preferred)
+      description: Copy a `traceId` from logs if available.
+      placeholder: 0f3a5f48-3327-41bf-a60b-01561b84faf9
+    validations:
+      required: false
+  - type: input
+    id: time_window
+    attributes:
+      label: Time Window (required)
+      description: Provide the exact time range with timezone.
+      placeholder: 2026-04-22 13:10-13:25 Asia/Shanghai
+    validations:
+      required: true
+  - type: dropdown
+    id: scene
+    attributes:
+      label: Scene
+      options:
+        - group mention
+        - private chat
+        - command tool
+        - scheduler reminder
+        - knowledge retrieval
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: expected_vs_actual
+    attributes:
+      label: Expected vs Actual
+      description: What did you expect and what actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Runtime Context
+      description: Include model, queue mode, and relevant env switches if known.
+      placeholder: LLM_CHAT_MODEL=..., ENABLE_QUEUE=false, REPLY_TIME_BUDGET_MS=...
+    validations:
+      required: false

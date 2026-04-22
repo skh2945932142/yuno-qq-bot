@@ -30,6 +30,11 @@ function resolvePerformanceProfile({
 
   if (routeCategory === 'knowledge_qa') return 'knowledge_chat';
   if (routeCategory === 'poke') return 'fast_chat';
+  const directMentionReason = ['basic-direct-mention-pass', 'advanced-direct-mention-pass'].includes(analysis?.reason);
+
+  if (!isPrivate && directMentionReason && routeCategory !== 'knowledge_qa' && !supportLike) {
+    return 'fast_chat';
+  }
 
   if (
     routeCategory === 'group_chat'
@@ -228,8 +233,18 @@ export function resolveReplyLengthProfile({
 
   if (performanceProfile === 'fast_chat') {
     tier = tier === 'expanded' ? 'balanced' : tier;
-    maxTokens = Math.min(maxTokens, isPrivate ? 260 : 180);
+    maxTokens = Math.min(maxTokens, isPrivate ? 220 : 140);
     reason = `${reason}+fast-chat`;
+  }
+
+  if (
+    !isPrivate
+    && routeCategory === 'cold_start'
+    && !needsSupport(analysis)
+    && !isStrongEmotion(emotionResult)
+  ) {
+    maxTokens = Math.min(maxTokens, 140);
+    reason = `${reason}+group-cold-start-cap`;
   }
 
   const generationProfile = buildGenerationProfile({
@@ -253,4 +268,3 @@ export function resolveReplyLengthProfile({
     performanceProfile,
   };
 }
-

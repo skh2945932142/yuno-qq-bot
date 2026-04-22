@@ -10,7 +10,7 @@ import {
   getRecentEvents,
   recordGroupEvent,
   updateGroupStateFromAnalysis,
-} from './state/group-state.js';
+} from './state/group-state-runtime.js';
 import {
   ensureRelation,
   ensureUserState,
@@ -45,6 +45,7 @@ const GROUP_REPLY_THROTTLE_WINDOW_MS = 25 * 1000;
 const GROUP_REPLY_THROTTLE_AFTER = 2;
 const GROUP_REPLY_THROTTLE_HINT = '我在听，慢一点说，我一条条接住。';
 const GROUP_REPLY_THROTTLE_CACHE_TTL_MS = 10 * 60 * 1000;
+const REPLY_BUDGET_MIN_GENERATION_MS = 350;
 const groupReplyBursts = new Map();
 
 function summarizeIncomingMessage(username, text) {
@@ -146,6 +147,31 @@ function isModelUnavailableError(error) {
     || status >= 500;
 }
 
+function createReplyBudgetExceededError(timeoutMs) {
+  const error = new Error(`Reply budget exceeded after ${timeoutMs}ms`);
+  error.code = 'REPLY_BUDGET_EXCEEDED';
+  error.timeoutMs = timeoutMs;
+  return error;
+}
+
+async function runReplyWithBudget(task, timeoutMs) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return task();
+  }
+
+  let timer = null;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(createReplyBudgetExceededError(timeoutMs)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function buildModelFallbackReply(event, task, error) {
   const route = task?.category || 'chat';
   const reason = String(error?.code || '').toUpperCase();
@@ -172,6 +198,19 @@ function buildModelFallbackReply(event, task, error) {
   return isPrivate
     ? '我这边刚才有点抖动，但我还在。你再发一次，我接着说。'
     : '我这边刚才有点抖动，你再说一次，我马上接。';
+}
+
+function buildReplyBudgetFallbackReply(event, task) {
+  const isPrivate = event?.chatType === 'private';
+  if (task?.category === 'knowledge_qa') {
+    return isPrivate
+      ? '我先给你一句短答：这题我能接住。你要的话我下一条补完整版本。'
+      : '这题我先短答一下：能接。要详细版你再戳我一句。';
+  }
+
+  return isPrivate
+    ? '我先接住你这句。你继续说，我下一条补完整一点。'
+    : '先接一句：我在。你继续，我马上补后半句。';
 }
 
 export function shapeChatReplyText(text, emotionResult) {
@@ -776,6 +815,13 @@ export async function processIncomingMessage(event, precomputed = null, options 
     const userTurn = resolveUserTurn(normalizedEvent);
     const summary = summarizeIncomingMessage(normalizedEvent.userName, rawText);
     const analysis = workflowContext.analysis;
+    const replyBudgetMs = Math.max(0, Number(options.replyTimeBudgetMs ?? config.replyTimeBudgetMs ?? 0));
+    const replyBudgetStartedAt = Date.now();
+    const getRemainingReplyBudgetMs = () => (
+      replyBudgetMs <= 0
+        ? null
+        : Math.max(0, replyBudgetMs - (Date.now() - replyBudgetStartedAt))
+    );
 
     if (!analysis.shouldRespond) {
       logger.info('analysis', 'Message skipped after analysis', {
@@ -945,7 +991,18 @@ export async function processIncomingMessage(event, precomputed = null, options 
 
     let visibleReplyText = '';
     try {
-      const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => deps.chat(
+      const remainingReplyBudgetMs = getRemainingReplyBudgetMs();
+      if (
+        remainingReplyBudgetMs !== null
+        && remainingReplyBudgetMs <= REPLY_BUDGET_MIN_GENERATION_MS
+      ) {
+        throw createReplyBudgetExceededError(remainingReplyBudgetMs);
+      }
+
+      const modelTimeoutMs = remainingReplyBudgetMs === null
+        ? null
+        : Math.max(REPLY_BUDGET_MIN_GENERATION_MS, remainingReplyBudgetMs);
+      const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => runReplyWithBudget(() => deps.chat(
         (workflowContext.conversationState.messages || []).map((item) => ({
           role: item.role,
           content: item.content,
@@ -959,8 +1016,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
           maxTokens: replyLengthProfile.maxTokens,
           historyLimit: replyLengthProfile.historyLimit,
           temperature: replyLengthProfile.temperature,
+          timeoutMs: modelTimeoutMs || undefined,
         }
-      ), {
+      ), modelTimeoutMs), {
         historySize: workflowContext.conversationState.messages.length,
         route: task.category,
         advancedMode: workflowContext.isAdvanced,
@@ -988,27 +1046,100 @@ export async function processIncomingMessage(event, precomputed = null, options 
         });
       }
     } catch (error) {
-      if (!isModelUnavailableError(error)) {
-        throw error;
+      if (String(error?.code || '').toUpperCase() === 'REPLY_BUDGET_EXCEEDED') {
+        recordWorkflowMetric('yuno_reply_latency_budget_exceeded_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          route: task.category,
+        });
+        logger.warn('model', 'Reply generation exceeded time budget and used short fallback', {
+          traceId: trace.traceId,
+          chatType: normalizedEvent.chatType,
+          chatId: normalizedEvent.chatId,
+          userId: normalizedEvent.userId,
+          messageId: normalizedEvent.messageId,
+          route: task.category,
+          budgetMs: config.replyTimeBudgetMs,
+        });
+        visibleReplyText = buildReplyBudgetFallbackReply(normalizedEvent, task);
+      } else if (isModelUnavailableError(error)) {
+        const fallbackModel = String(options.modelFallbackChatModel || config.modelFallbackChatModel || '').trim();
+        if (fallbackModel && fallbackModel !== config.llmChatModel) {
+          try {
+            const fallbackRemainingBudgetMs = getRemainingReplyBudgetMs();
+            if (
+              fallbackRemainingBudgetMs !== null
+              && fallbackRemainingBudgetMs <= REPLY_BUDGET_MIN_GENERATION_MS
+            ) {
+              throw createReplyBudgetExceededError(fallbackRemainingBudgetMs);
+            }
+
+            const fallbackTimeoutMs = fallbackRemainingBudgetMs === null
+              ? null
+              : Math.max(REPLY_BUDGET_MIN_GENERATION_MS, fallbackRemainingBudgetMs);
+            const fallbackReply = await withTraceSpan(trace, 'generate-reply-fallback-model', () => runReplyWithBudget(
+              () => deps.chat(
+                (workflowContext.conversationState.messages || []).map((item) => ({
+                  role: item.role,
+                  content: item.content,
+                })),
+                systemPrompt,
+                userTurn,
+                {
+                  traceContext: trace,
+                  promptVersion: 'reply-context/v6',
+                  operation: 'reply-fallback-model',
+                  model: fallbackModel,
+                  maxTokens: Math.min(replyLengthProfile.maxTokens, normalizedEvent.chatType === 'group' ? 140 : 220),
+                  historyLimit: Math.min(replyLengthProfile.historyLimit, normalizedEvent.chatType === 'group' ? 2 : 3),
+                  temperature: Math.min(replyLengthProfile.temperature, 0.55),
+                  timeoutMs: fallbackTimeoutMs || undefined,
+                }
+              ),
+              fallbackTimeoutMs
+            ), {
+              historySize: workflowContext.conversationState.messages.length,
+              route: task.category,
+              fallbackModel,
+            });
+
+            visibleReplyText = stripHiddenReasoning(fallbackReply) || buildReplyBudgetFallbackReply(normalizedEvent, task);
+          } catch (fallbackError) {
+            if (String(fallbackError?.code || '').toUpperCase() === 'REPLY_BUDGET_EXCEEDED') {
+              recordWorkflowMetric('yuno_reply_latency_budget_exceeded_total', 1, {
+                chat_type: normalizedEvent.chatType,
+                route: task.category,
+              });
+              visibleReplyText = buildReplyBudgetFallbackReply(normalizedEvent, task);
+            } else {
+              error = fallbackError;
+            }
+          }
+        }
       }
 
-      recordWorkflowMetric('yuno_model_fallback_total', 1, {
-        chat_type: normalizedEvent.chatType,
-        route: task.category,
-        reason: String(error.code || error.status || 'model-unavailable').toLowerCase(),
-      });
-      logger.warn('model', 'Reply generation fell back to canned response', {
-        traceId: trace.traceId,
-        chatType: normalizedEvent.chatType,
-        chatId: normalizedEvent.chatId,
-        userId: normalizedEvent.userId,
-        messageId: normalizedEvent.messageId,
-        route: task.category,
-        code: error.code,
-        status: error.status || error.response?.status,
-        message: error.message,
-      });
-      visibleReplyText = buildModelFallbackReply(normalizedEvent, task, error);
+      if (!visibleReplyText) {
+        if (!isModelUnavailableError(error)) {
+          throw error;
+        }
+
+        recordWorkflowMetric('yuno_model_fallback_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          route: task.category,
+          reason: String(error.code || error.status || 'model-unavailable').toLowerCase(),
+        });
+        logger.warn('model', 'Reply generation fell back to canned response', {
+          traceId: trace.traceId,
+          chatType: normalizedEvent.chatType,
+          chatId: normalizedEvent.chatId,
+          userId: normalizedEvent.userId,
+          messageId: normalizedEvent.messageId,
+          route: task.category,
+          code: error.code,
+          status: error.status || error.response?.status,
+          message: error.message,
+        });
+        visibleReplyText = buildModelFallbackReply(normalizedEvent, task, error);
+      }
     }
 
     const replyText = shapeChatReplyText(visibleReplyText, emotionResult);
@@ -1049,7 +1180,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
       }, trace, deps);
     }
 
-    if (config.enableVoice && config.yunoVoiceUri && deps.shouldSendVoiceForEmotion(emotionResult)) {
+    const voiceReadiness = getRuntimeServices().readiness?.voice;
+    const voiceAvailable = !(voiceReadiness?.enabled && !voiceReadiness.ready);
+    if (voiceAvailable && config.enableVoice && config.yunoVoiceUri && deps.shouldSendVoiceForEmotion(emotionResult)) {
       try {
         const audio = await withTraceSpan(trace, 'tts', () => deps.tts(replyText, {
           traceContext: trace,

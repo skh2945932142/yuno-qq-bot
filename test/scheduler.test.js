@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planScheduledInteraction } from '../src/state/group-state.js';
+import { planScheduledInteraction } from '../src/state/group-state-runtime.js';
 
 test('planScheduledInteraction skips unsupported time slots', () => {
   const now = new Date('2026-03-12T20:00:00+08:00');

@@ -39,7 +39,7 @@ test('resolveReplyLengthProfile expands knowledge answers more than normal group
   });
 
   assert.equal(groupProfile.tier, 'balanced');
-  assert.equal(groupProfile.maxTokens, 180);
+  assert.equal(groupProfile.maxTokens, 140);
   assert.equal(groupProfile.promptProfile, 'fast');
   assert.equal(groupProfile.historyLimit, 1);
   assert.equal(groupProfile.performanceProfile, 'fast_chat');
@@ -107,7 +107,7 @@ test('resolveReplyLengthProfile uses fast_chat for ordinary private openings', (
   assert.equal(profile.performanceProfile, 'fast_chat');
   assert.equal(profile.promptProfile, 'fast');
   assert.equal(profile.historyLimit, 2);
-  assert.equal(profile.maxTokens, 260);
+  assert.equal(profile.maxTokens, 220);
 });
 
 test('processIncomingMessage passes route-specific generation profile to chat', async () => {
@@ -167,7 +167,7 @@ test('processIncomingMessage passes route-specific generation profile to chat', 
     },
   });
 
-  assert.equal(captured[0].maxTokens, 360);
+  assert.equal(captured[0].maxTokens, 140);
   assert.equal(captured[0].historyLimit, 4);
-  assert.equal(captured[0].temperature, 0.52);
+  assert.equal(captured[0].temperature, 0.46);
 });

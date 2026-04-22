@@ -4,12 +4,13 @@ import { logger } from '../logger.js';
 import { chat } from '../minimax.js';
 import { sendText } from '../sender.js';
 import {
+  cleanupGroupEventsRetention,
   ensureGroupState,
   getRecentEvents,
   logSchedulerSkip,
   markProactiveSent,
   planScheduledInteraction,
-} from '../state/group-state.js';
+} from '../state/group-state-runtime.js';
 import { buildScheduledPrompt } from '../prompt-builder.js';
 import { createTraceContext, failTrace, finalizeTrace, withTraceSpan } from '../runtime-tracing.js';
 import { buildDailyDigest } from '../group-ops.js';
@@ -17,6 +18,95 @@ import { getDueAutomationTasks, markAutomationTaskDelivered } from '../automatio
 import { isWithinQuietHours, listGroupRules } from '../group-automation.js';
 import { runYunoConversation } from '../yuno-core.js';
 import { recordWorkflowMetric } from '../metrics.js';
+
+function buildSchedulerToolResult(task) {
+  return task.taskType === 'reminder'
+    ? {
+        tool: 'reminder_due',
+        payload: {
+          taskId: task.taskId,
+          text: task.payload?.text || task.summary,
+          summary: task.summary,
+        },
+        summary: task.summary,
+        priority: 'normal',
+        visibility: task.chatType === 'group' ? 'group' : 'default',
+        followUpHint: '',
+        safetyFlags: [],
+      }
+    : {
+        tool: 'subscription_update',
+        payload: {
+          taskId: task.taskId,
+          sourceType: task.sourceType,
+          target: task.target,
+          summary: task.summary || `订阅 ${task.sourceType}:${task.target} 有了新的动静。`,
+          actionSuggestion: task.payload?.actionSuggestion || '',
+        },
+        summary: task.summary || `订阅 ${task.sourceType}:${task.target} 有了新的动静。`,
+        priority: 'low',
+        visibility: task.chatType === 'group' ? 'group' : 'default',
+        followUpHint: '',
+        safetyFlags: [],
+      };
+}
+
+async function runSingleAutomationTask(task, now) {
+  const groupId = task.groupId || (task.chatType === 'group' ? task.chatId : '');
+  if (groupId) {
+    const rules = await listGroupRules(groupId, { enabled: true });
+    if (isWithinQuietHours(groupId, now, rules)) {
+      recordWorkflowMetric('yuno_automation_tasks_deferred_total', 1, {
+        task_type: task.taskType,
+        reason: 'quiet-hours',
+      });
+      return { taskId: task.taskId, skipped: true };
+    }
+  }
+
+  const nextRunAt = task.nextRunAt ? new Date(task.nextRunAt).getTime() : now.getTime();
+  const delayMs = Math.max(0, now.getTime() - nextRunAt);
+  recordWorkflowMetric('yuno_scheduler_task_delay_ms', delayMs, {
+    task_type: task.taskType,
+  }, 'histogram');
+
+  const toolResult = buildSchedulerToolResult(task);
+  await deliverSchedulerToolResult(task, toolResult);
+  await markAutomationTaskDelivered(task, {
+    now,
+    deliveryKey: `scheduler:${task.taskId}:${new Date(now).toISOString()}`,
+  });
+
+  recordWorkflowMetric('yuno_automation_tasks_triggered_total', 1, {
+    task_type: task.taskType,
+    chat_type: task.chatType,
+  });
+  return { taskId: task.taskId, skipped: false };
+}
+
+async function runWithConcurrency(tasks, concurrency, worker) {
+  if (!Array.isArray(tasks) || tasks.length === 0) return [];
+  const safeConcurrency = Math.max(1, Number(concurrency || 1));
+  const results = new Array(tasks.length);
+  let cursor = 0;
+
+  async function runner() {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= tasks.length) break;
+
+      try {
+        results[index] = await worker(tasks[index], index);
+      } catch (error) {
+        results[index] = { error };
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(safeConcurrency, tasks.length) }, () => runner()));
+  return results;
+}
 
 export async function runScheduledInteraction(groupId) {
   const trace = createTraceContext('scheduled-interaction', { groupId: String(groupId) });
@@ -125,59 +215,17 @@ export async function runDailyGroupDigest(groupId, now = new Date()) {
 
 export async function runDueAutomationTasks(now = new Date()) {
   const dueTasks = await getDueAutomationTasks(now);
+  const concurrency = Math.max(1, Number(config.automationTaskConcurrency || 3));
+  const results = await runWithConcurrency(dueTasks, concurrency, (task) => runSingleAutomationTask(task, now));
 
-  for (const task of dueTasks) {
-    const groupId = task.groupId || (task.chatType === 'group' ? task.chatId : '');
-    if (groupId) {
-      const rules = await listGroupRules(groupId, { enabled: true });
-      if (isWithinQuietHours(groupId, now, rules)) {
-        recordWorkflowMetric('yuno_automation_tasks_deferred_total', 1, {
-          task_type: task.taskType,
-          reason: 'quiet-hours',
-        });
-        continue;
-      }
-    }
-
-    const toolResult = task.taskType === 'reminder'
-      ? {
-          tool: 'reminder_due',
-          payload: {
-            taskId: task.taskId,
-            text: task.payload?.text || task.summary,
-            summary: task.summary,
-          },
-          summary: task.summary,
-          priority: 'normal',
-          visibility: task.chatType === 'group' ? 'group' : 'default',
-          followUpHint: '',
-          safetyFlags: [],
-        }
-      : {
-          tool: 'subscription_update',
-          payload: {
-            taskId: task.taskId,
-            sourceType: task.sourceType,
-            target: task.target,
-            summary: task.summary || `订阅 ${task.sourceType}:${task.target} 有了新的动静。`,
-            actionSuggestion: task.payload?.actionSuggestion || '',
-          },
-          summary: task.summary || `订阅 ${task.sourceType}:${task.target} 有了新的动静。`,
-          priority: 'low',
-          visibility: task.chatType === 'group' ? 'group' : 'default',
-          followUpHint: '',
-          safetyFlags: [],
-        };
-
-    await deliverSchedulerToolResult(task, toolResult);
-    await markAutomationTaskDelivered(task, {
-      now,
-      deliveryKey: `scheduler:${task.taskId}:${new Date(now).toISOString()}`,
-    });
-
-    recordWorkflowMetric('yuno_automation_tasks_triggered_total', 1, {
-      task_type: task.taskType,
-      chat_type: task.chatType,
+  for (const [index, result] of results.entries()) {
+    if (!result?.error) continue;
+    const task = dueTasks[index];
+    logger.error('scheduler', 'Automation task execution failed', {
+      taskId: task?.taskId,
+      taskType: task?.taskType,
+      chatType: task?.chatType,
+      message: result.error.message,
     });
   }
 }
@@ -188,6 +236,14 @@ export function startScheduler() {
   cron.schedule('* * * * *', () => {
     runDueAutomationTasks(new Date()).catch((error) => {
       logger.error('scheduler', 'Automation task tick failed', {
+        message: error.message,
+      });
+    });
+  }, { timezone: 'Asia/Shanghai' });
+
+  cron.schedule('*/10 * * * *', () => {
+    cleanupGroupEventsRetention().catch((error) => {
+      logger.warn('scheduler', 'Group event cleanup failed', {
         message: error.message,
       });
     });

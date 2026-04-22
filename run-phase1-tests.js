@@ -35,4 +35,5 @@ await import('./phase1-onebot-notice.test.js');
 
 
 await import('./phase1-persist-job.test.js');
+await import('./phase1-performance-guards.test.js');
 

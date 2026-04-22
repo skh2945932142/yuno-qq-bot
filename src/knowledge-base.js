@@ -14,10 +14,13 @@ import {
 } from './qdrant-client.js';
 import { logger } from './logger.js';
 import { recordWorkflowMetric } from './metrics.js';
+import { getRuntimeServices } from './runtime-services.js';
 
 const KNOWLEDGE_DIR = path.join(process.cwd(), 'knowledge');
 const CHUNK_TARGET = 560;
 const CHUNK_OVERLAP = 80;
+const KNOWLEDGE_CACHE_MAX_ENTRIES = 256;
+const knowledgeQueryCache = new Map();
 const BUILT_IN_KNOWLEDGE_DOCUMENTS = Object.freeze([
   {
     source: 'knowledge/persona/builtin-core.md',
@@ -60,6 +63,40 @@ function truncateText(text, limit) {
   }
 
   return `${normalized.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function buildKnowledgeCacheKey(query, options = {}) {
+  return JSON.stringify({
+    query: String(query || '').trim(),
+    limit: Number(options.limit || config.qdrantTopK),
+    scoreThreshold: Number(options.scoreThreshold ?? config.qdrantMinScore),
+    charLimit: Number(options.charLimit || config.qdrantCharLimit),
+    preferredTags: [...(options.preferredTags || [])].map((item) => String(item || '').trim()).filter(Boolean).sort(),
+  });
+}
+
+function getKnowledgeCacheValue(key) {
+  const item = knowledgeQueryCache.get(key);
+  if (!item) return null;
+  if (item.expiresAt <= Date.now()) {
+    knowledgeQueryCache.delete(key);
+    return null;
+  }
+  return item.value;
+}
+
+function setKnowledgeCacheValue(key, value, ttlMs) {
+  if (ttlMs <= 0) return;
+  if (knowledgeQueryCache.size >= KNOWLEDGE_CACHE_MAX_ENTRIES) {
+    const firstKey = knowledgeQueryCache.keys().next().value;
+    if (firstKey) {
+      knowledgeQueryCache.delete(firstKey);
+    }
+  }
+  knowledgeQueryCache.set(key, {
+    value,
+    expiresAt: Date.now() + ttlMs,
+  });
 }
 
 function parseMetadata(sectionText, fallbackCategory, fallbackTitle) {
@@ -406,15 +443,43 @@ export async function retrieveKnowledge(query, options = {}) {
 
   const embed = options.createEmbeddings || createEmbeddings;
   const search = options.searchKnowledge || searchKnowledge;
+  const usingCustomDeps = Boolean(options.createEmbeddings || options.searchKnowledge || options.getQdrantStatus);
+  const defaultCacheTtlMs = usingCustomDeps
+    ? 0
+    : (process.env.NODE_ENV === 'test' ? 0 : config.knowledgeQueryCacheTtlMs);
+  const cacheTtlMs = Math.max(0, Number(options.cacheTtlMs ?? defaultCacheTtlMs));
+  const cacheKey = buildKnowledgeCacheKey(query, options);
+  if (cacheTtlMs > 0) {
+    const cached = getKnowledgeCacheValue(cacheKey);
+    if (cached) {
+      recordWorkflowMetric('yuno_retrieval_cache_hit_total', 1, { source: 'memory' });
+      return cached;
+    }
+  }
   const status = (options.getQdrantStatus || getQdrantStatus)();
+  const runtimeQdrant = getRuntimeServices().readiness?.qdrant;
+  if (runtimeQdrant?.enabled && runtimeQdrant.ready === false) {
+    const result = {
+      enabled: false,
+      query,
+      source: 'none',
+      documents: [],
+      reason: `qdrant-degraded:${runtimeQdrant.reason || 'unknown'}`,
+    };
+    setKnowledgeCacheValue(cacheKey, result, cacheTtlMs);
+    return result;
+  }
+
   if (!status.enabled) {
-    return {
+    const result = {
       enabled: false,
       query,
       source: 'none',
       documents: [],
       reason: options.reason || 'Qdrant is not configured',
     };
+    setKnowledgeCacheValue(cacheKey, result, cacheTtlMs);
+    return result;
   }
 
   let embeddingRows;
@@ -432,13 +497,15 @@ export async function retrieveKnowledge(query, options = {}) {
       query,
     });
 
-    return {
+    const result = {
       enabled: false,
       query,
       source: 'none',
       documents: [],
       reason: 'retrieval-failed',
     };
+    setKnowledgeCacheValue(cacheKey, result, cacheTtlMs);
+    return result;
   }
 
   const validation = validateEmbeddingRows(embeddingRows, 1);
@@ -452,13 +519,15 @@ export async function retrieveKnowledge(query, options = {}) {
       message: validation.message,
     });
 
-    return {
+    const result = {
       enabled: false,
       query,
       source: 'none',
       documents: [],
       reason: validation.reason,
     };
+    setKnowledgeCacheValue(cacheKey, result, cacheTtlMs);
+    return result;
   }
 
   try {
@@ -507,13 +576,15 @@ export async function retrieveKnowledge(query, options = {}) {
       result: documents.length > 0 ? 'hit' : 'miss',
     });
 
-    return {
+    const result = {
       enabled: true,
       query,
       source: 'qdrant',
       documents,
       reason: documents.length > 0 ? 'ok' : 'no-match',
     };
+    setKnowledgeCacheValue(cacheKey, result, cacheTtlMs);
+    return result;
   } catch (error) {
     recordWorkflowMetric('yuno_retrieval_queries_total', 1, {
       result: 'error',
@@ -523,12 +594,14 @@ export async function retrieveKnowledge(query, options = {}) {
       query,
     });
 
-    return {
+    const result = {
       enabled: false,
       query,
       source: 'none',
       documents: [],
       reason: 'retrieval-failed',
     };
+    setKnowledgeCacheValue(cacheKey, result, cacheTtlMs);
+    return result;
   }
 }
