@@ -75,6 +75,34 @@ test('processIncomingMessage uses short fallback when reply budget is exceeded',
   assert.equal(sentReplies.length, 1);
 });
 
+test('processIncomingMessage keeps full model reply when reply budget override is not provided', async () => {
+  const sentReplies = [];
+  const event = createEvent();
+  const precomputed = createPrecomputed(event);
+
+  const reply = await processIncomingMessage(event, precomputed, {
+    deps: {
+      sendReply: async (_target, text) => {
+        sentReplies.push(text);
+      },
+      sendVoice: async () => false,
+      retrieveKnowledge: async () => ({ enabled: false, documents: [], reason: 'disabled' }),
+      chat: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return 'slow model reply';
+      },
+      appendConversationMessages: async () => null,
+      updateRelationProfile: async () => null,
+      updateUserState: async () => null,
+      updateUserProfileMemory: async () => null,
+      shouldSendVoiceForEmotion: () => false,
+    },
+  });
+
+  assert.match(reply, /slow model reply/);
+  assert.equal(sentReplies.length, 1);
+});
+
 test('processIncomingMessage retries once with fallback model on model unavailable', async () => {
   const sentReplies = [];
   const chatCalls = [];

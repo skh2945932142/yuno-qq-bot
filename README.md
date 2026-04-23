@@ -89,6 +89,12 @@ npm run kb:sync
 - `CHAT_STYLE_REPEAT_GUARD`
 - `CHAT_ELLIPSIS_LIMIT`
 
+默认策略（2026-04）：
+
+- `REQUEST_TIMEOUT_MS` 默认 `60000`（60 秒），降低慢模型被过早超时的概率
+- `REPLY_TIME_BUDGET_MS` 默认 `0`（关闭回复预算干预，等待模型完整回复）
+- 如需恢复“快速短答兜底”，可将 `REPLY_TIME_BUDGET_MS` 设为大于 `0` 的值
+
 语音相关：
 
 - `ENABLE_VOICE`

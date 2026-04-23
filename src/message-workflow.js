@@ -1058,7 +1058,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
           userId: normalizedEvent.userId,
           messageId: normalizedEvent.messageId,
           route: task.category,
-          budgetMs: config.replyTimeBudgetMs,
+          budgetMs: replyBudgetMs,
         });
         visibleReplyText = buildReplyBudgetFallbackReply(normalizedEvent, task);
       } else if (isModelUnavailableError(error)) {
