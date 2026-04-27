@@ -86,3 +86,43 @@ test('runYunoConversation formats tool results into unified outputs', async () =
   assert.equal(result.response.outputs[0].type, 'text');
   assert.equal(result.response.outputs[1].type, 'image');
 });
+
+test('runYunoConversation toolResult path creates a trace when one is not provided', async () => {
+  const result = await runYunoConversation({
+    platform: 'qq',
+    scene: 'group',
+    groupId: '20001',
+    chatId: '20001',
+    userId: '10001',
+    username: 'Alice',
+    rawMessage: '/digest',
+    metadata: {
+      messageId: 'msg-tool-1',
+      source: { adapter: 'scheduler' },
+    },
+  }, {
+    deps: {
+      ensureRelation: async () => ({ affection: 20, activeScore: 5 }),
+      ensureUserState: async () => ({ currentEmotion: 'CALM', intensity: 0.2 }),
+      ensureUserProfileMemory: async () => ({ bondMemories: [], specialNicknames: [] }),
+      getConversationState: async () => ({ messages: [], rollingSummary: '' }),
+      ensureGroupState: async () => null,
+      getRecentEvents: async () => [],
+    },
+    toolResult: {
+      tool: 'group_daily_digest',
+      payload: {
+        summary: '今天群里主要在聊发布和排障。',
+      },
+      summary: '今天群里主要在聊发布和排障。',
+      visibility: 'group',
+      safetyFlags: [],
+    },
+  });
+
+  assert.equal(result.suppressed, false);
+  assert.equal(result.analysis.reason, 'tool-result');
+  assert.ok(Array.isArray(result.response.outputs));
+  assert.ok(result.response.outputs.length >= 1);
+  assert.equal(result.response.outputs[0].type, 'text');
+});

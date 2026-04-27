@@ -4,6 +4,7 @@ import {
   shouldRespondToEvent,
 } from './message-workflow.js';
 import { normalizeLegacyMessageEvent } from './chat/session.js';
+import { createTraceContext } from './runtime-tracing.js';
 import { sendReply, sendStructuredReply, sendVoice } from './sender.js';
 import { resolveUserPersonaPolicy } from './persona-policy.js';
 import {
@@ -148,7 +149,14 @@ async function formatStructuredToolReply(event, options, output) {
   const deps = {
     ...(options.deps || {}),
   };
-  const trace = options.trace || null;
+  const trace = options.trace || createTraceContext('tool-result', {
+    chatType: event.chatType,
+    chatId: event.chatId,
+    userId: event.userId,
+    messageId: event.messageId,
+    route: options.pluginRoute || null,
+    tool: options.toolResult?.tool || null,
+  });
   const context = options.context || await buildWorkflowContext(event, trace, {
     ...deps,
   });
