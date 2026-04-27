@@ -20,11 +20,18 @@ export async function createMemeAsset(input, deps = {}) {
     storagePath: input.storagePath || '',
     avatarUrl: input.avatarUrl || '',
     tags: Array.isArray(input.tags) ? input.tags : [],
+    ocrText: input.ocrText || '',
+    caption: input.caption || '',
+    semanticTags: Array.isArray(input.semanticTags) ? input.semanticTags : [],
+    usageContext: input.usageContext || '',
+    embeddingSourceText: input.embeddingSourceText || '',
     emotion: input.emotion || 'funny',
     safetyStatus: input.safetyStatus || 'safe',
     disabled: Boolean(input.disabled),
     createdAt: input.createdAt || new Date(),
     lastUsedAt: input.lastUsedAt || null,
+    lastAnalyzedAt: input.lastAnalyzedAt || null,
+    expiresAt: input.expiresAt || null,
     usageCount: Number(input.usageCount || 0),
   };
 
@@ -92,4 +99,17 @@ export async function recordMemeUsage(assetId, deps = {}) {
   }
 
   throw new Error('Meme repository model does not support usage updates');
+}
+
+export async function updateMemeAsset(assetId, updates, deps = {}) {
+  const model = pickModel(deps);
+  if (typeof model.findOneAndUpdate === 'function') {
+    return model.findOneAndUpdate(
+      { assetId: String(assetId || '') },
+      { $set: updates },
+      { new: true }
+    );
+  }
+
+  throw new Error('Meme repository model does not support updates');
 }

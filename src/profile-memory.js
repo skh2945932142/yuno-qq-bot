@@ -39,6 +39,26 @@ export function buildProfileSummary(profile) {
     segments.push(`角色设定:${profile.roleplaySettings.join(' / ')}`);
   }
 
+  if (profile.speakingStyleSummary) {
+    segments.push(`说话风格:${profile.speakingStyleSummary}`);
+  }
+
+  if (profile.frequentPhrases?.length) {
+    segments.push(`常用表达:${profile.frequentPhrases.join(' / ')}`);
+  }
+
+  if (profile.responsePreference) {
+    segments.push(`回复偏好:${profile.responsePreference}`);
+  }
+
+  if (profile.emojiStyle) {
+    segments.push(`表情风格:${profile.emojiStyle}`);
+  }
+
+  if (profile.humorStyle) {
+    segments.push(`幽默风格:${profile.humorStyle}`);
+  }
+
   return segments.join('；');
 }
 
@@ -75,6 +95,74 @@ function detectTonePreference(text) {
   ];
 
   return rules.find((item) => item.pattern.test(normalized))?.value || '';
+}
+
+function detectEmojiStyle(text) {
+  const normalized = String(text || '');
+  if (/[😂🤣😆😭🥺😍❤♥✨🔥]/u.test(normalized)) {
+    return 'emoji-heavy';
+  }
+  if (/\([^\)]{1,6}\)|（[^）]{1,6}）|QAQ|www|2333|哈哈哈+/i.test(normalized)) {
+    return 'expressive-text';
+  }
+  return '';
+}
+
+function detectResponsePreference(text) {
+  const normalized = String(text || '');
+  const rules = [
+    { pattern: /(详细一点|展开说说|多说一点|讲具体点)/i, value: 'detailed' },
+    { pattern: /(简单点|短一点|直接说|别太长)/i, value: 'concise' },
+    { pattern: /(先安慰我|哄哄我|温柔一点)/i, value: 'comforting' },
+    { pattern: /(理性一点|分析一下|讲逻辑)/i, value: 'analytical' },
+  ];
+  return rules.find((item) => item.pattern.test(normalized))?.value || '';
+}
+
+function detectHumorStyle(text) {
+  const normalized = String(text || '');
+  if (/(玩梗|整活|抽象|乐子|笑死|蚌埠住了|逆天)/i.test(normalized)) {
+    return 'meme-heavy';
+  }
+  if (/(阴阳|别太认真|吐槽)/i.test(normalized)) {
+    return 'sarcastic';
+  }
+  return '';
+}
+
+function extractFrequentPhrases(text) {
+  const normalized = String(text || '');
+  const phrases = [];
+  for (const match of normalized.matchAll(/["“”'']([^"'“”]{2,12})["“”'']/g)) {
+    if (match?.[1]) {
+      phrases.push(String(match[1]).trim());
+    }
+  }
+  for (const token of normalized.match(/(?:QAQ|2333|www|笑死|蚌埠住了|无语了|真的会谢|别太离谱)/gi) || []) {
+    phrases.push(String(token).trim());
+  }
+  return uniqueCompact(phrases, 6);
+}
+
+function buildSpeakingStyleSummary(text, update) {
+  const traits = [];
+  if (update.tonePreference) traits.push(`语气偏${update.tonePreference}`);
+  if (update.responsePreference === 'detailed') traits.push('希望回复更展开');
+  if (update.responsePreference === 'concise') traits.push('偏好短答直说');
+  if (update.responsePreference === 'comforting') traits.push('需要安抚式回应');
+  if (update.responsePreference === 'analytical') traits.push('偏好分析型回应');
+  if (update.emojiStyle === 'emoji-heavy') traits.push('常用 emoji');
+  if (update.emojiStyle === 'expressive-text') traits.push('常用颜文字或语气词');
+  if (update.humorStyle === 'meme-heavy') traits.push('爱玩梗');
+  if (update.humorStyle === 'sarcastic') traits.push('带一点吐槽感');
+  if (traits.length > 0) {
+    return traits.join('，');
+  }
+
+  const normalized = String(text || '').trim();
+  if (!normalized) return '';
+  if (normalized.length <= 24) return '偏短句表达';
+  return '';
 }
 
 function extractPreferredName(text) {
@@ -212,8 +300,14 @@ export function extractStableProfileUpdate(text, analysis = {}, specialUser = nu
     relationshipPreference: extractRelationshipPreference(text),
     bondMemories: specialUser ? extractBondMemories(text) : [],
     specialNicknames: specialUser ? extractSpecialNicknames(text) : [],
+    speakingStyleSummary: '',
+    frequentPhrases: extractFrequentPhrases(text),
+    emojiStyle: detectEmojiStyle(text),
+    responsePreference: detectResponsePreference(text),
+    humorStyle: detectHumorStyle(text),
     personaMode: specialUser?.personaMode || '',
   };
+  update.speakingStyleSummary = buildSpeakingStyleSummary(text, update);
 
   const hasMeaningfulData = Boolean(
     update.preferredName
@@ -224,6 +318,11 @@ export function extractStableProfileUpdate(text, analysis = {}, specialUser = nu
     || update.relationshipPreference
     || update.bondMemories.length > 0
     || update.specialNicknames.length > 0
+    || update.speakingStyleSummary
+    || update.frequentPhrases.length > 0
+    || update.emojiStyle
+    || update.responsePreference
+    || update.humorStyle
     || update.personaMode
   );
 
@@ -235,6 +334,11 @@ export function extractStableProfileUpdate(text, analysis = {}, specialUser = nu
     || update.relationshipPreference
     || update.bondMemories.length > 0
     || update.specialNicknames.length > 0
+    || update.speakingStyleSummary
+    || update.frequentPhrases.length > 0
+    || update.emojiStyle
+    || update.responsePreference
+    || update.humorStyle
   );
 
   return {
@@ -256,6 +360,12 @@ export async function ensureUserProfileMemory({ platform = 'qq', userId, userNam
         profileKey,
         displayName: String(userName || ''),
         personaMode: resolvedSpecialUser?.personaMode || '',
+        speakingStyleSummary: '',
+        frequentPhrases: [],
+        emojiStyle: '',
+        responsePreference: '',
+        humorStyle: '',
+        styleLastUpdated: null,
       },
     },
     { upsert: true, returnDocument: 'after' }
@@ -286,6 +396,14 @@ export async function updateUserProfileMemory(profile, { text, analysis, userNam
     ], 4),
     relationshipPreference: extracted.update.relationshipPreference || profile.relationshipPreference || '',
     personaMode: extracted.update.personaMode || profile.personaMode || resolvedSpecialUser?.personaMode || '',
+    speakingStyleSummary: extracted.update.speakingStyleSummary || profile.speakingStyleSummary || '',
+    frequentPhrases: uniqueCompact([
+      ...extracted.update.frequentPhrases,
+      ...(profile.frequentPhrases || []),
+    ], 8),
+    emojiStyle: extracted.update.emojiStyle || profile.emojiStyle || '',
+    responsePreference: extracted.update.responsePreference || profile.responsePreference || '',
+    humorStyle: extracted.update.humorStyle || profile.humorStyle || '',
     bondMemories: uniqueCompact([
       ...(resolvedSpecialUser?.memorySeeds || []),
       ...extracted.update.bondMemories,
@@ -310,6 +428,13 @@ export async function updateUserProfileMemory(profile, { text, analysis, userNam
         ...nextProfile,
         profileSummary: buildProfileSummary(nextProfile),
         specialBondSummary,
+        styleLastUpdated: extracted.update.speakingStyleSummary
+          || extracted.update.frequentPhrases.length > 0
+          || extracted.update.emojiStyle
+          || extracted.update.responsePreference
+          || extracted.update.humorStyle
+          ? new Date()
+          : profile.styleLastUpdated || null,
         lastUpdated: new Date(),
       },
     },

@@ -34,6 +34,9 @@ import { resolveUserPersonaPolicy } from './persona-policy.js';
 import { formatToolResultAsYuno, normalizeFormatterOutputs } from './yuno-formatter.js';
 import { resolveReplyLengthProfile } from './reply-length.js';
 import { resolveReplyIntentPlan } from './reply-intent-plan.js';
+import { persistUserMemoryEvents } from './user-memory-events.js';
+import { collectMemeAssetForEvent } from './meme-collector.js';
+import { indexMemeAssetSemantics, indexUserMemoryEvents, retrieveMemoryContext } from './memory-retrieval.js';
 
 registerQueryTools(toolRegistry);
 
@@ -369,6 +372,11 @@ function createWorkflowDeps(deps = {}) {
     updateUserState: deps.updateUserState || updateUserState,
     appendConversationMessages: deps.appendConversationMessages || appendConversationMessages,
     updateUserProfileMemory: deps.updateUserProfileMemory || updateUserProfileMemory,
+    persistUserMemoryEvents: deps.persistUserMemoryEvents || persistUserMemoryEvents,
+    collectMemeAssetForEvent: deps.collectMemeAssetForEvent || collectMemeAssetForEvent,
+    indexUserMemoryEvents: deps.indexUserMemoryEvents || indexUserMemoryEvents,
+    indexMemeAssetSemantics: deps.indexMemeAssetSemantics || indexMemeAssetSemantics,
+    retrieveMemoryContext: deps.retrieveMemoryContext || retrieveMemoryContext,
     retrieveKnowledge: deps.retrieveKnowledge || retrieveKnowledge,
     recordGroupEvent: deps.recordGroupEvent || recordGroupEvent,
     updateGroupStateFromAnalysis: deps.updateGroupStateFromAnalysis || updateGroupStateFromAnalysis,
@@ -416,7 +424,7 @@ export async function buildWorkflowContext(event, trace, deps, options = {}) {
   const lightweight = Boolean(options.lightweight);
   const specialUser = getSpecialUserByUserId(event.userId);
 
-  const [relation, userState, userProfile, conversationState, groupState, recentEvents] = await withTraceSpan(
+  const [relation, userState, userProfile, conversationState, groupState, recentEvents, memoryContext] = await withTraceSpan(
     trace,
     'load-context',
     () => Promise.all([
@@ -426,6 +434,10 @@ export async function buildWorkflowContext(event, trace, deps, options = {}) {
       deps.getConversationState(session),
       isAdvanced && !lightweight ? deps.ensureGroupState(event.chatId) : Promise.resolve(null),
       isAdvanced && !lightweight ? deps.getRecentEvents(event.chatId, 5) : Promise.resolve([]),
+      deps.retrieveMemoryContext({
+        userId: event.userId,
+        userTurn: stripCqCodes(event.rawText || event.text || ''),
+      }),
     ]),
     {
       chatType: event.chatType,
@@ -444,6 +456,7 @@ export async function buildWorkflowContext(event, trace, deps, options = {}) {
     conversationState,
     groupState,
     recentEvents,
+    memoryContext: memoryContext || { eventMemories: [], memeMemories: [] },
     specialUser,
     isAdmin: event.userId === config.adminQq,
     isAdvanced,
@@ -624,6 +637,35 @@ async function persistReplyState(context, payload, trace, deps) {
     });
   }
 
+  namedTasks.push({
+    name: 'extract-user-memory-events',
+    run: async () => {
+      const events = await deps.persistUserMemoryEvents({
+        event: context.event,
+        text: payload.userTurn,
+        analysis: payload.analysis,
+        userProfile: context.userProfile,
+      });
+      if (events.length > 0) {
+        await deps.indexUserMemoryEvents(events);
+      }
+      return events;
+    },
+  });
+
+  if (Array.isArray(context.event?.attachments) && context.event.attachments.some((item) => item.type === 'image')) {
+    namedTasks.push({
+      name: 'analyze-meme-semantics',
+      run: async () => {
+        const collected = await deps.collectMemeAssetForEvent(context.event, {}, deps);
+        if (collected?.asset) {
+          await deps.indexMemeAssetSemantics(collected.asset);
+        }
+        return collected;
+      },
+    });
+  }
+
   if (context.isAdvanced) {
     namedTasks.push({
       name: 'update-group-state',
@@ -698,6 +740,7 @@ async function persistReplyState(context, payload, trace, deps) {
 }
 
 function buildPersistContextSnapshot(context) {
+  const memoryContext = context.memoryContext || { eventMemories: [], memeMemories: [] };
   return {
     session: { ...context.session },
     isAdvanced: Boolean(context.isAdvanced),
@@ -744,8 +787,33 @@ function buildPersistContextSnapshot(context) {
       specialBondSummary: context.userProfile.specialBondSummary || '',
       bondMemories: context.userProfile.bondMemories || [],
       specialNicknames: context.userProfile.specialNicknames || [],
+      speakingStyleSummary: context.userProfile.speakingStyleSummary || '',
+      frequentPhrases: context.userProfile.frequentPhrases || [],
+      emojiStyle: context.userProfile.emojiStyle || '',
+      responsePreference: context.userProfile.responsePreference || '',
+      humorStyle: context.userProfile.humorStyle || '',
       profileSummary: context.userProfile.profileSummary || '',
     } : null,
+    memoryContext: {
+      eventMemories: Array.isArray(memoryContext.eventMemories)
+        ? memoryContext.eventMemories.map((item) => ({
+          memoryId: item.memoryId,
+          eventType: item.eventType,
+          summary: item.summary,
+          importanceScore: item.importanceScore,
+          expiresAt: item.expiresAt || null,
+        }))
+        : [],
+      memeMemories: Array.isArray(memoryContext.memeMemories)
+        ? memoryContext.memeMemories.map((item) => ({
+          assetId: item.assetId,
+          caption: item.caption || '',
+          usageContext: item.usageContext || '',
+          semanticTags: item.semanticTags || [],
+          expiresAt: item.expiresAt || null,
+        }))
+        : [],
+    },
   };
 }
 
@@ -787,6 +855,7 @@ export async function processPersistJob(jobData, options = {}) {
       relation: snapshot.relation,
       userState: snapshot.userState,
       userProfile: snapshot.userProfile,
+      memoryContext: snapshot.memoryContext || { eventMemories: [], memeMemories: [] },
       specialUser: snapshot.specialUser || getSpecialUserByUserId(event.userId),
       isAdvanced: Boolean(snapshot.isAdvanced),
       contextMode: snapshot.contextMode || 'persist',
@@ -1006,6 +1075,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       conversationState: workflowContext.conversationState,
       groupState: workflowContext.groupState,
       recentEvents: workflowContext.recentEvents,
+      memoryContext: workflowContext.memoryContext,
       messageAnalysis: analysis,
       emotionResult,
       knowledge,

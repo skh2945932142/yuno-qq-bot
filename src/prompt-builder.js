@@ -142,6 +142,54 @@ function buildMemorySection(conversationState, promptProfile, performanceProfile
   return lines.join('\n');
 }
 
+function buildLongTermMemorySection(userProfile, memoryContext = {}) {
+  const lines = [];
+  if (userProfile?.speakingStyleSummary) {
+    lines.push(`- 说话风格=${compactText(userProfile.speakingStyleSummary, 72, '')}`);
+  }
+  if (Array.isArray(userProfile?.frequentPhrases) && userProfile.frequentPhrases.length > 0) {
+    lines.push(`- 常用表达=${formatList(userProfile.frequentPhrases, '', 4)}`);
+  }
+  if (userProfile?.responsePreference) {
+    lines.push(`- 回复偏好=${userProfile.responsePreference}`);
+  }
+  if (userProfile?.emojiStyle) {
+    lines.push(`- 表情风格=${userProfile.emojiStyle}`);
+  }
+
+  const eventMemories = Array.isArray(memoryContext?.eventMemories) ? memoryContext.eventMemories : [];
+  if (eventMemories.length > 0) {
+    const summaries = eventMemories
+      .slice(0, 3)
+      .map((item) => compactText(item.summary, 72, ''))
+      .filter(Boolean);
+    if (summaries.length > 0) {
+      lines.push(`- 重要事件=${summaries.join(' / ')}`);
+    }
+  }
+
+  const memeMemories = Array.isArray(memoryContext?.memeMemories) ? memoryContext.memeMemories : [];
+  if (memeMemories.length > 0) {
+    const memeSummary = memeMemories
+      .slice(0, 2)
+      .map((item) => compactText(
+        [item.caption, item.usageContext, formatList(item.semanticTags, '', 3)].filter(Boolean).join(' / '),
+        72,
+        ''
+      ))
+      .filter(Boolean);
+    if (memeSummary.length > 0) {
+      lines.push(`- 表情风格记忆=${memeSummary.join(' / ')}`);
+    }
+  }
+
+  if (lines.length === 0) {
+    return '';
+  }
+
+  return ['长期记忆', ...lines].join('\n');
+}
+
 function buildKnowledgeSection(knowledge, route, promptProfile) {
   const hasKnowledge = Boolean(knowledge?.documents?.length);
   if (!hasKnowledge && route?.category !== 'knowledge_qa') return '';
@@ -240,6 +288,7 @@ export function buildReplyContext({
   conversationState,
   groupState,
   recentEvents,
+  memoryContext = null,
   messageAnalysis,
   emotionResult,
   knowledge,
@@ -278,6 +327,11 @@ export function buildReplyContext({
     }
   }
 
+  const longTermMemorySection = buildLongTermMemorySection(userProfile, memoryContext);
+  if (longTermMemorySection) {
+    sections.splice(5, 0, longTermMemorySection);
+  }
+
   const knowledgeSection = buildKnowledgeSection(knowledge, route, promptProfile);
   if (knowledgeSection) {
     sections.splice(5, 0, knowledgeSection);
@@ -308,4 +362,3 @@ export function buildScheduledPrompt({ groupState, recentEvents, plan }) {
     '- 可轻接近期话题，但不要复盘群聊。',
   ].join('\n');
 }
-

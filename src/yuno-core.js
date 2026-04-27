@@ -149,6 +149,12 @@ async function formatStructuredToolReply(event, options, output) {
   const deps = {
     ...(options.deps || {}),
   };
+  if (typeof deps.retrieveMemoryContext !== 'function') {
+    deps.retrieveMemoryContext = async () => ({
+      eventMemories: [],
+      memeMemories: [],
+    });
+  }
   const trace = options.trace || createTraceContext('tool-result', {
     chatType: event.chatType,
     chatId: event.chatId,
