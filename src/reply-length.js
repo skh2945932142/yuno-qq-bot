@@ -16,63 +16,9 @@ function needsSupport(analysis) {
 }
 
 function resolvePerformanceProfile({
-  isPrivate,
   routeCategory,
-  analysis,
-  emotionResult,
-  conversationState,
-  hasRecentContext,
 }) {
-  const strongEmotion = isStrongEmotion(emotionResult);
-  const supportLike = needsSupport(analysis);
-  const recentMessageCount = conversationState?.messages?.length || 0;
-  const hasDeepFollowUpContext = recentMessageCount >= 4 || Boolean(conversationState?.rollingSummary);
-
   if (routeCategory === 'knowledge_qa') return 'knowledge_chat';
-  if (routeCategory === 'poke') return 'fast_chat';
-  const directMentionReason = ['basic-direct-mention-pass', 'advanced-direct-mention-pass'].includes(analysis?.reason);
-
-  if (!isPrivate && directMentionReason && routeCategory !== 'knowledge_qa' && !supportLike) {
-    return 'fast_chat';
-  }
-
-  if (
-    routeCategory === 'group_chat'
-    && !supportLike
-    && !strongEmotion
-    && (analysis?.relevance || 0) < 0.85
-  ) {
-    return 'fast_chat';
-  }
-
-  if (
-    routeCategory === 'private_chat'
-    && !hasRecentContext
-    && !supportLike
-    && !strongEmotion
-    && analysis?.intent !== 'query'
-  ) {
-    return 'fast_chat';
-  }
-
-  if (
-    routeCategory === 'follow_up'
-    && !supportLike
-    && !strongEmotion
-    && !hasDeepFollowUpContext
-  ) {
-    return 'fast_chat';
-  }
-
-  if (
-    routeCategory === 'cold_start'
-    && !supportLike
-    && !strongEmotion
-    && !isPrivate
-  ) {
-    return 'fast_chat';
-  }
-
   return 'standard_chat';
 }
 
@@ -113,46 +59,42 @@ function buildGenerationProfile({
   hasRecentContext,
   performanceProfile,
 }) {
-  let historyLimit = isPrivate ? 4 : 3;
+  let historyLimit = isPrivate ? 5 : 4;
   let temperature = isPrivate ? 0.62 : 0.52;
-  let promptProfile = 'compact';
+  let promptProfile = 'standard';
 
   if (performanceProfile === 'knowledge_chat' || routeCategory === 'knowledge_qa') {
     historyLimit = isPrivate ? 6 : 4;
     temperature = 0.36;
     promptProfile = 'standard';
-  } else if (performanceProfile === 'fast_chat') {
-    historyLimit = isPrivate ? 2 : 1;
-    temperature = isPrivate ? 0.54 : 0.46;
-    promptProfile = 'fast';
   } else if (routeCategory === 'follow_up' && hasRecentContext) {
     historyLimit = isPrivate ? 5 : 4;
     temperature = isPrivate ? 0.6 : 0.52;
-    promptProfile = 'compact';
+    promptProfile = 'standard';
   } else if (routeCategory === 'cold_start') {
     historyLimit = isPrivate ? 4 : 3;
     temperature = isPrivate ? 0.66 : 0.54;
-    promptProfile = 'compact';
+    promptProfile = 'standard';
   } else if (routeCategory === 'poke') {
-    historyLimit = 1;
-    temperature = 0.5;
-    promptProfile = 'fast';
+    historyLimit = 3;
+    temperature = 0.48;
+    promptProfile = 'compact';
   }
 
   if (needsSupport(analysis)) {
     historyLimit = Math.max(historyLimit, isPrivate ? 5 : 4);
     temperature = Math.min(temperature, 0.54);
-    promptProfile = 'compact';
+    promptProfile = 'standard';
   }
 
   if ((analysis?.relevance || 0) >= 0.85 && routeCategory === 'group_chat') {
     historyLimit = Math.max(historyLimit, 4);
-    promptProfile = 'compact';
+    promptProfile = 'standard';
   }
 
   if (isStrongEmotion(emotionResult)) {
     historyLimit = Math.max(historyLimit, isPrivate ? 5 : 4);
-    promptProfile = 'compact';
+    promptProfile = 'standard';
   }
 
   return {
@@ -223,29 +165,8 @@ export function resolveReplyLengthProfile({
   }
 
   const performanceProfile = resolvePerformanceProfile({
-    isPrivate,
     routeCategory,
-    analysis,
-    emotionResult,
-    conversationState,
-    hasRecentContext,
   });
-
-  if (performanceProfile === 'fast_chat') {
-    tier = tier === 'expanded' ? 'balanced' : tier;
-    maxTokens = Math.min(maxTokens, isPrivate ? 220 : 140);
-    reason = `${reason}+fast-chat`;
-  }
-
-  if (
-    !isPrivate
-    && routeCategory === 'cold_start'
-    && !needsSupport(analysis)
-    && !isStrongEmotion(emotionResult)
-  ) {
-    maxTokens = Math.min(maxTokens, 140);
-    reason = `${reason}+group-cold-start-cap`;
-  }
 
   const generationProfile = buildGenerationProfile({
     isPrivate,

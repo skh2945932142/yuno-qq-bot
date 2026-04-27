@@ -41,6 +41,9 @@ const ALLOWED_SOFT_EMOJIS = new Set(['\u2764', '\u2665', '\u{1F495}', '\u{1F49E}
 const EMOJI_REGEX = /\p{Extended_Pictographic}/gu;
 const THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*?<\/\1>/gi;
 const OPEN_THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*$/i;
+const THINK_FENCE_REGEX = /```(?:think|thinking|reasoning|analysis)\s*[\s\S]*?```/gi;
+const REASONING_LABEL_REGEX = /^(?:\s{0,3}(?:思考过程|思路|分析|推理|内心独白|reasoning|analysis|thought process|thinking)\s*[:：]|(?:step\s*\d+|步骤\s*\d+)\s*[:：])/i;
+const REASONING_CONTINUATION_REGEX = /^(?:\s*[-*•]\s+|\s*\d+[.)]\s+|\s*[（(]?\d+[）)]\s+|\s*首先[，,:：]?\s*|\s*然后[，,:：]?\s*|\s*最后[，,:：]?\s*)/i;
 const GROUP_REPLY_THROTTLE_WINDOW_MS = 25 * 1000;
 const GROUP_REPLY_THROTTLE_AFTER = 2;
 const GROUP_REPLY_THROTTLE_HINT = '我在听，慢一点说，我一条条接住。';
@@ -257,11 +260,39 @@ export function normalizeReplyFormatting(text) {
 }
 
 export function stripHiddenReasoning(text) {
-  return String(text || '')
+  const stripped = String(text || '')
     .replace(THINK_BLOCK_REGEX, ' ')
+    .replace(THINK_FENCE_REGEX, ' ')
     .replace(OPEN_THINK_BLOCK_REGEX, ' ')
     .replace(/\r\n/g, '\n')
-    .replace(/[ \t]+\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n');
+
+  const lines = stripped.split('\n');
+  const kept = [];
+  let skippingReasoning = true;
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || '');
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (!skippingReasoning && kept.length > 0 && kept[kept.length - 1] !== '') {
+        kept.push('');
+      }
+      continue;
+    }
+
+    if (skippingReasoning) {
+      if (REASONING_LABEL_REGEX.test(trimmed) || REASONING_CONTINUATION_REGEX.test(trimmed)) {
+        continue;
+      }
+      skippingReasoning = false;
+    }
+
+    kept.push(trimmed);
+  }
+
+  return kept
+    .join('\n')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();

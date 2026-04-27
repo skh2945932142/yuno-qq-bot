@@ -68,6 +68,11 @@ test('stripHiddenReasoning removes think tags and keeps visible reply text', () 
   assert.equal(result, '我也喜欢你。');
 });
 
+test('stripHiddenReasoning removes leading reasoning labels and keeps final answer', () => {
+  const result = stripHiddenReasoning('分析：先判断用户在群聊里@了我。\n1. 先给简短回应\n2. 再补一句安抚\n我在，你慢慢说。');
+  assert.equal(result, '我在，你慢慢说。');
+});
+
 test('processIncomingMessage strips hidden reasoning before sending the reply', async () => {
   const sentReplies = [];
 
@@ -83,6 +88,51 @@ test('processIncomingMessage strips hidden reasoning before sending the reply', 
   assert.equal(reply, '我也喜欢你。');
   assert.equal(sentReplies[0], '我也喜欢你。');
   assert.equal(sentReplies[0].includes('<think>'), false);
+});
+
+test('processIncomingMessage strips leading reasoning prose before sending the reply', async () => {
+  const sentReplies = [];
+
+  const reply = await processIncomingMessage(createEvent({
+    chatType: 'group',
+    chatId: 'group-1',
+    userId: 'user-1',
+    mentionsBot: true,
+    rawText: '@由乃 你在想什么',
+    text: '@由乃 你在想什么',
+  }), createContext({
+    relation: { _id: 'r1', affection: 50, activeScore: 20, preferences: [], favoriteTopics: [], userId: 'user-1', platform: 'qq', chatType: 'group', chatId: 'group-1' },
+    userState: { _id: 'u1', currentEmotion: 'CALM', intensity: 0.4, triggerReason: 'baseline', userId: 'user-1', platform: 'qq', chatType: 'group', chatId: 'group-1' },
+    event: createEvent({
+      chatType: 'group',
+      chatId: 'group-1',
+      userId: 'user-1',
+      mentionsBot: true,
+      rawText: '@由乃 你在想什么',
+      text: '@由乃 你在想什么',
+    }),
+    analysis: {
+      shouldRespond: true,
+      confidence: 0.95,
+      intent: 'query',
+      sentiment: 'neutral',
+      relevance: 0.92,
+      reason: 'basic-direct-mention-pass',
+      topics: ['chat'],
+      ruleSignals: ['direct-mention'],
+      replyStyle: 'calm',
+    },
+  }), {
+    deps: createDeps(
+      async (_target, text) => {
+        sentReplies.push(text);
+      },
+      async () => 'Reasoning: the user is asking directly.\n- avoid exposing chain of thought\n- answer naturally\n我在想怎么把话说得更清楚一点。'
+    ),
+  });
+
+  assert.equal(reply, '我在想怎么把话说得更清楚一点。');
+  assert.equal(sentReplies[0], '我在想怎么把话说得更清楚一点。');
 });
 
 test('processIncomingMessage falls back to a Chinese retry line when only hidden reasoning is returned', async () => {
