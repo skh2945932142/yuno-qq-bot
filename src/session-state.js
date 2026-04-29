@@ -214,7 +214,7 @@ export async function updateRelationProfile(relation, { text, analysis }) {
         },
       },
     ],
-    { returnDocument: 'after' }
+    { returnDocument: 'after', updatePipeline: true }
   );
 
   if (updated) {

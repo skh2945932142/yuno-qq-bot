@@ -3,6 +3,7 @@ await import('./phase1-tests/unified-adapter.test.js');
 await import('./phase1-message-analysis.test.js');
 await import('./phase1-conversation-memory.test.js');
 await import('./phase1-profile-memory.test.js');
+await import('./phase1-session-state.test.js');
 await import('./phase1-memory-learning.test.js');
 await import('./phase1-knowledge-base.test.js');
 await import('./phase1-config-defaults.test.js');
