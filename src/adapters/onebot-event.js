@@ -6,6 +6,25 @@ function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function normalizeOnebotMessageType(value, payload = {}) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['group'].includes(normalized)) return 'group';
+  if (['private', 'friend', 'temp', 'direct'].includes(normalized)) return 'private';
+  if (!normalized && payload.group_id) return 'group';
+  if (!normalized) return 'private';
+  return normalized;
+}
+
+function resolvePayloadUserId(payload) {
+  return String(
+    payload.user_id
+      || payload.sender?.user_id
+      || payload.sender?.userId
+      || payload.user?.id
+      || ''
+  ).trim();
+}
+
 function parseCqData(segment) {
   const data = {};
 
@@ -70,16 +89,20 @@ export function validateOnebotMessageEvent(payload) {
     errors.push('payload must be a supported OneBot message or notice');
   }
 
-  const messageType = String(payload.message_type || '').trim().toLowerCase();
+  const messageType = normalizeOnebotMessageType(
+    payload.message_type || payload.detail_type || '',
+    payload
+  );
   const inferredMessageType = isPoke || isGroupIncrease
     ? (payload.group_id ? 'group' : 'private')
     : messageType;
+  const resolvedUserId = resolvePayloadUserId(payload);
 
   if (!['group', 'private'].includes(inferredMessageType)) {
     errors.push('message_type must be "group" or "private"');
   }
 
-  if (!payload.user_id) {
+  if (!resolvedUserId) {
     errors.push('user_id is required');
   }
 
@@ -120,9 +143,9 @@ export function validateOnebotMessageEvent(payload) {
     value: normalizeLegacyMessageEvent({
       platform: 'qq',
       chatType: inferredMessageType,
-      chatId: String(inferredMessageType === 'group' ? payload.group_id : payload.user_id),
-      userId: String(payload.user_id),
-      userName: sender.card || sender.nickname || String(payload.user_id),
+      chatId: String(inferredMessageType === 'group' ? payload.group_id : resolvedUserId),
+      userId: resolvedUserId,
+      userName: sender.card || sender.nickname || resolvedUserId,
       messageId: String(payload.message_id || ''),
       replyTo: resolveReplyTo(payload),
       text,

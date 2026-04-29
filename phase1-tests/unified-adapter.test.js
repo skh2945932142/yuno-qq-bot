@@ -42,3 +42,31 @@ test('validateOnebotMessageEvent normalizes private payloads into unified events
   assert.equal(result.value.userName, 'Bob');
   assert.equal(result.value.mentionsBot, false);
 });
+
+test('validateOnebotMessageEvent accepts private friend payloads with sender user id fallback', () => {
+  const result = validateOnebotMessageEvent({
+    post_type: 'message',
+    message_type: 'friend',
+    raw_message: '在吗',
+    sender: { user_id: 10086, nickname: 'Carol' },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.value.chatType, 'private');
+  assert.equal(result.value.chatId, '10086');
+  assert.equal(result.value.userId, '10086');
+  assert.equal(result.value.userName, 'Carol');
+});
+
+test('validateOnebotMessageEvent infers private message type when message_type is missing', () => {
+  const result = validateOnebotMessageEvent({
+    post_type: 'message',
+    raw_message: 'hello',
+    sender: { user_id: 23333, nickname: 'Dora' },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.value.chatType, 'private');
+  assert.equal(result.value.chatId, '23333');
+  assert.equal(result.value.userId, '23333');
+});
