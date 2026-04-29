@@ -231,3 +231,62 @@ test('processIncomingMessage falls back to plain text when model reply is not st
   assert.equal(sentReplies[0], 'plain text fallback');
   assert.equal(sentVoices.length, 0);
 });
+
+test('processIncomingMessage does not throttle consecutive group replies from the same user', async () => {
+  const sentReplies = [];
+  const persistedMessages = [];
+  const event = createEvent({
+    chatType: 'group',
+    chatId: 'burst-group',
+    rawText: '[CQ:at,qq=bot] keep talking',
+    text: 'keep talking',
+    mentionsBot: true,
+  });
+  const precomputed = createPrecomputedContext(event, {
+    analysis: {
+      shouldRespond: true,
+      confidence: 0.92,
+      intent: 'chat',
+      sentiment: 'neutral',
+      relevance: 0.82,
+      reason: 'basic-direct-mention-pass',
+      topics: ['chat'],
+      ruleSignals: ['direct-mention'],
+      replyStyle: 'calm',
+    },
+  });
+
+  const deps = createWorkflowDeps({
+    sendReply: async (_target, text) => {
+      sentReplies.push(text);
+    },
+    appendConversationMessages: async (_session, messages) => {
+      persistedMessages.push(messages);
+      return { rollingSummary: 'summary', messages };
+    },
+    chat: async (_messages, _systemPrompt, userTurn) => JSON.stringify({
+      text: `reply:${userTurn}:${sentReplies.length}`,
+      sendVoice: false,
+      voiceText: '',
+    }),
+  });
+
+  const first = await processIncomingMessage(event, precomputed, { deps });
+  const second = await processIncomingMessage({
+    ...event,
+    messageId: 'msg-2',
+    timestamp: event.timestamp + 1000,
+  }, precomputed, { deps });
+  const third = await processIncomingMessage({
+    ...event,
+    messageId: 'msg-3',
+    timestamp: event.timestamp + 2000,
+  }, precomputed, { deps });
+
+  assert.equal(first.startsWith('reply:'), true);
+  assert.equal(second.startsWith('reply:'), true);
+  assert.equal(third.startsWith('reply:'), true);
+  assert.equal(sentReplies.length, 3);
+  assert.equal(sentReplies.some((text) => text.includes('慢一点说')), false);
+  assert.equal(persistedMessages.length, 3);
+});

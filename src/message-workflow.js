@@ -47,12 +47,7 @@ const OPEN_THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*$/i;
 const THINK_FENCE_REGEX = /```(?:think|thinking|reasoning|analysis)\s*[\s\S]*?```/gi;
 const REASONING_LABEL_REGEX = /^(?:\s{0,3}(?:思考过程|思路|分析|推理|内心独白|reasoning|analysis|thought process|thinking)\s*[:：]|(?:step\s*\d+|步骤\s*\d+)\s*[:：])/i;
 const REASONING_CONTINUATION_REGEX = /^(?:\s*[-*•]\s+|\s*\d+[.)]\s+|\s*[（(]?\d+[）)]\s+|\s*首先[，,:：]?\s*|\s*然后[，,:：]?\s*|\s*最后[，,:：]?\s*)/i;
-const GROUP_REPLY_THROTTLE_WINDOW_MS = 25 * 1000;
-const GROUP_REPLY_THROTTLE_AFTER = 2;
-const GROUP_REPLY_THROTTLE_HINT = '我在听，慢一点说，我一条条接住。';
-const GROUP_REPLY_THROTTLE_CACHE_TTL_MS = 10 * 60 * 1000;
 const REPLY_BUDGET_MIN_GENERATION_MS = 350;
-const groupReplyBursts = new Map();
 
 function summarizeIncomingMessage(username, text) {
   const cleaned = stripCqCodes(text).slice(0, 80);
@@ -359,47 +354,6 @@ function resolveUserTurn(event) {
   if ((event.attachments || []).length > 0) return `[${event.userName} 发来了一条消息]`;
 
   return cleanText;
-}
-
-function pruneReplyThrottleCache(now = Date.now()) {
-  const cutoff = now - GROUP_REPLY_THROTTLE_CACHE_TTL_MS;
-  for (const [key, value] of groupReplyBursts.entries()) {
-    if ((value?.lastSeenAt || 0) < cutoff) {
-      groupReplyBursts.delete(key);
-    }
-  }
-}
-
-function consumeGroupReplyThrottle(event, task) {
-  if (event?.chatType !== 'group' || task?.type !== 'chat') {
-    return { throttled: false };
-  }
-
-  const now = Date.now();
-  pruneReplyThrottleCache(now);
-  const key = `${event.chatId}:${event.userId}`;
-  const previous = groupReplyBursts.get(key);
-
-  if (!previous || now - previous.lastSeenAt > GROUP_REPLY_THROTTLE_WINDOW_MS) {
-    groupReplyBursts.set(key, { count: 1, lastSeenAt: now });
-    return { throttled: false, count: 1 };
-  }
-
-  const next = {
-    count: previous.count + 1,
-    lastSeenAt: now,
-  };
-  groupReplyBursts.set(key, next);
-
-  if (next.count > GROUP_REPLY_THROTTLE_AFTER) {
-    return {
-      throttled: true,
-      count: next.count,
-      hint: GROUP_REPLY_THROTTLE_HINT,
-    };
-  }
-
-  return { throttled: false, count: next.count };
 }
 
 function createWorkflowDeps(deps = {}) {
@@ -1088,31 +1042,6 @@ export async function processIncomingMessage(event, precomputed = null, options 
       analysis,
       conversationState: workflowContext.conversationState,
     });
-
-    const throttleState = consumeGroupReplyThrottle(normalizedEvent, task);
-    if (throttleState.throttled) {
-      const throttledReply = shapeChatReplyText(throttleState.hint, emotionResult);
-      await withTraceSpan(trace, 'send-text-throttled', () => deps.sendReply({
-        platform: normalizedEvent.platform,
-        chatType: normalizedEvent.chatType,
-        chatId: normalizedEvent.chatId,
-      }, throttledReply));
-
-      recordWorkflowMetric('yuno_group_reply_throttled_total', 1, {
-        chat_type: normalizedEvent.chatType,
-        route: task.category,
-      });
-
-      finalizeTrace(trace, {
-        replyType: 'chat-throttled',
-        shouldRespond: true,
-        route: task.category,
-        queueJobId: options.queueJobId,
-        messageId: normalizedEvent.messageId,
-        decisionReason: 'group-reply-throttle',
-      });
-      return throttledReply;
-    }
 
     const voiceReplyPolicy = {
       allowed: shouldAllowVoiceReplyForEvent(normalizedEvent),

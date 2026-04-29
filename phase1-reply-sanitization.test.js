@@ -204,7 +204,7 @@ test('shapeChatReplyText compresses repeated short lines and excessive ellipsis'
   assert.match(output, /…/);
 });
 
-test('group chat uses lightweight throttle hint for burst triggers from same user', async () => {
+test('group chat keeps normal replies for burst triggers from the same user', async () => {
   const sentReplies = [];
   const event = createEvent({
     chatType: 'group',
@@ -242,8 +242,8 @@ test('group chat uses lightweight throttle hint for burst triggers from same use
   await processIncomingMessage(event, context, { deps });
   const third = await processIncomingMessage(event, context, { deps });
 
-  assert.equal(third, '我在听，慢一点说，我一条条接住。');
-  assert.equal(sentReplies[2], '我在听，慢一点说，我一条条接住。');
+  assert.equal(third, '我在。');
+  assert.equal(sentReplies[2], '我在。');
 });
 
 test('processIncomingMessage degrades gracefully when model times out', async () => {
