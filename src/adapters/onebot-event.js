@@ -37,6 +37,7 @@ function isIgnorableSystemPayload(payload = {}) {
   return [
     noticeType === 'client_status',
     noticeType === 'input_status',
+    noticeType === 'notify' && subType === 'input_status',
     metaEventType === 'heartbeat',
     metaEventType === 'lifecycle',
     subType === 'heartbeat',
