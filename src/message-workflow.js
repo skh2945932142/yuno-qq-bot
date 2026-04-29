@@ -26,7 +26,7 @@ import { planIncomingTask } from './task-router.js';
 import { registerQueryTools } from './query-tools.js';
 import { toolRegistry } from './tools/registry.js';
 import { normalizeLegacyMessageEvent } from './chat/session.js';
-import { stripCqCodes } from './utils.js';
+import { safeJsonParse, stripCqCodes } from './utils.js';
 import { getRuntimeServices } from './runtime-services.js';
 import { recordWorkflowMetric } from './metrics.js';
 import { getSpecialUserByUserId, getSpecialUserKnowledgeTags } from './special-users.js';
@@ -301,6 +301,53 @@ export function stripHiddenReasoning(text) {
     .trim();
 }
 
+function shouldAllowVoiceReplyForEvent(event) {
+  if (event?.chatType === 'private') {
+    return true;
+  }
+
+  return event?.chatType === 'group' && Boolean(event?.mentionsBot);
+}
+
+function normalizeVoiceReplyText(text) {
+  return normalizeReplyFormatting(stripHiddenReasoning(text));
+}
+
+function parseChatReplyDecision(rawReplyText, options = {}) {
+  const raw = String(rawReplyText || '').trim();
+  const fallbackText = normalizeVoiceReplyText(raw) || '刚才那句被我吞掉了，你再说一遍。';
+  const parsed = safeJsonParse(raw);
+
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+    return {
+      text: fallbackText,
+      sendVoice: Boolean(options.defaultSendVoice),
+      voiceText: fallbackText,
+      structured: false,
+    };
+  }
+
+  const text = normalizeVoiceReplyText(parsed.text || parsed.reply || parsed.message || '') || fallbackText;
+  const voiceText = normalizeVoiceReplyText(parsed.voiceText || parsed.voice_text || '') || text;
+  const sendVoice = typeof parsed.sendVoice === 'boolean'
+    ? parsed.sendVoice
+    : Boolean(options.defaultSendVoice);
+
+  return {
+    text,
+    sendVoice,
+    voiceText,
+    structured: true,
+  };
+}
+
+function resolveVoiceRuntimeConfig() {
+  return {
+    enableVoice: Boolean(config.enableVoice),
+    voiceName: String(config.ttsVoice || config.yunoVoiceUri || '').trim(),
+  };
+}
+
 function resolveUserTurn(event) {
   const cleanText = stripCqCodes(event.rawText || event.text || '');
   if (cleanText) return cleanText;
@@ -388,6 +435,7 @@ function createWorkflowDeps(deps = {}) {
     sendReply: deps.sendReply || sendReply,
     sendStructuredReply: deps.sendStructuredReply || sendStructuredReply,
     sendVoice: deps.sendVoice || sendVoice,
+    resolveVoiceRuntimeConfig: deps.resolveVoiceRuntimeConfig || resolveVoiceRuntimeConfig,
     toolRegistry: deps.toolRegistry || toolRegistry,
     enqueuePersistJob: deps.enqueuePersistJob || runtimeServices.queueManager?.enqueuePersist || null,
   };
@@ -1066,6 +1114,10 @@ export async function processIncomingMessage(event, precomputed = null, options 
       return throttledReply;
     }
 
+    const voiceReplyPolicy = {
+      allowed: shouldAllowVoiceReplyForEvent(normalizedEvent),
+      suggestedByEmotion: deps.shouldSendVoiceForEmotion(emotionResult),
+    };
     const systemPrompt = await withTraceSpan(trace, 'build-prompt', () => Promise.resolve(deps.buildReplyContext({
       event: normalizedEvent,
       route: task,
@@ -1083,6 +1135,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       specialUser: workflowContext.specialUser,
       replyLengthProfile,
       replyPlan,
+      voiceReplyPolicy,
     })), {
       route: task.category,
       promptProfile: replyLengthProfile.promptProfile,
@@ -1091,6 +1144,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
     });
 
     let visibleReplyText = '';
+    let replyDecision = null;
     try {
       const remainingReplyBudgetMs = getRemainingReplyBudgetMs();
       if (
@@ -1114,6 +1168,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
           traceContext: trace,
           promptVersion: 'reply-context/v6',
           operation: 'reply',
+          expectStructuredReply: true,
           maxTokens: replyLengthProfile.maxTokens,
           historyLimit: replyLengthProfile.historyLimit,
           temperature: replyLengthProfile.temperature,
@@ -1131,8 +1186,12 @@ export async function processIncomingMessage(event, precomputed = null, options 
         promptProfile: replyLengthProfile.promptProfile,
       });
 
-      visibleReplyText = stripHiddenReasoning(rawReplyText) || '刚才那句被我吞掉了，你再说一遍。';
-      if (visibleReplyText !== String(rawReplyText || '').trim()) {
+      replyDecision = parseChatReplyDecision(rawReplyText, {
+        defaultSendVoice: voiceReplyPolicy.suggestedByEmotion,
+      });
+      visibleReplyText = replyDecision.text;
+      const strippedReplyText = stripHiddenReasoning(rawReplyText);
+      if (!replyDecision.structured && visibleReplyText !== String(strippedReplyText || '').trim()) {
         recordWorkflowMetric('yuno_hidden_reasoning_stripped_total', 1, {
           chat_type: normalizedEvent.chatType,
           route: task.category,
@@ -1189,6 +1248,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
                   traceContext: trace,
                   promptVersion: 'reply-context/v6',
                   operation: 'reply-fallback-model',
+                  expectStructuredReply: true,
                   model: fallbackModel,
                   maxTokens: Math.min(replyLengthProfile.maxTokens, normalizedEvent.chatType === 'group' ? 140 : 220),
                   historyLimit: Math.min(replyLengthProfile.historyLimit, normalizedEvent.chatType === 'group' ? 2 : 3),
@@ -1203,7 +1263,10 @@ export async function processIncomingMessage(event, precomputed = null, options 
               fallbackModel,
             });
 
-            visibleReplyText = stripHiddenReasoning(fallbackReply) || buildReplyBudgetFallbackReply(normalizedEvent, task);
+            replyDecision = parseChatReplyDecision(fallbackReply, {
+              defaultSendVoice: voiceReplyPolicy.suggestedByEmotion,
+            });
+            visibleReplyText = replyDecision.text || buildReplyBudgetFallbackReply(normalizedEvent, task);
           } catch (fallbackError) {
             if (String(fallbackError?.code || '').toUpperCase() === 'REPLY_BUDGET_EXCEEDED') {
               recordWorkflowMetric('yuno_reply_latency_budget_exceeded_total', 1, {
@@ -1243,7 +1306,14 @@ export async function processIncomingMessage(event, precomputed = null, options 
       }
     }
 
+    if (!replyDecision) {
+      replyDecision = parseChatReplyDecision(visibleReplyText, {
+        defaultSendVoice: voiceReplyPolicy.suggestedByEmotion,
+      });
+    }
+
     const replyText = shapeChatReplyText(visibleReplyText, emotionResult);
+    const voiceText = shapeChatReplyText(replyDecision.voiceText || replyText, emotionResult);
     const nextMessages = [
       { role: 'user', content: userTurn },
       { role: 'assistant', content: replyText },
@@ -1282,10 +1352,17 @@ export async function processIncomingMessage(event, precomputed = null, options 
     }
 
     const voiceReadiness = getRuntimeServices().readiness?.voice;
+    const voiceConfig = deps.resolveVoiceRuntimeConfig();
     const voiceAvailable = !(voiceReadiness?.enabled && !voiceReadiness.ready);
-    if (voiceAvailable && config.enableVoice && config.yunoVoiceUri && deps.shouldSendVoiceForEmotion(emotionResult)) {
+    if (
+      voiceAvailable
+      && voiceConfig.enableVoice
+      && voiceConfig.voiceName
+      && voiceReplyPolicy.allowed
+      && replyDecision.sendVoice
+    ) {
       try {
-        const audio = await withTraceSpan(trace, 'tts', () => deps.tts(replyText, {
+        const audio = await withTraceSpan(trace, 'tts', () => deps.tts(voiceText, {
           traceContext: trace,
           operation: 'tts',
         }));

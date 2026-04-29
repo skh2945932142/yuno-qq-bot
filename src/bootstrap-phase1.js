@@ -140,7 +140,7 @@ async function probeVoiceReadiness() {
     };
   }
 
-  if (!config.yunoVoiceUri || !config.ttsBaseUrl || !config.ttsApiKey) {
+  if (!(config.ttsVoice || config.yunoVoiceUri) || !config.ttsBaseUrl || !config.ttsApiKey) {
     return {
       enabled: true,
       ready: false,
@@ -330,7 +330,7 @@ export async function startApplication() {
   if (readiness.voice.enabled && !readiness.voice.ready) {
     logger.warn('bootstrap', 'Voice is degraded; text reply will continue', {
       reason: readiness.voice.reason,
-      hint: 'Check ENABLE_VOICE, FFMPEG_PATH, YUNO_VOICE_URI, TTS_BASE_URL, and TTS_API_KEY.',
+      hint: 'Check ENABLE_VOICE, FFMPEG_PATH, TTS_PROVIDER, TTS_VOICE/YUNO_VOICE_URI, TTS_BASE_URL, TTS_MODEL, and TTS_API_KEY.',
     });
   }
 

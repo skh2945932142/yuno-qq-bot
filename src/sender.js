@@ -6,6 +6,7 @@ import { buildReplyTarget } from './chat/session.js';
 import {
   encodeTencentSilk,
   resolveFfmpegPath,
+  transcodeAudioToSpeechPcm,
   transcodeMp3ToSpeechPcm,
 } from './services/audio.js';
 
@@ -120,10 +121,10 @@ export async function sendText(groupId, text, chatType = 'group') {
   }, text);
 }
 
-export async function sendVoiceWithDeps(target, mp3Buffer, deps = {}) {
+export async function sendVoiceWithDeps(target, audioBuffer, deps = {}) {
   const postNapcatFn = deps.postNapcat || postNapcat;
   const resolveFfmpegPathFn = deps.resolveFfmpegPath || resolveFfmpegPath;
-  const transcodeFn = deps.transcodeMp3ToSpeechPcm || transcodeMp3ToSpeechPcm;
+  const transcodeFn = deps.transcodeAudioToSpeechPcm || deps.transcodeMp3ToSpeechPcm || transcodeAudioToSpeechPcm || transcodeMp3ToSpeechPcm;
   const encodeFn = deps.encodeTencentSilk || encodeTencentSilk;
   const loggerImpl = deps.logger || logger;
   const request = buildNapcatTargetPayload(target, [{
@@ -131,12 +132,12 @@ export async function sendVoiceWithDeps(target, mp3Buffer, deps = {}) {
     data: { file: '' },
   }]);
 
-  if (!mp3Buffer || mp3Buffer.length === 0) {
+  if (!audioBuffer || audioBuffer.length === 0) {
     loggerImpl.info('sender', 'voice_skipped', { reason: 'empty_tts_buffer' });
     return false;
   }
 
-  loggerImpl.info('sender', 'tts_received', { bytes: mp3Buffer.length });
+  loggerImpl.info('sender', 'tts_received', { bytes: audioBuffer.length });
 
   const ffmpegPath = await resolveFfmpegPathFn();
   if (!ffmpegPath) {
@@ -145,7 +146,7 @@ export async function sendVoiceWithDeps(target, mp3Buffer, deps = {}) {
   }
 
   try {
-    const pcmBuffer = await transcodeFn(mp3Buffer, { ffmpegPath });
+    const pcmBuffer = await transcodeFn(audioBuffer, { ffmpegPath });
     loggerImpl.info('sender', 'ffmpeg_transcoded', {
       ffmpegAvailable: true,
       bytes: pcmBuffer.length,
@@ -179,6 +180,6 @@ export async function sendVoiceWithDeps(target, mp3Buffer, deps = {}) {
   }
 }
 
-export async function sendVoice(target, mp3Buffer) {
-  return sendVoiceWithDeps(target, mp3Buffer);
+export async function sendVoice(target, audioBuffer) {
+  return sendVoiceWithDeps(target, audioBuffer);
 }

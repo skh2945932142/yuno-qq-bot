@@ -165,6 +165,26 @@ function readFirstChoiceContent(response, fallback = '') {
   return response?.choices?.[0]?.message?.content?.trim() || fallback;
 }
 
+function buildChatSystemInstructions(systemPrompt, options = {}) {
+  const baseLines = options.expectStructuredReply
+    ? [
+        'Output a single compact JSON object only.',
+        'Schema: {"text":"string","sendVoice":boolean,"voiceText":"string"}',
+        'text is required and must contain the visible QQ reply.',
+        'sendVoice decides whether a voice reply should also be sent.',
+        'voiceText should be an empty string when it is not needed.',
+        'No markdown, no code fences, no extra explanation.',
+      ]
+    : [
+        '鍙緭鍑烘渶缁堝洖澶嶆枃鏈€?',
+        '榛樿浣跨敤涓枃锛岄櫎闈炵敤鎴锋槑纭姹傝嫳鏂囥€?',
+        '涓嶈杈撳嚭鍒嗘瀽杩囩▼銆佽鍒欒鏄庛€佽鑹叉爣绛撅紝涓嶈杈撳嚭 <think>/<thinking>銆?',
+        '鍏堝洖绛旂敤鎴峰綋鍓嶈繖鍙ヨ瘽锛屽啀琛ヤ竴灞傚繀瑕佸欢灞曘€?',
+      ];
+
+  return [...baseLines, systemPrompt].join('\n');
+}
+
 export async function createEmbeddings(input, options = {}) {
   const startedAt = Date.now();
   const normalizedInput = Array.isArray(input) ? input : [input];
@@ -221,6 +241,7 @@ export async function chat(messages, systemPrompt, userMessage = null, options =
         '先回答用户当前这句话，再补一层必要延展。',
         systemPrompt,
       ].join('\n'),
+      content: buildChatSystemInstructions(systemPrompt, options),
     },
     ...messages.slice(-historyLimit),
   ];
@@ -234,7 +255,12 @@ export async function chat(messages, systemPrompt, userMessage = null, options =
     });
   }
 
-  const response = await createChatCompletion(conversation, options);
+  const response = await createChatCompletion(conversation, {
+    ...options,
+    responseFormat: options.expectStructuredReply
+      ? { type: 'json_object' }
+      : options.responseFormat,
+  });
   return readFirstChoiceContent(response, '...');
 }
 
@@ -405,42 +431,123 @@ export async function classifyReplyTrigger(text, context = {}, options = {}) {
   }
 }
 
+export function resolveTtsVoice(runtimeConfig = config) {
+  return String(runtimeConfig.ttsVoice || runtimeConfig.yunoVoiceUri || '').trim();
+}
+
+function buildMimoTtsRequest(text, voice, runtimeConfig) {
+  return {
+    url: runtimeConfig.ttsBaseUrl,
+    payload: {
+      model: runtimeConfig.ttsModel,
+      messages: [
+        {
+          role: 'user',
+          content: '用自然、清晰、适合即时聊天回复的语气朗读，不要额外补充内容。',
+        },
+        {
+          role: 'assistant',
+          content: text,
+        },
+      ],
+      audio: {
+        format: 'wav',
+        voice,
+      },
+    },
+    requestOptions: {
+      headers: {
+        'api-key': runtimeConfig.ttsApiKey,
+        Authorization: `Bearer ${runtimeConfig.ttsApiKey}`,
+      },
+      timeout: runtimeConfig.requestTimeoutMs,
+    },
+  };
+}
+
+function buildOpenAiCompatibleTtsRequest(text, voice, runtimeConfig) {
+  return {
+    url: runtimeConfig.ttsBaseUrl,
+    payload: {
+      model: runtimeConfig.ttsModel,
+      input: text,
+      voice,
+      response_format: 'mp3',
+      speed: 1.0,
+    },
+    requestOptions: {
+      headers: { Authorization: `Bearer ${runtimeConfig.ttsApiKey}` },
+      responseType: 'arraybuffer',
+      timeout: runtimeConfig.requestTimeoutMs,
+    },
+  };
+}
+
+export function buildTtsRequest(text, options = {}, runtimeConfig = config) {
+  const provider = String(runtimeConfig.ttsProvider || 'openai_compatible').trim().toLowerCase() || 'openai_compatible';
+  const voice = resolveTtsVoice(runtimeConfig);
+
+  if (!runtimeConfig.enableVoice) {
+    return { ok: false, reason: 'voice_disabled', provider };
+  }
+
+  if (!voice) {
+    return { ok: false, reason: 'missing_voice_uri', provider };
+  }
+
+  if (!runtimeConfig.ttsBaseUrl) {
+    return { ok: false, reason: 'missing_tts_base_url', provider };
+  }
+
+  if (!runtimeConfig.ttsApiKey) {
+    return { ok: false, reason: 'missing_tts_api_key', provider };
+  }
+
+  return {
+    ok: true,
+    provider,
+    ...(provider === 'mimo'
+      ? buildMimoTtsRequest(text, voice, runtimeConfig)
+      : buildOpenAiCompatibleTtsRequest(text, voice, runtimeConfig)),
+  };
+}
+
+export function extractTtsAudioBuffer(response, provider = 'openai_compatible') {
+  if (provider === 'mimo') {
+    const audioBase64 = response?.data?.choices?.[0]?.message?.audio?.data;
+    if (!audioBase64) {
+      return null;
+    }
+    return Buffer.from(audioBase64, 'base64');
+  }
+
+  if (!response?.data) {
+    return null;
+  }
+
+  return Buffer.from(response.data);
+}
+
 export async function tts(text, options = {}) {
-  if (!config.enableVoice || !config.yunoVoiceUri || !config.ttsBaseUrl || !config.ttsApiKey) {
+  const runtimeConfig = options.runtimeConfig || config;
+  const request = buildTtsRequest(text, options, runtimeConfig);
+  if (!request.ok) {
     logger.info('model', 'TTS skipped', {
       traceId: options.traceContext?.traceId,
       operation: options.operation || 'tts',
-      reason: !config.enableVoice
-        ? 'voice_disabled'
-        : !config.yunoVoiceUri
-          ? 'missing_voice_uri'
-          : !config.ttsBaseUrl
-            ? 'missing_tts_base_url'
-            : 'missing_tts_api_key',
+      provider: request.provider,
+      reason: request.reason,
     });
     return null;
   }
 
   const startedAt = Date.now();
+  const httpPost = options.httpPost || axios.post;
   const response = await withRetry(
-    () => axios.post(
-      config.ttsBaseUrl,
-      {
-        model: config.ttsModel,
-        input: text,
-        voice: config.yunoVoiceUri,
-        response_format: 'mp3',
-        speed: 1.0,
-      },
-      {
-        headers: { Authorization: `Bearer ${config.ttsApiKey}` },
-        responseType: 'arraybuffer',
-        timeout: config.requestTimeoutMs,
-      }
-    ),
+    () => httpPost(request.url, request.payload, request.requestOptions),
     {
-      retries: config.retryAttempts,
-      delayMs: config.retryDelayMs,
+      retries: runtimeConfig.retryAttempts,
+      delayMs: runtimeConfig.retryDelayMs,
       category: 'model',
       label: 'tts',
       logger,
@@ -450,10 +557,12 @@ export async function tts(text, options = {}) {
   logger.info('model', 'TTS finished', {
     traceId: options.traceContext?.traceId,
     operation: options.operation || 'tts',
+    provider: request.provider,
     elapsedMs: Date.now() - startedAt,
-    bytes: response.data?.byteLength || response.data?.length,
+    bytes: request.provider === 'mimo'
+      ? response.data?.choices?.[0]?.message?.audio?.data?.length
+      : (response.data?.byteLength || response.data?.length),
   });
 
-  return Buffer.from(response.data);
+  return extractTtsAudioBuffer(response, request.provider);
 }
-

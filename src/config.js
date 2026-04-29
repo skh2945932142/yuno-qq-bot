@@ -2,6 +2,14 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const resolvedTtsProvider = (process.env.TTS_PROVIDER || 'openai_compatible').trim().toLowerCase() || 'openai_compatible';
+const defaultTtsBaseUrl = resolvedTtsProvider === 'mimo'
+  ? 'https://api.xiaomimimo.com/v1/chat/completions'
+  : (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1/audio/speech' : '');
+const defaultTtsModel = resolvedTtsProvider === 'mimo'
+  ? 'mimo-v2.5-tts'
+  : 'FunAudioLLM/CosyVoice2-0.5B';
+
 function readNumber(name, fallback) {
   const value = process.env[name];
   if (!value) return fallback;
@@ -43,10 +51,11 @@ export const config = Object.freeze({
     .replace(/\/+$/, ''),
   llmChatModel: process.env.LLM_CHAT_MODEL || (process.env.SILICONFLOW_API_KEY ? 'Pro/MiniMaxAI/MiniMax-M2.5' : ''),
   embeddingModel: process.env.EMBEDDING_MODEL || 'BAAI/bge-m3',
+  ttsProvider: resolvedTtsProvider,
   ttsApiKey: process.env.TTS_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY || '',
-  ttsBaseUrl: (process.env.TTS_BASE_URL || (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1/audio/speech' : ''))
+  ttsBaseUrl: (process.env.TTS_BASE_URL || defaultTtsBaseUrl)
     .replace(/\/+$/, ''),
-  ttsModel: process.env.TTS_MODEL || 'FunAudioLLM/CosyVoice2-0.5B',
+  ttsModel: process.env.TTS_MODEL || defaultTtsModel,
   napcatApi: (process.env.NAPCAT_API || '').replace(/\/+$/, ''),
   napcatToken: process.env.NAPCAT_TOKEN || '',
   targetGroupId: process.env.TARGET_GROUP_ID ? String(process.env.TARGET_GROUP_ID) : '',
@@ -56,6 +65,7 @@ export const config = Object.freeze({
   // direct-mention detection ([CQ:at,qq=SELF_QQ]) never silently fails.
   selfQq: process.env.SELF_QQ ? String(process.env.SELF_QQ) : '',
   yunoVoiceUri: process.env.YUNO_VOICE_URI || '',
+  ttsVoice: process.env.TTS_VOICE || process.env.YUNO_VOICE_URI || '',
   enableVoice: readBoolean('ENABLE_VOICE', false),
   ffmpegPath: process.env.FFMPEG_PATH || '',
   voiceSampleRate: readNumber('VOICE_SAMPLE_RATE', 24000),

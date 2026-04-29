@@ -246,6 +246,33 @@ function buildReplyPlanSection(replyPlan) {
   ].join('\n');
 }
 
+function buildVoiceReplySection(voiceReplyPolicy = null) {
+  if (!voiceReplyPolicy) return '';
+
+  const lines = [
+    '语音回复',
+    '- 最终输出必须是单个 JSON 对象，不要附加解释、代码块或额外文字。',
+    '- JSON 字段固定为: text, sendVoice, voiceText。',
+    '- text: 发给 QQ 的文字回复，必须是自然语言字符串。',
+    '- sendVoice: 是否同时附带语音，必须是 true 或 false。',
+    '- voiceText: 语音朗读文本；如果和 text 一样，可留空字符串。',
+  ];
+
+  if (voiceReplyPolicy.allowed) {
+    lines.push('- 当前场景允许语音回复，但只有在这条消息确实适合语音时才把 sendVoice 设为 true。');
+  } else {
+    lines.push('- 当前场景不允许语音回复，sendVoice 必须为 false，voiceText 置空。');
+  }
+
+  if (voiceReplyPolicy.suggestedByEmotion) {
+    lines.push('- 当前情绪允许你更主动地考虑语音，但仍然要先判断这句话是否适合被朗读。');
+  } else {
+    lines.push('- 当前更偏向纯文字回复，除非非常适合语音，否则保持 sendVoice=false。');
+  }
+
+  return lines.join('\n');
+}
+
 function buildOutputRules(event, route, replyLengthProfile, replyPlan) {
   const isPrivate = event.chatType === 'private';
   const performanceProfile = replyLengthProfile?.performanceProfile || 'standard_chat';
@@ -296,6 +323,7 @@ export function buildReplyContext({
   specialUser = null,
   replyLengthProfile = null,
   replyPlan = null,
+  voiceReplyPolicy = null,
 }) {
   const promptProfile = replyLengthProfile?.promptProfile || 'standard';
   const performanceProfile = replyLengthProfile?.performanceProfile || 'standard_chat';
@@ -315,6 +343,7 @@ export function buildReplyContext({
     }),
     buildReplyPlanSection(replyPlan),
     buildCurrentTurnSection(messageAnalysis, event, route, promptProfile, groupState, recentEvents),
+    buildVoiceReplySection(voiceReplyPolicy),
     buildOutputRules(event, route, replyLengthProfile, replyPlan),
   ];
 

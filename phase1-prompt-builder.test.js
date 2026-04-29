@@ -101,4 +101,45 @@ test('buildReplyContext trims non-essential sections in fast_chat mode', () => {
   assert.doesNotMatch(prompt, /知识\n/);
   assert.doesNotMatch(prompt, /近期群事件/);
 });
+test('buildReplyContext includes structured voice reply instructions when voice is eligible', () => {
+  const prompt = buildReplyContext({
+    event: { platform: 'qq', chatType: 'private', userName: 'Alice', mentionsBot: false },
+    route: { category: 'private_chat', allowFollowUp: true },
+    relation: { affection: 72, memorySummary: 'private user' },
+    userState: { currentEmotion: 'AFFECTIONATE' },
+    userProfile: {
+      profileSummary: 'likes natural replies',
+      favoriteTopics: ['daily'],
+      dislikes: [],
+    },
+    conversationState: { rollingSummary: '', messages: [] },
+    groupState: null,
+    recentEvents: [],
+    messageAnalysis: { intent: 'chat', sentiment: 'positive', relevance: 0.8, ruleSignals: ['private-chat'] },
+    emotionResult: { intensity: 0.8, promptStyle: 'warm', toneHints: ['soft'] },
+    knowledge: { documents: [] },
+    isAdmin: false,
+    specialUser: null,
+    replyLengthProfile: {
+      tier: 'balanced',
+      maxTokens: 240,
+      historyLimit: 3,
+      promptProfile: 'standard',
+      performanceProfile: 'standard_chat',
+      guidance: 'natural reply',
+    },
+    replyPlan: {
+      type: 'direct',
+      depth: 'short',
+      questionNeeded: false,
+    },
+    voiceReplyPolicy: {
+      allowed: true,
+      suggestedByEmotion: true,
+    },
+  });
 
+  assert.match(prompt, /JSON/i);
+  assert.match(prompt, /sendVoice/);
+  assert.match(prompt, /voiceText/);
+});

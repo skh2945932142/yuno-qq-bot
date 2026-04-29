@@ -30,3 +30,35 @@ test('config disables voice by default when ENABLE_VOICE is not explicitly enabl
 
   assert.equal(config.enableVoice, false);
 });
+
+test('config uses openai-compatible tts provider by default and prefers TTS_VOICE', async () => {
+  const { config } = await loadConfigModule({
+    TTS_PROVIDER: '',
+    TTS_VOICE: 'mimo_voice',
+    YUNO_VOICE_URI: 'legacy_voice',
+  });
+
+  assert.equal(config.ttsProvider, 'openai_compatible');
+  assert.equal(config.ttsVoice, 'mimo_voice');
+});
+
+test('config falls back to YUNO_VOICE_URI when TTS_VOICE is missing', async () => {
+  const { config } = await loadConfigModule({
+    TTS_VOICE: '',
+    YUNO_VOICE_URI: 'legacy_voice',
+  });
+
+  assert.equal(config.ttsVoice, 'legacy_voice');
+});
+
+test('config uses mimo defaults when TTS_PROVIDER is mimo', async () => {
+  const { config } = await loadConfigModule({
+    TTS_PROVIDER: 'mimo',
+    TTS_BASE_URL: '',
+    TTS_MODEL: '',
+  });
+
+  assert.equal(config.ttsProvider, 'mimo');
+  assert.equal(config.ttsBaseUrl, 'https://api.xiaomimimo.com/v1/chat/completions');
+  assert.equal(config.ttsModel, 'mimo-v2.5-tts');
+});

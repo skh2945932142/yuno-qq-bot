@@ -100,7 +100,7 @@ export function resetFfmpegPathCache() {
   cachedFfmpegPath = undefined;
 }
 
-async function transcodeWithPipe(ffmpegPath, mp3Buffer, options = {}) {
+async function transcodeWithPipe(ffmpegPath, audioBuffer, options = {}) {
   const sampleRate = options.sampleRate ?? config.voiceSampleRate;
   const child = spawn(ffmpegPath, [
     '-hide_banner',
@@ -121,18 +121,18 @@ async function transcodeWithPipe(ffmpegPath, mp3Buffer, options = {}) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
-  const result = await collectChildProcess(child, mp3Buffer);
+  const result = await collectChildProcess(child, audioBuffer);
   return result.stdout;
 }
 
-async function transcodeWithTempFiles(ffmpegPath, mp3Buffer, options = {}) {
+async function transcodeWithTempFiles(ffmpegPath, audioBuffer, options = {}) {
   const sampleRate = options.sampleRate ?? config.voiceSampleRate;
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'yuno-voice-'));
   const inputPath = path.join(tempDir, 'input.mp3');
   const outputPath = path.join(tempDir, 'output.wav');
 
   try {
-    await writeFile(inputPath, mp3Buffer);
+    await writeFile(inputPath, audioBuffer);
     const child = spawn(ffmpegPath, [
       '-hide_banner',
       '-loglevel',
@@ -158,9 +158,9 @@ async function transcodeWithTempFiles(ffmpegPath, mp3Buffer, options = {}) {
   }
 }
 
-export async function transcodeMp3ToSpeechPcm(mp3Buffer, options = {}) {
-  if (!mp3Buffer || mp3Buffer.length === 0) {
-    throw new Error('Cannot transcode empty mp3 buffer');
+export async function transcodeAudioToSpeechPcm(audioBuffer, options = {}) {
+  if (!audioBuffer || audioBuffer.length === 0) {
+    throw new Error('Cannot transcode empty audio buffer');
   }
 
   const ffmpegPath = options.ffmpegPath || await resolveFfmpegPath(options);
@@ -169,14 +169,18 @@ export async function transcodeMp3ToSpeechPcm(mp3Buffer, options = {}) {
   }
 
   try {
-    return await (options.transcodeWithPipe ?? transcodeWithPipe)(ffmpegPath, mp3Buffer, options);
+    return await (options.transcodeWithPipe ?? transcodeWithPipe)(ffmpegPath, audioBuffer, options);
   } catch (error) {
     if (options.disableTempFallback) {
       throw error;
     }
 
-    return (options.transcodeWithTempFiles ?? transcodeWithTempFiles)(ffmpegPath, mp3Buffer, options);
+    return (options.transcodeWithTempFiles ?? transcodeWithTempFiles)(ffmpegPath, audioBuffer, options);
   }
+}
+
+export async function transcodeMp3ToSpeechPcm(mp3Buffer, options = {}) {
+  return transcodeAudioToSpeechPcm(mp3Buffer, options);
 }
 
 export async function encodeTencentSilk(pcmOrWavBuffer, options = {}) {

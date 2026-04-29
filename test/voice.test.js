@@ -72,7 +72,7 @@ test('sendVoiceWithDeps skips voice when ffmpeg is unavailable', async () => {
   const logs = [];
   const sentPayloads = [];
 
-  const success = await sendVoiceWithDeps('12345', Buffer.from('mp3-data'), {
+  const success = await sendVoiceWithDeps('12345', Buffer.from('wav-data'), {
     logger: {
       info: (...args) => logs.push(['info', ...args]),
       warn: (...args) => logs.push(['warn', ...args]),
@@ -91,7 +91,7 @@ test('sendVoiceWithDeps skips voice when ffmpeg is unavailable', async () => {
 test('sendVoiceWithDeps posts qq-compatible record after transcoding', async () => {
   const sentPayloads = [];
 
-  const success = await sendVoiceWithDeps('12345', Buffer.from('mp3-data'), {
+  const success = await sendVoiceWithDeps('12345', Buffer.from('wav-data'), {
     logger: {
       info: () => {},
       warn: () => {},
