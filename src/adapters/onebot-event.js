@@ -62,6 +62,46 @@ function parseCqData(segment) {
   return data;
 }
 
+function normalizeMessageSegments(payload) {
+  return Array.isArray(payload?.message)
+    ? payload.message.filter((item) => isObject(item) && item.type)
+    : [];
+}
+
+function buildRawTextFromSegments(segments = []) {
+  const parts = [];
+
+  for (const segment of segments) {
+    const type = String(segment.type || '').trim().toLowerCase();
+    const data = isObject(segment.data) ? segment.data : {};
+
+    if (type === 'text') {
+      parts.push(String(data.text || ''));
+      continue;
+    }
+
+    if (type === 'at') {
+      const qq = String(data.qq || '').trim();
+      if (qq) parts.push(`[CQ:at,qq=${qq}]`);
+      continue;
+    }
+
+    if (type === 'reply') {
+      const id = String(data.id || data.message_id || '').trim();
+      if (id) parts.push(`[CQ:reply,id=${id}]`);
+      continue;
+    }
+
+    const encoded = Object.entries(data)
+      .map(([key, value]) => `${key}=${String(value || '').trim()}`)
+      .filter((item) => item !== '=')
+      .join(',');
+    parts.push(encoded ? `[CQ:${type},${encoded}]` : `[CQ:${type}]`);
+  }
+
+  return parts.join('');
+}
+
 function extractAttachments(rawMessage) {
   const attachments = [];
   const message = String(rawMessage || '');
@@ -79,6 +119,28 @@ function extractAttachments(rawMessage) {
   }
 
   return attachments;
+}
+
+function extractAttachmentsFromSegments(segments = []) {
+  return segments
+    .filter((segment) => {
+      const type = String(segment.type || '').trim().toLowerCase();
+      return type && !['at', 'reply', 'text'].includes(type);
+    })
+    .map((segment) => ({
+      type: String(segment.type || '').trim().toLowerCase(),
+      data: isObject(segment.data) ? segment.data : {},
+    }));
+}
+
+function hasAtTargetInSegments(segments = [], targetId = '') {
+  const normalizedTargetId = String(targetId || '').trim();
+  if (!normalizedTargetId) return false;
+
+  return segments.some((segment) => (
+    String(segment.type || '').trim().toLowerCase() === 'at'
+    && String(segment.data?.qq || '').trim() === normalizedTargetId
+  ));
 }
 
 function resolveReplyTo(payload) {
@@ -131,7 +193,8 @@ export function validateOnebotMessageEvent(payload) {
     errors.push('group_id is required');
   }
 
-  if (isMessage && typeof payload.raw_message !== 'string') {
+  const messageSegments = normalizeMessageSegments(payload);
+  if (isMessage && typeof payload.raw_message !== 'string' && messageSegments.length === 0) {
     errors.push('raw_message must be a string');
   }
 
@@ -154,15 +217,21 @@ export function validateOnebotMessageEvent(payload) {
     ? String(payload.self_id)
     : (config.selfQq || '');
   const sender = isObject(payload.sender) ? payload.sender : {};
+  const normalizedRawMessage = typeof payload.raw_message === 'string'
+    ? payload.raw_message
+    : buildRawTextFromSegments(messageSegments);
   const rawText = isPoke
     ? '[poke]'
     : isGroupIncrease
       ? '[group_increase]'
-      : payload.raw_message;
+      : normalizedRawMessage;
   const mentionsBot = isPoke
     ? String(payload.target_id || '') === resolvedSelfId
     : inferredMessageType === 'group'
-      ? extractAtTargets(rawText).includes(resolvedSelfId)
+      ? (
+          extractAtTargets(rawText).includes(resolvedSelfId)
+          || hasAtTargetInSegments(messageSegments, resolvedSelfId)
+        )
       : false;
   const text = isPoke
     ? '/poke'
@@ -183,7 +252,17 @@ export function validateOnebotMessageEvent(payload) {
       text,
       rawText,
       mentionsBot,
-      attachments: isMessage ? extractAttachments(rawText) : [],
+      attachments: isMessage
+        ? [
+            ...extractAttachments(rawText),
+            ...extractAttachmentsFromSegments(messageSegments).filter((item) => (
+              !extractAttachments(rawText).some((existing) => (
+                existing.type === item.type
+                && JSON.stringify(existing.data || {}) === JSON.stringify(item.data || {})
+              ))
+            )),
+          ]
+        : [],
       timestamp: Number(payload.time || Date.now()),
       source: {
         adapter: 'onebot',

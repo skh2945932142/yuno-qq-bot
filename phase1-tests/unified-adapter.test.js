@@ -27,6 +27,29 @@ test('validateOnebotMessageEvent normalizes group payloads into unified events',
   assert.equal(result.value.attachments[0].type, 'image');
 });
 
+test('validateOnebotMessageEvent detects group mentions from structured message segments', () => {
+  const result = validateOnebotMessageEvent({
+    post_type: 'message',
+    message_type: 'group',
+    group_id: 54321,
+    user_id: 10002,
+    self_id: 20002,
+    raw_message: '你好',
+    message: [
+      { type: 'at', data: { qq: '20002' } },
+      { type: 'text', data: { text: '你好' } },
+      { type: 'image', data: { file: 'photo.png' } },
+    ],
+    sender: { card: 'Eve' },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.value.chatType, 'group');
+  assert.equal(result.value.mentionsBot, true);
+  assert.equal(result.value.attachments.length, 1);
+  assert.equal(result.value.attachments[0].type, 'image');
+});
+
 test('validateOnebotMessageEvent normalizes private payloads into unified events', () => {
   const result = validateOnebotMessageEvent({
     post_type: 'message',
