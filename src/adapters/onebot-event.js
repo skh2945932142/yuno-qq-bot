@@ -25,6 +25,26 @@ function resolvePayloadUserId(payload) {
   ).trim();
 }
 
+function isIgnorableSystemPayload(payload = {}) {
+  const postType = String(payload.post_type || '').trim().toLowerCase();
+  if (postType === 'meta_event') return true;
+  if (postType === 'message_sent') return true;
+
+  const noticeType = String(payload.notice_type || '').trim().toLowerCase();
+  const metaEventType = String(payload.meta_event_type || '').trim().toLowerCase();
+  const subType = String(payload.sub_type || payload.subtype || '').trim().toLowerCase();
+
+  return [
+    noticeType === 'client_status',
+    noticeType === 'input_status',
+    metaEventType === 'heartbeat',
+    metaEventType === 'lifecycle',
+    subType === 'heartbeat',
+    subType === 'connect',
+    subType === 'enable',
+  ].some(Boolean);
+}
+
 function parseCqData(segment) {
   const data = {};
 
@@ -115,7 +135,18 @@ export function validateOnebotMessageEvent(payload) {
   }
 
   if (errors.length > 0) {
-    return { ok: false, errors };
+    return {
+      ok: false,
+      errors,
+      reason: isIgnorableSystemPayload(payload) ? 'system_payload' : 'invalid_payload',
+      meta: {
+        postType,
+        messageType: inferredMessageType || '',
+        noticeType: String(payload.notice_type || '').trim().toLowerCase(),
+        metaEventType: String(payload.meta_event_type || '').trim().toLowerCase(),
+        subType: String(payload.sub_type || payload.subtype || '').trim().toLowerCase(),
+      },
+    };
   }
 
   const resolvedSelfId = payload.self_id

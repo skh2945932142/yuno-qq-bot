@@ -183,8 +183,16 @@ export function createApp() {
 
     const validation = validateOnebotMessageEvent(req.body);
     if (!validation.ok) {
+      if (validation.reason === 'system_payload') {
+        return;
+      }
       logger.info('webhook', 'Ignored unsupported webhook payload', {
         errors: validation.errors,
+        postType: validation.meta?.postType,
+        messageType: validation.meta?.messageType,
+        noticeType: validation.meta?.noticeType,
+        metaEventType: validation.meta?.metaEventType,
+        subType: validation.meta?.subType,
       });
       return;
     }
