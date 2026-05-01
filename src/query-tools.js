@@ -22,6 +22,11 @@ import {
   getToolDefinitions,
 } from './tool-config.js';
 import { buildStructuredToolResult } from './yuno-formatter.js';
+import { UserMemoryEvent, UserProfileMemory } from './models.js';
+import { findMemeAssets } from './meme-repository.js';
+import { buildUserProfileKey } from './chat/session.js';
+import { buildProfileSummary } from './profile-memory.js';
+import { listActiveUserMemoryEvents } from './user-memory-events.js';
 
 function numberOrZero(value) {
   return Number.isFinite(value) ? value : 0;
@@ -117,8 +122,307 @@ function buildProfileToolResult(context) {
   });
 }
 
+function compactText(value, limit = 80) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function buildMemoryToolResult(context) {
+  const profile = context.userProfile || {};
+  let memories = Array.isArray(context.memoryContext?.eventMemories)
+    ? context.memoryContext.eventMemories
+    : [];
+  if (memories.length === 0) {
+    memories = await listActiveUserMemoryEvents({
+      userId: context.event.userId,
+      limit: 5,
+    }).catch(() => []);
+  }
+  const summaries = memories
+    .slice(0, 5)
+    .map((item, index) => `${index + 1}. ${compactText(item.summary, 72)}`)
+    .filter(Boolean);
+
+  return buildStructuredToolResult({
+    tool: 'get_memory',
+    payload: {
+      profileSummary: profile.profileSummary || '',
+      speakingStyleSummary: profile.speakingStyleSummary || '',
+      frequentPhrases: profile.frequentPhrases || [],
+      responsePreference: profile.responsePreference || '',
+      eventMemories: memories.map((item) => ({
+        memoryId: item.memoryId,
+        eventType: item.eventType,
+        summary: item.summary,
+      })),
+    },
+    summary: [
+      profile.profileSummary ? `画像：${profile.profileSummary}` : '稳定画像还不多。',
+      summaries.length ? `近期重要记忆：${summaries.join('；')}` : '近期重要事件还不多。',
+    ].join(' '),
+    visibility: 'default',
+    priority: 'normal',
+    followUpHint: '想删掉某条记忆，可以用 /forget <关键词>。',
+    safetyFlags: [],
+  });
+}
+
+async function forgetUserMemory(args, context) {
+  const query = compactText(args.query, 48);
+  if (!query) {
+    return buildStructuredToolResult({
+      tool: 'memory_forget',
+      payload: { deletedCount: 0, query },
+      summary: '你要我忘掉哪一条，给我一个关键词就行。',
+      visibility: 'default',
+      priority: 'low',
+      followUpHint: '例如 /forget 面试。',
+      safetyFlags: [],
+    });
+  }
+
+  const pattern = new RegExp(escapeRegex(query), 'i');
+  const result = await UserMemoryEvent.deleteMany({
+    userId: String(context.event.userId || ''),
+    $or: [
+      { summary: pattern },
+      { rawExcerpt: pattern },
+      { tags: pattern },
+    ],
+  });
+
+  return buildStructuredToolResult({
+    tool: 'memory_forget',
+    payload: {
+      query,
+      deletedCount: result.deletedCount || 0,
+    },
+    summary: result.deletedCount > 0
+      ? `我已经删掉 ${result.deletedCount} 条和“${query}”有关的记忆。`
+      : `我没找到和“${query}”匹配的长期记忆。`,
+    visibility: 'default',
+    priority: 'normal',
+    followUpHint: '你也可以用 /memory 看看我现在还记着什么。',
+    safetyFlags: [],
+  });
+}
+
+function buildStyleToolResult(context) {
+  const profile = context.userProfile || {};
+  const summary = [
+    profile.preferredName ? `称呼：${profile.preferredName}` : '',
+    profile.tonePreference ? `语气：${profile.tonePreference}` : '',
+    profile.responsePreference ? `长短：${profile.responsePreference}` : '',
+    profile.emojiStyle ? `表情：${profile.emojiStyle}` : '',
+    profile.humorStyle ? `幽默：${profile.humorStyle}` : '',
+    profile.speakingStyleSummary ? `整体：${profile.speakingStyleSummary}` : '',
+  ].filter(Boolean);
+
+  return buildStructuredToolResult({
+    tool: 'get_style',
+    payload: {
+      preferredName: profile.preferredName || '',
+      tonePreference: profile.tonePreference || '',
+      responsePreference: profile.responsePreference || '',
+      emojiStyle: profile.emojiStyle || '',
+      humorStyle: profile.humorStyle || '',
+      speakingStyleSummary: profile.speakingStyleSummary || '',
+      memeOptOut: Boolean(profile.memeOptOut),
+    },
+    summary: summary.length
+      ? `我现在按这些偏好和你说话：${summary.join('；')}。`
+      : '我还没读到很稳定的说话风格偏好。',
+    visibility: 'default',
+    priority: 'normal',
+    followUpHint: '可以用 /style set tone 温柔 或 /style set length detailed 来改。',
+    safetyFlags: [],
+  });
+}
+
+function normalizeStylePatch(key, value) {
+  const normalizedKey = String(key || '').trim().toLowerCase();
+  const normalizedValue = String(value || '').trim();
+  if (!normalizedValue) return null;
+
+  if (['name', '称呼', 'preferredname'].includes(normalizedKey)) {
+    return { preferredName: normalizedValue.slice(0, 24) };
+  }
+  if (['tone', '语气'].includes(normalizedKey)) {
+    return { tonePreference: normalizedValue.slice(0, 32) };
+  }
+  if (['length', 'reply', '长短', '回复'].includes(normalizedKey)) {
+    return { responsePreference: normalizedValue.slice(0, 32) };
+  }
+  if (['emoji', '表情'].includes(normalizedKey)) {
+    return { emojiStyle: normalizedValue.slice(0, 32) };
+  }
+  if (['humor', '梗', '幽默'].includes(normalizedKey)) {
+    return { humorStyle: normalizedValue.slice(0, 32) };
+  }
+  return { speakingStyleSummary: normalizedValue.slice(0, 96) };
+}
+
+async function updateStylePreference(args, context) {
+  const patch = normalizeStylePatch(args.key, args.value);
+  if (!patch) {
+    return buildStructuredToolResult({
+      tool: 'style_updated',
+      payload: { updated: false },
+      summary: '这条风格偏好我没看懂。你可以用 /style set tone 温柔 这样改。',
+      visibility: 'default',
+      priority: 'low',
+      followUpHint: '',
+      safetyFlags: [],
+    });
+  }
+
+  const profileKey = context.userProfile?.profileKey || buildUserProfileKey({
+    platform: context.event.platform || 'qq',
+    userId: context.event.userId,
+  });
+  const nextProfile = {
+    ...(context.userProfile || {}),
+    ...patch,
+  };
+  const profileSummary = buildProfileSummary(nextProfile);
+  const updated = await UserProfileMemory.findOneAndUpdate(
+    { profileKey },
+    {
+      $set: {
+        ...patch,
+        profileSummary,
+        styleLastUpdated: new Date(),
+        lastUpdated: new Date(),
+      },
+      $setOnInsert: {
+        platform: context.event.platform || 'qq',
+        userId: String(context.event.userId || ''),
+        profileKey,
+      },
+    },
+    { upsert: true, returnDocument: 'after' }
+  );
+
+  return buildStructuredToolResult({
+    tool: 'style_updated',
+    payload: {
+      updated: true,
+      patch,
+      profileSummary: updated?.profileSummary || profileSummary,
+    },
+    summary: `这条偏好我记下了：${Object.entries(patch).map(([key, value]) => `${key}=${value}`).join('，')}。`,
+    visibility: 'default',
+    priority: 'normal',
+    followUpHint: '之后我会按这个方向调整回复。',
+    safetyFlags: [],
+  });
+}
+
+async function searchMemes(args, context) {
+  const query = String(args.query || '').trim().toLowerCase();
+  const assets = await findMemeAssets({
+    chatId: context.event.chatId,
+    limit: 30,
+    safetyStatus: 'safe',
+  });
+  const matches = assets.filter((asset) => {
+    const haystack = [
+      asset.caption,
+      asset.usageContext,
+      asset.quoteText,
+      ...(asset.tags || []),
+      ...(asset.semanticTags || []),
+    ].join(' ').toLowerCase();
+    return !query || haystack.includes(query);
+  }).slice(0, 5);
+
+  return buildStructuredToolResult({
+    tool: 'meme_search',
+    payload: {
+      query,
+      count: matches.length,
+      assets: matches.map((asset) => ({
+        assetId: asset.assetId,
+        caption: asset.caption || '',
+        semanticTags: asset.semanticTags || [],
+        usageContext: asset.usageContext || '',
+        imageUrl: asset.imageUrl || '',
+        storagePath: asset.storagePath || '',
+      })),
+    },
+    summary: matches.length > 0
+      ? `我找到了 ${matches.length} 张可能合适的表情包。`
+      : `我没找到和“${args.query}”很贴的表情包。`,
+    visibility: 'group',
+    priority: 'normal',
+    followUpHint: matches.length > 0 ? '要直接发图，可以继续指定更明确的关键词。' : '',
+    safetyFlags: [],
+  });
+}
+
+async function setMemeOptOut(args, context) {
+  const optOut = Boolean(args.optOut);
+  const profileKey = context.userProfile?.profileKey || buildUserProfileKey({
+    platform: context.event.platform || 'qq',
+    userId: context.event.userId,
+  });
+  await UserProfileMemory.findOneAndUpdate(
+    { profileKey },
+    {
+      $set: {
+        memeOptOut: optOut,
+        lastUpdated: new Date(),
+      },
+      $setOnInsert: {
+        platform: context.event.platform || 'qq',
+        userId: String(context.event.userId || ''),
+        profileKey,
+      },
+    },
+    { upsert: true, returnDocument: 'after' }
+  );
+
+  return buildStructuredToolResult({
+    tool: 'meme_optout',
+    payload: { optOut },
+    summary: optOut
+      ? '我记下了，之后不会自动收集你发的表情包素材。'
+      : '我记下了，之后可以继续自动收集你发的表情包素材。',
+    visibility: 'default',
+    priority: 'normal',
+    followUpHint: '',
+    safetyFlags: [],
+  });
+}
+
+function buildDebugWhyToolResult(context) {
+  ensureAdmin(context, 'debug_why');
+  const analysis = context.analysis || {};
+  return buildStructuredToolResult({
+    tool: 'debug_why',
+    payload: {
+      reason: analysis.reason || '',
+      shouldRespond: Boolean(analysis.shouldRespond),
+      confidence: analysis.confidence ?? null,
+      relevance: analysis.relevance ?? null,
+      ruleSignals: analysis.ruleSignals || [],
+      decisionExplanation: analysis.decisionExplanation || null,
+    },
+    summary: `这轮判断：${analysis.shouldRespond ? '会回复' : '不回复'}，原因=${analysis.reason || 'unknown'}，信号=${(analysis.ruleSignals || []).join('/') || '无'}。`,
+    visibility: 'admin',
+    priority: 'low',
+    followUpHint: '',
+    safetyFlags: [],
+  });
+}
+
 function buildHelpToolResult() {
-  const commands = getToolDefinitions().map((definition) => `/${definition.commandAliases[0]}`);
+  const commands = [...new Set(getToolDefinitions().map((definition) => `/${definition.commandAliases[0]}`))];
   return buildStructuredToolResult({
     tool: 'get_help',
     payload: {
@@ -355,6 +659,13 @@ const TOOL_EXECUTORS = {
   get_group_report: buildGroupReportToolResult,
   get_activity_leaderboard: buildLeaderboardToolResult,
   get_profile: async (_args, context) => buildProfileToolResult(context),
+  get_memory: async (_args, context) => buildMemoryToolResult(context),
+  forget_user_memory: forgetUserMemory,
+  get_style: async (_args, context) => buildStyleToolResult(context),
+  update_style: updateStylePreference,
+  search_memes: searchMemes,
+  set_meme_opt_out: setMemeOptOut,
+  debug_why: async (_args, context) => buildDebugWhyToolResult(context),
   add_keyword_watch: addKeywordWatch,
   remove_keyword_watch: removeKeywordWatch,
   list_keyword_watch: async (_args, context) => listKeywordWatch(context),

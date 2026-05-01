@@ -595,6 +595,8 @@ async function runToolTask(task, context, trace, deps) {
       userState: context.userState,
       userProfile: context.userProfile,
       groupState: context.groupState,
+      memoryContext: context.memoryContext,
+      analysis: context.analysis,
       event: context.event,
     },
     trace
@@ -642,6 +644,9 @@ async function persistReplyState(context, payload, trace, deps) {
   namedTasks.push({
     name: 'extract-user-memory-events',
     run: async () => {
+      if (!config.memoryExtractionEnabled) {
+        return [];
+      }
       const events = await deps.persistUserMemoryEvents({
         event: context.event,
         text: payload.userTurn,
@@ -659,7 +664,13 @@ async function persistReplyState(context, payload, trace, deps) {
     namedTasks.push({
       name: 'analyze-meme-semantics',
       run: async () => {
-        const collected = await deps.collectMemeAssetForEvent(context.event, {}, deps);
+        const optOutUsers = [
+          ...(Array.isArray(config.memeOptOutUsers) ? config.memeOptOutUsers : []),
+          ...(context.userProfile?.memeOptOut ? [context.event.userId] : []),
+        ];
+        const collected = await deps.collectMemeAssetForEvent(context.event, {
+          memeOptOutUsers: optOutUsers,
+        }, deps);
         if (collected?.asset) {
           await deps.indexMemeAssetSemantics(collected.asset);
         }
@@ -794,6 +805,7 @@ function buildPersistContextSnapshot(context) {
       emojiStyle: context.userProfile.emojiStyle || '',
       responsePreference: context.userProfile.responsePreference || '',
       humorStyle: context.userProfile.humorStyle || '',
+      memeOptOut: Boolean(context.userProfile.memeOptOut),
       profileSummary: context.userProfile.profileSummary || '',
     } : null,
     memoryContext: {
@@ -917,7 +929,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
     const userTurn = resolveUserTurn(normalizedEvent);
     const summary = summarizeIncomingMessage(normalizedEvent.userName, rawText);
     const analysis = workflowContext.analysis;
-    const replyBudgetMs = Math.max(0, Number(options.replyTimeBudgetMs ?? config.replyTimeBudgetMs ?? 0));
+    const configuredReplyBudgetMs = options.replyTimeBudgetMs
+      ?? (config.replyTimeBudgetMs > 0 ? config.replyTimeBudgetMs : config.replyHardTimeoutMs);
+    const replyBudgetMs = Math.max(0, Number(configuredReplyBudgetMs || 0));
     const replyBudgetStartedAt = Date.now();
     const getRemainingReplyBudgetMs = () => (
       replyBudgetMs <= 0

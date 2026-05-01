@@ -249,6 +249,24 @@ export function analyzeTriggerFast(event, options = {}) {
     });
   }
 
+  if (rule.poke) {
+    return buildHeuristicResult({
+      shouldRespond: true,
+      confidence: clamp(Math.max(rule.score, policy.groupChat.autoAllowThreshold), 0, 1),
+      intent,
+      sentiment,
+      relevance: 0.88,
+      reason: 'poke-trigger',
+      ruleSignals: rule.signals,
+      replyStyle: 'calm',
+      topics: [],
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'allow',
+        finalDecision: 'allow',
+      }),
+    });
+  }
+
   if (rule.directMention && policy.groupChat.hardAllowDirectMention) {
     return buildHeuristicResult({
       shouldRespond: true,
@@ -261,24 +279,6 @@ export function analyzeTriggerFast(event, options = {}) {
         : 'basic-direct-mention-pass',
       ruleSignals: rule.signals,
       replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
-      topics: [],
-      decisionExplanation: makeDecisionExplanation(rule, {
-        hardDecision: 'allow',
-        finalDecision: 'allow',
-      }),
-    });
-  }
-
-  if (rule.poke) {
-    return buildHeuristicResult({
-      shouldRespond: true,
-      confidence: clamp(Math.max(rule.score, policy.groupChat.autoAllowThreshold), 0, 1),
-      intent,
-      sentiment,
-      relevance: 0.88,
-      reason: 'poke-trigger',
-      ruleSignals: rule.signals,
-      replyStyle: 'calm',
       topics: [],
       decisionExplanation: makeDecisionExplanation(rule, {
         hardDecision: 'allow',
@@ -457,6 +457,24 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
     });
   }
 
+  if (rule.poke) {
+    return buildHeuristicResult({
+      shouldRespond: true,
+      confidence: clamp(Math.max(rule.score, autoAllowThreshold), 0, 1),
+      intent,
+      sentiment,
+      relevance: 0.88,
+      reason: 'poke-trigger',
+      ruleSignals: rule.signals,
+      replyStyle: 'calm',
+      topics: context.topics || [],
+      decisionExplanation: makeDecisionExplanation(rule, {
+        hardDecision: 'allow',
+        finalDecision: 'allow',
+      }),
+    });
+  }
+
   if (rule.directMention && policy.groupChat.hardAllowDirectMention) {
     const reason = isAdvancedGroup(rule.event.chatId)
       ? 'advanced-direct-mention-pass'
@@ -471,24 +489,6 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
       reason,
       ruleSignals: rule.signals,
       replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',
-      topics: context.topics || [],
-      decisionExplanation: makeDecisionExplanation(rule, {
-        hardDecision: 'allow',
-        finalDecision: 'allow',
-      }),
-    });
-  }
-
-  if (rule.poke) {
-    return buildHeuristicResult({
-      shouldRespond: true,
-      confidence: clamp(Math.max(rule.score, autoAllowThreshold), 0, 1),
-      intent,
-      sentiment,
-      relevance: 0.88,
-      reason: 'poke-trigger',
-      ruleSignals: rule.signals,
-      replyStyle: 'calm',
       topics: context.topics || [],
       decisionExplanation: makeDecisionExplanation(rule, {
         hardDecision: 'allow',

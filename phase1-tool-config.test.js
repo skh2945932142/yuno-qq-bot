@@ -12,6 +12,19 @@ test('command parser uses declarative tool definitions', () => {
   assert.ok(definitions.some((item) => item.name === 'get_profile'));
 });
 
+test('command parser recognizes companion memory and meme commands', () => {
+  assert.equal(parseCommand('/memory').toolName, 'get_memory');
+  assert.deepEqual(parseCommand('/forget 面试').toolArgs, { query: '面试' });
+  assert.equal(parseCommand('/style').toolName, 'get_style');
+  assert.deepEqual(parseCommand('/style set tone 温柔一点').toolArgs, {
+    key: 'tone',
+    value: '温柔一点',
+  });
+  assert.deepEqual(parseCommand('/meme search 破防').toolArgs, { query: '破防' });
+  assert.deepEqual(parseCommand('/meme optout').toolArgs, { optOut: true });
+  assert.equal(parseCommand('/debug why').toolName, 'debug_why');
+});
+
 test('tool routing respects allowIn metadata', () => {
   const task = planIncomingTask({
     event: {

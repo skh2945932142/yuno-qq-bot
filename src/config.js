@@ -39,24 +39,34 @@ function readJson(name, fallback) {
   }
 }
 
+function readTrimmed(name, fallback = '') {
+  const value = process.env[name];
+  if (value === undefined || value === null) return fallback;
+  const normalized = String(value).trim();
+  return normalized || fallback;
+}
+
+function normalizeBaseUrl(value) {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
 export const config = Object.freeze({
   nodeEnv: process.env.NODE_ENV || 'development',
   port: readNumber('PORT', 3000),
+  botExperienceMode: readTrimmed('BOT_EXPERIENCE_MODE', 'companion'),
   mongodbUri: process.env.MONGODB_URI || '',
   mongoMaxPoolSize: readNumber('MONGO_MAX_POOL_SIZE', 10),
   llmApiKey: process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY || '',
-  llmBaseUrl: (process.env.LLM_BASE_URL
+  llmBaseUrl: normalizeBaseUrl(process.env.LLM_BASE_URL
     || process.env.OPENAI_BASE_URL
-    || (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1' : 'https://api.openai.com/v1'))
-    .replace(/\/+$/, ''),
+    || (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1' : 'https://api.openai.com/v1')),
   llmChatModel: process.env.LLM_CHAT_MODEL || (process.env.SILICONFLOW_API_KEY ? 'Pro/MiniMaxAI/MiniMax-M2.5' : ''),
   embeddingModel: process.env.EMBEDDING_MODEL || 'BAAI/bge-m3',
   ttsProvider: resolvedTtsProvider,
   ttsApiKey: process.env.TTS_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY || '',
-  ttsBaseUrl: (process.env.TTS_BASE_URL || defaultTtsBaseUrl)
-    .replace(/\/+$/, ''),
+  ttsBaseUrl: normalizeBaseUrl(process.env.TTS_BASE_URL || defaultTtsBaseUrl),
   ttsModel: process.env.TTS_MODEL || defaultTtsModel,
-  napcatApi: (process.env.NAPCAT_API || '').replace(/\/+$/, ''),
+  napcatApi: normalizeBaseUrl(process.env.NAPCAT_API || ''),
   napcatToken: process.env.NAPCAT_TOKEN || '',
   targetGroupId: process.env.TARGET_GROUP_ID ? String(process.env.TARGET_GROUP_ID) : '',
   adminQq: process.env.ADMIN_QQ ? String(process.env.ADMIN_QQ) : '',
@@ -72,6 +82,8 @@ export const config = Object.freeze({
   voiceBitrate: readNumber('VOICE_BITRATE', 24000),
   requestTimeoutMs: readNumber('REQUEST_TIMEOUT_MS', 60000),
   replyTimeBudgetMs: readNumber('REPLY_TIME_BUDGET_MS', 0),
+  replyHardTimeoutMs: readNumber('REPLY_HARD_TIMEOUT_MS', 12000),
+  externalToolTimeoutMs: readNumber('EXTERNAL_TOOL_TIMEOUT_MS', 4000),
   modelFallbackChatModel: process.env.MODEL_FALLBACK_CHAT_MODEL || '',
   modelCircuitFailureThreshold: readNumber('MODEL_CIRCUIT_FAILURE_THRESHOLD', 3),
   modelCircuitOpenMs: readNumber('MODEL_CIRCUIT_OPEN_MS', 20000),
@@ -86,7 +98,7 @@ export const config = Object.freeze({
   chatFollowupRateGroup: readNumber('CHAT_FOLLOWUP_RATE_GROUP', 0.24),
   chatStyleRepeatGuard: readBoolean('CHAT_STYLE_REPEAT_GUARD', true),
   chatEllipsisLimit: readNumber('CHAT_ELLIPSIS_LIMIT', 2),
-  qdrantUrl: (process.env.QDRANT_URL || '').replace(/\/+$/, ''),
+  qdrantUrl: normalizeBaseUrl(process.env.QDRANT_URL || ''),
   qdrantApiKey: process.env.QDRANT_API_KEY || '',
   qdrantCollection: process.env.QDRANT_COLLECTION || 'qq_bot_knowledge',
   qdrantTopK: readNumber('QDRANT_TOP_K', 4),
@@ -111,15 +123,42 @@ export const config = Object.freeze({
   metricsPath: process.env.METRICS_PATH || '/metrics',
   logLevel: process.env.LOG_LEVEL || 'info',
   traceSampleRate: readNumber('TRACE_SAMPLE_RATE', 1),
+  visionApiKey: readTrimmed('VISION_API_KEY'),
+  visionBaseUrl: normalizeBaseUrl(process.env.VISION_BASE_URL || ''),
+  visionModel: readTrimmed('VISION_MODEL'),
+  ocrApiKey: readTrimmed('OCR_API_KEY'),
+  ocrBaseUrl: normalizeBaseUrl(process.env.OCR_BASE_URL || ''),
+  searchApiKey: readTrimmed('SEARCH_API_KEY'),
+  searchBaseUrl: normalizeBaseUrl(process.env.SEARCH_BASE_URL || ''),
+  memorySummaryModel: readTrimmed('MEMORY_SUMMARY_MODEL'),
+  memoryExtractionEnabled: readBoolean('MEMORY_EXTRACTION_ENABLED', true),
   specialUsers: readJson('SPECIAL_USERS_JSON', []),
   memeEnabled: readBoolean('MEME_ENABLED', true),
   memeAutoCollect: readBoolean('MEME_AUTO_COLLECT', true),
   memeAutoSend: readBoolean('MEME_AUTO_SEND', false),
+  memeVisionEnabled: readBoolean('MEME_VISION_ENABLED', true),
   memeStorageDir: process.env.MEME_STORAGE_DIR || 'data/memes',
   memeEnabledGroups: readJson('MEME_ENABLED_GROUPS', []),
   memeOptOutUsers: readJson('MEME_OPT_OUT_USERS', []),
   memeRequireAdminForAutoMode: readBoolean('MEME_REQUIRE_ADMIN_FOR_AUTO_MODE', true),
 });
+
+export function describeHttpBaseUrlProblem(value) {
+  const normalized = normalizeBaseUrl(value);
+  if (!normalized) return '';
+  if (!/^https?:\/\//i.test(normalized)) {
+    return 'missing-protocol';
+  }
+
+  try {
+    const url = new URL(normalized);
+    if (!url.hostname) return 'missing-host';
+  } catch (error) {
+    return error.code || 'invalid-url';
+  }
+
+  return '';
+}
 
 export function validateRuntimeConfig() {
   const required = [

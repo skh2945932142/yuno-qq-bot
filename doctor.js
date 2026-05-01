@@ -3,7 +3,7 @@ import axios from 'axios';
 import OpenAI from 'openai';
 import Redis from 'ioredis';
 import { pathToFileURL } from 'node:url';
-import { config, validateRuntimeConfig } from './src/config.js';
+import { config, describeHttpBaseUrlProblem, validateRuntimeConfig } from './src/config.js';
 import { resolveFfmpegPath } from './src/services/audio.js';
 
 function truncateValue(value, limit = 120) {
@@ -221,6 +221,14 @@ async function checkQdrant(options = {}) {
     return {
       status: 'skip',
       detail: 'retrieval is not configured. This is fine for text-only mode; set QDRANT_URL and QDRANT_COLLECTION, then run npm run kb:sync when you want RAG.',
+    };
+  }
+
+  const urlProblem = describeHttpBaseUrlProblem(runtimeConfig.qdrantUrl);
+  if (urlProblem) {
+    return {
+      status: 'fail',
+      detail: `QDRANT_URL is invalid (${urlProblem}). Use a full URL such as http://qdrant:6333 or https://your-qdrant-endpoint.`,
     };
   }
 

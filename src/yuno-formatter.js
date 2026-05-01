@@ -44,6 +44,10 @@ function renderStatusReply(toolResult, policy) {
       return `${prefix}群里的气氛偏 ${payload.mood || 'CALM'}，活跃度 ${Math.round(Number(payload.activityLevel || 0))}，最近常提的话题是 ${formatList(payload.recentTopics)}。`;
     case 'get_profile':
       return `${prefix}${payload.memorySummary || '稳定画像还不够多，我还在慢慢记。'}`;
+    case 'get_memory':
+      return `${prefix}${toolResult.summary || '我现在还没攒到足够稳定的记忆。'}`;
+    case 'get_style':
+      return `${prefix}${toolResult.summary || '我还没读到很稳定的说话风格偏好。'}`;
     case 'get_help':
       return `${prefix}现在能直接叫我的命令有：${formatList(payload.commands)}。`;
     default:
@@ -161,6 +165,17 @@ function renderSubscriptionReply(toolResult) {
 function renderMemeReply(toolResult, policy) {
   const action = toolResult.payload?.action || 'idle';
 
+  if (toolResult.tool === 'meme_search') {
+    const count = Number(toolResult.payload?.count || 0);
+    return count > 0
+      ? `我找到了 ${count} 张可能合适的表情包。`
+      : toolResult.summary || '我暂时没找到合适的表情包。';
+  }
+
+  if (toolResult.tool === 'meme_optout') {
+    return toolResult.summary || '这个表情包偏好我记下了。';
+  }
+
   if (action === 'collect') {
     return policy.specialUser
       ? '这张梗图素材我替你单独留着了。'
@@ -240,6 +255,14 @@ export function formatToolResultAsYuno(toolResult, policy = {}) {
 
   if (toolResult.tool?.startsWith('meme_')) {
     return renderMemeReply(toolResult, policy);
+  }
+
+  if (toolResult.tool?.startsWith('memory_') || toolResult.tool?.startsWith('style_')) {
+    return toolResult.summary || '这条偏好我记下了。';
+  }
+
+  if (toolResult.tool === 'debug_why') {
+    return toolResult.summary || '这轮调试信息我暂时没拿到。';
   }
 
   if (toolResult.tool === 'knowledge_lookup') {

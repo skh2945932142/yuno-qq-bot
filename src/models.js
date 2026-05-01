@@ -123,6 +123,7 @@ const UserProfileMemorySchema = new mongoose.Schema({
   responsePreference: { type: String, default: '' },
   humorStyle: { type: String, default: '' },
   styleLastUpdated: { type: Date, default: null },
+  memeOptOut: { type: Boolean, default: false },
   profileSummary: { type: String, default: '' },
   lastUpdated: { type: Date, default: Date.now },
 }, { minimize: false });

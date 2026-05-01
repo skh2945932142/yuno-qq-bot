@@ -32,6 +32,7 @@ await import('./phase1-automation-rules.test.js');
 await import('./phase1-automation-tasks.test.js');
 await import('./phase1-formatter-ops.test.js');
 await import('./phase1-copy-style.test.js');
+await import('./phase1-quality-gates.test.js');
 await import('./phase1-task-router-vnext.test.js');
 await import('./phase1-onebot-notice.test.js');
 

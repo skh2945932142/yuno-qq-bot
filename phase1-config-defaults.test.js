@@ -62,3 +62,28 @@ test('config uses mimo defaults when TTS_PROVIDER is mimo', async () => {
   assert.equal(config.ttsBaseUrl, 'https://api.xiaomimimo.com/v1/chat/completions');
   assert.equal(config.ttsModel, 'mimo-v2.5-tts');
 });
+
+test('config trims qdrant url and diagnoses missing protocol', async () => {
+  const { config, describeHttpBaseUrlProblem } = await loadConfigModule({
+    QDRANT_URL: ' qdrant:6333/ ',
+  });
+
+  assert.equal(config.qdrantUrl, 'qdrant:6333');
+  assert.equal(describeHttpBaseUrlProblem(config.qdrantUrl), 'missing-protocol');
+});
+
+test('config exposes companion experience and external enhancement knobs', async () => {
+  const { config } = await loadConfigModule({
+    BOT_EXPERIENCE_MODE: '',
+    REPLY_HARD_TIMEOUT_MS: '',
+    EXTERNAL_TOOL_TIMEOUT_MS: '',
+    MEMORY_EXTRACTION_ENABLED: '',
+    MEME_VISION_ENABLED: '',
+  });
+
+  assert.equal(config.botExperienceMode, 'companion');
+  assert.equal(config.replyHardTimeoutMs, 12000);
+  assert.equal(config.externalToolTimeoutMs, 4000);
+  assert.equal(config.memoryExtractionEnabled, true);
+  assert.equal(config.memeVisionEnabled, true);
+});

@@ -45,3 +45,20 @@ test('doctor marks qdrant as fail when configured endpoint is unreachable', asyn
   assert.equal(result.status, 'fail');
   assert.match(result.detail, /bad gateway/i);
 });
+
+test('doctor reports invalid qdrant url before making a request', async () => {
+  const result = await checkQdrant({
+    config: {
+      qdrantUrl: 'qdrant:6333',
+      qdrantCollection: 'qq_bot_knowledge',
+      qdrantApiKey: '',
+      requestTimeoutMs: 1000,
+    },
+    httpGet: async () => {
+      throw new Error('should not be called');
+    },
+  });
+
+  assert.equal(result.status, 'fail');
+  assert.match(result.detail, /QDRANT_URL is invalid/);
+});

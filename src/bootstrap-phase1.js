@@ -1,6 +1,6 @@
 import express from 'express';
 import axios from 'axios';
-import { config, validateRuntimeConfig } from './config.js';
+import { config, describeHttpBaseUrlProblem, validateRuntimeConfig } from './config.js';
 import { connectDB, isDbReady } from './db.js';
 import { logger } from './logger.js';
 import { startScheduler } from './scheduler.js';
@@ -100,6 +100,15 @@ async function probeQdrantReadiness() {
     };
   }
 
+  const urlProblem = describeHttpBaseUrlProblem(config.qdrantUrl);
+  if (urlProblem) {
+    return {
+      enabled: true,
+      ready: false,
+      reason: `invalid-url:${urlProblem}`,
+    };
+  }
+
   const headers = config.qdrantApiKey
     ? { 'api-key': config.qdrantApiKey }
     : {};
@@ -129,6 +138,19 @@ async function probeQdrantReadiness() {
       reason: `unreachable:${error.response?.status || error.code || 'unknown'}`,
     };
   }
+}
+
+function buildQdrantHint(reason = '') {
+  if (String(reason).startsWith('invalid-url')) {
+    return 'QDRANT_URL must be a full http:// or https:// URL. On Zeabur, do not set only a host or collection name.';
+  }
+  if (String(reason).includes(':401')) {
+    return 'Qdrant rejected the request. Check QDRANT_API_KEY and the selected Zeabur/Qdrant endpoint.';
+  }
+  if (reason === 'collection-missing') {
+    return 'Qdrant is reachable but the collection is missing. Check QDRANT_COLLECTION and run npm run kb:sync.';
+  }
+  return 'Check QDRANT_URL/QDRANT_COLLECTION and run npm run kb:sync if collection is missing.';
 }
 
 async function probeVoiceReadiness() {
@@ -332,7 +354,7 @@ export async function startApplication() {
   if (readiness.qdrant.enabled && !readiness.qdrant.ready) {
     logger.warn('bootstrap', 'Qdrant is degraded; retrieval will gracefully fall back', {
       reason: readiness.qdrant.reason,
-      hint: 'Check QDRANT_URL/QDRANT_COLLECTION and run npm run kb:sync if collection is missing.',
+      hint: buildQdrantHint(readiness.qdrant.reason),
     });
   }
   if (readiness.voice.enabled && !readiness.voice.ready) {

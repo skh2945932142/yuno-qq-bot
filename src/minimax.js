@@ -168,18 +168,18 @@ function readFirstChoiceContent(response, fallback = '') {
 function buildChatSystemInstructions(systemPrompt, options = {}) {
   const baseLines = options.expectStructuredReply
     ? [
-        'Output a single compact JSON object only.',
-        'Schema: {"text":"string","sendVoice":boolean,"voiceText":"string"}',
-        'text is required and must contain the visible QQ reply.',
-        'sendVoice decides whether a voice reply should also be sent.',
-        'voiceText should be an empty string when it is not needed.',
-        'No markdown, no code fences, no extra explanation.',
+        '只输出一个紧凑 JSON 对象。',
+        '固定结构: {"text":"string","sendVoice":boolean,"voiceText":"string"}',
+        'text 是发给 QQ 的可见回复，必须自然、完整、能直接发送。',
+        'sendVoice 表示是否同时发送语音；没有把握时设为 false。',
+        'voiceText 只在需要单独朗读文本时填写，否则留空字符串。',
+        '不要输出 markdown、代码块、解释、分析过程或角色标签。',
       ]
     : [
-        '鍙緭鍑烘渶缁堝洖澶嶆枃鏈€?',
-        '榛樿浣跨敤涓枃锛岄櫎闈炵敤鎴锋槑纭姹傝嫳鏂囥€?',
-        '涓嶈杈撳嚭鍒嗘瀽杩囩▼銆佽鍒欒鏄庛€佽鑹叉爣绛撅紝涓嶈杈撳嚭 <think>/<thinking>銆?',
-        '鍏堝洖绛旂敤鎴峰綋鍓嶈繖鍙ヨ瘽锛屽啀琛ヤ竴灞傚繀瑕佸欢灞曘€?',
+        '只输出最终回复文本。',
+        '默认使用中文，除非用户明确要求英文。',
+        '不要输出分析过程、规则说明、角色标签，也不要输出 <think>/<thinking>。',
+        '先回应用户当前这句话，再补一层必要延展。',
       ];
 
   return [...baseLines, systemPrompt].join('\n');
@@ -234,13 +234,6 @@ export async function chat(messages, systemPrompt, userMessage = null, options =
   const conversation = [
     {
       role: 'system',
-      content: [
-        '只输出最终回复文本。',
-        '默认使用中文，除非用户明确要求英文。',
-        '不要输出分析过程、规则说明、角色标签，不要输出 <think>/<thinking>。',
-        '先回答用户当前这句话，再补一层必要延展。',
-        systemPrompt,
-      ].join('\n'),
       content: buildChatSystemInstructions(systemPrompt, options),
     },
     ...messages.slice(-historyLimit),
@@ -268,7 +261,7 @@ function fallbackAnalysis(text) {
   const sanitized = stripCqCodes(text);
   const sentiment = inferSentiment(sanitized);
   const intent = inferIntent(sanitized);
-  const relevance = /(由乃|yuno|你|帮我|怎么看|觉得)/i.test(sanitized) ? 0.75 : 0.35;
+  const relevance = /(由乃|yuno|你帮我|怎么看|觉得)/i.test(sanitized) ? 0.75 : 0.35;
   const confidence = sanitized ? 0.62 : 0.2;
 
   return {
@@ -354,7 +347,7 @@ export async function analyzeMessage(text, context = {}, options = {}) {
 
 function fallbackTriggerClassification(text, context = {}) {
   const sanitized = stripCqCodes(text);
-  const question = /[?？]$/.test(sanitized) || /(怎么|如何|为什么|为啥|可以吗|行吗|呢|吗)\b/i.test(sanitized);
+  const question = /[?？]$/.test(sanitized) || /(怎么|如何|为什么|为啥|可以吗|行吗|呢|吗)/i.test(sanitized);
   const keyword = /(帮助|命令|问题|状态|关系|好感|画像|群状态|情绪|设定|规则|世界观|faq)/i.test(sanitized);
   const admin = Boolean(context.isAdmin);
   const shouldRespond = Boolean(admin || question || keyword);

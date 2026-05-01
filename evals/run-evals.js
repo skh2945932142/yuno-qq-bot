@@ -76,6 +76,10 @@ async function evaluateScenario(scenario) {
     return `Expected taskType=${scenario.expected.taskType}, got ${task.type}`;
   }
 
+  if (scenario.expected.taskCategory && task.category !== scenario.expected.taskCategory) {
+    return `Expected taskCategory=${scenario.expected.taskCategory}, got ${task.category}`;
+  }
+
   return null;
 }
 

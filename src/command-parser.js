@@ -21,7 +21,7 @@ function findByFamily(family) {
 }
 
 function findSimpleDefinition(head) {
-  return getToolDefinitions().find((definition) => definition.commandAliases.some((alias) => normalizeHead(alias) === head) && !['watch', 'remind', 'subscribe'].includes(definition.family));
+  return getToolDefinitions().find((definition) => definition.commandAliases.some((alias) => normalizeHead(alias) === head) && !['watch', 'remind', 'subscribe', 'memory', 'style', 'meme', 'debug'].includes(definition.family));
 }
 
 function parsePositiveNumber(value, fallback) {
@@ -97,6 +97,63 @@ function parseSubscriptionCommand(tokens) {
   return null;
 }
 
+function parseMemoryCommand(tokens) {
+  const [head, ...rest] = tokens;
+  if (normalizeHead(head) === 'forget' || head === '忘记') {
+    const query = rest.join(' ').trim();
+    if (!query) return null;
+    const definition = findByFamily('memory').find((item) => item.commandType === 'memory_forget');
+    return { type: definition.commandType, toolName: definition.name, toolArgs: { query } };
+  }
+
+  const definition = findByFamily('memory').find((item) => item.commandType === 'memory');
+  return { type: definition.commandType, toolName: definition.name, toolArgs: {} };
+}
+
+function parseStyleCommand(tokens) {
+  const [, action, key, ...rest] = tokens;
+  if ((action === 'set' || action === 'update' || action === '改') && key && rest.length > 0) {
+    const definition = findByFamily('style').find((item) => item.commandType === 'style_update');
+    return {
+      type: definition.commandType,
+      toolName: definition.name,
+      toolArgs: {
+        key: String(key).trim(),
+        value: rest.join(' ').trim(),
+      },
+    };
+  }
+
+  const definition = findByFamily('style').find((item) => item.commandType === 'style');
+  return { type: definition.commandType, toolName: definition.name, toolArgs: {} };
+}
+
+function parseMemeCommand(tokens) {
+  const [, action, ...rest] = tokens;
+  if (action === 'search' || action === 'find' || action === '搜') {
+    const query = rest.join(' ').trim();
+    if (!query) return null;
+    const definition = findByFamily('meme').find((item) => item.commandType === 'meme_search');
+    return { type: definition.commandType, toolName: definition.name, toolArgs: { query } };
+  }
+  if (action === 'optout' || action === 'off' || action === '关闭收集') {
+    const definition = findByFamily('meme').find((item) => item.commandType === 'meme_optout');
+    return { type: definition.commandType, toolName: definition.name, toolArgs: { optOut: true } };
+  }
+  if (action === 'optin' || action === 'on' || action === '开启收集') {
+    const definition = findByFamily('meme').find((item) => item.commandType === 'meme_optout');
+    return { type: definition.commandType, toolName: definition.name, toolArgs: { optOut: false } };
+  }
+  return null;
+}
+
+function parseDebugCommand(tokens) {
+  const [, action] = tokens;
+  if (action !== 'why') return null;
+  const definition = findByFamily('debug').find((item) => item.commandType === 'debug_why');
+  return { type: definition.commandType, toolName: definition.name, toolArgs: {} };
+}
+
 export function parseCommand(text) {
   const tokens = tokenize(text);
   if (tokens.length === 0) {
@@ -112,6 +169,21 @@ export function parseCommand(text) {
   }
   if (head === 'subscribe' || head === 'sub') {
     return parseSubscriptionCommand(tokens);
+  }
+  if (head === 'memory' || head === '记忆') {
+    return parseMemoryCommand(tokens);
+  }
+  if (head === 'forget' || head === '忘记') {
+    return parseMemoryCommand(tokens);
+  }
+  if (head === 'style' || head === '风格') {
+    return parseStyleCommand(tokens);
+  }
+  if (head === 'meme' || head === '表情包') {
+    return parseMemeCommand(tokens);
+  }
+  if (head === 'debug') {
+    return parseDebugCommand(tokens);
   }
 
   const definition = findSimpleDefinition(head);

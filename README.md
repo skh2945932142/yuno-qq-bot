@@ -83,17 +83,19 @@ npm run kb:sync
 - `MODEL_CIRCUIT_FAILURE_THRESHOLD`
 - `MODEL_CIRCUIT_OPEN_MS`
 - `REPLY_TIME_BUDGET_MS`
+- `REPLY_HARD_TIMEOUT_MS`
+- `EXTERNAL_TOOL_TIMEOUT_MS`
 - `MODEL_FALLBACK_CHAT_MODEL`
 - `CHAT_FOLLOWUP_RATE_PRIVATE`
 - `CHAT_FOLLOWUP_RATE_GROUP`
 - `CHAT_STYLE_REPEAT_GUARD`
 - `CHAT_ELLIPSIS_LIMIT`
 
-默认策略（2026-04）：
+默认策略（2026-05）：
 
 - `REQUEST_TIMEOUT_MS` 默认 `60000`（60 秒），降低慢模型被过早超时的概率
-- `REPLY_TIME_BUDGET_MS` 默认 `0`（关闭回复预算干预，等待模型完整回复）
-- 如需恢复“快速短答兜底”，可将 `REPLY_TIME_BUDGET_MS` 设为大于 `0` 的值
+- `REPLY_HARD_TIMEOUT_MS` 默认 `12000`（12 秒），用于陪伴型回复的单轮硬上限
+- `REPLY_TIME_BUDGET_MS` 默认 `0`，表示使用 `REPLY_HARD_TIMEOUT_MS`；如果显式设为大于 `0`，则覆盖硬上限
 
 语音相关：
 
@@ -138,16 +140,30 @@ npm run kb:sync
 
 个性化与功能开关：
 
+- `BOT_EXPERIENCE_MODE`
 - `TRIGGER_POLICY_JSON`
 - `TOOL_CONFIG_JSON`
 - `SPECIAL_USERS_JSON`
+- `MEMORY_EXTRACTION_ENABLED`
+- `MEMORY_SUMMARY_MODEL`
 - `MEME_ENABLED`
 - `MEME_AUTO_COLLECT`
 - `MEME_AUTO_SEND`
+- `MEME_VISION_ENABLED`
 - `MEME_STORAGE_DIR`
 - `MEME_ENABLED_GROUPS`
 - `MEME_OPT_OUT_USERS`
 - `MEME_REQUIRE_ADMIN_FOR_AUTO_MODE`
+
+外部增强相关：
+
+- `VISION_API_KEY`
+- `VISION_BASE_URL`
+- `VISION_MODEL`
+- `OCR_API_KEY`
+- `OCR_BASE_URL`
+- `SEARCH_API_KEY`
+- `SEARCH_BASE_URL`
 
 ## 部署模式
 
@@ -167,6 +183,28 @@ npm run kb:sync
 如果 Node、MongoDB、NapCat、Qdrant 都在同一个容器网络里，从 [env.docker.example](./env.docker.example) 开始。
 
 这个模式下可以使用 `mongo`、`qdrant` 之类的服务名，但前提是 Node 进程真的运行在同一张容器网络里。
+
+### 3. Zeabur 模板部署
+
+Zeabur 上以服务的 `Variables` 页面为准，不要只看仓库里的 `.env.example`。改完变量后需要重新部署 bot 服务。
+
+推荐先确认这些值：
+
+```env
+QDRANT_URL=http://<qdrant-service-host>:6333
+QDRANT_COLLECTION=qq_bot_knowledge
+QDRANT_API_KEY=
+```
+
+如果使用 Qdrant Cloud，则通常是：
+
+```env
+QDRANT_URL=https://<your-qdrant-cloud-endpoint>
+QDRANT_COLLECTION=qq_bot_knowledge
+QDRANT_API_KEY=<your-api-key>
+```
+
+`QDRANT_URL` 必须是完整 `http://` 或 `https://` URL。只填 `qdrant:6333`、collection 名、空值或带错引号，启动时会显示 `invalid-url:missing-protocol`；云端 key 错误通常会显示 `unreachable:401`。修好后再运行 `npm run kb:sync`。
 
 ## Special Users 配置示例
 

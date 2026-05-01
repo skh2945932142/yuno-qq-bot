@@ -366,6 +366,7 @@ export async function ensureUserProfileMemory({ platform = 'qq', userId, userNam
         responsePreference: '',
         humorStyle: '',
         styleLastUpdated: null,
+        memeOptOut: false,
       },
     },
     { upsert: true, returnDocument: 'after' }

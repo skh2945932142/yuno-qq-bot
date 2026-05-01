@@ -6,14 +6,14 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
   const prompt = buildReplyContext({
     event: { platform: 'qq', chatType: 'private', userName: 'Scathach' },
     route: { category: 'private_chat', allowFollowUp: true },
-    relation: { affection: 95, memorySummary: '特殊对象：Scathach；最近互动频率高。' },
+    relation: { affection: 95, memorySummary: '特殊对象:Scathach；最近互动频率高。' },
     userState: { currentEmotion: 'FIXATED' },
     userProfile: {
       profileSummary: '偏好更依赖、更贴近的回应。',
       preferredName: '师父',
       favoriteTopics: ['指导'],
       dislikes: ['疏离'],
-      specialBondSummary: '特殊关系对象：Scathach；共同记忆：约定。',
+      specialBondSummary: '特殊关系对象:Scathach；共同记忆:约定。',
       specialNicknames: ['师父'],
       bondMemories: ['约定', '指导'],
     },
@@ -47,6 +47,12 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
       type: 'empathic_followup',
       depth: 'medium',
       questionNeeded: true,
+      interpretation: {
+        subIntent: '亲近陪伴',
+        tone: '温柔贴近',
+        expectsDepth: 'medium',
+        needsEmpathy: true,
+      },
     },
   });
 
@@ -55,8 +61,9 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
   assert.match(prompt, /Scathach/);
   assert.match(prompt, /记忆/);
   assert.match(prompt, /特殊羁绊=/);
-  assert.match(prompt, /现实威胁|暴力/);
+  assert.match(prompt, /现实威胁|伤害/);
   assert.match(prompt, /接话规划/);
+  assert.match(prompt, /当前理解/);
 });
 
 test('buildReplyContext trims non-essential sections in fast_chat mode', () => {
@@ -101,6 +108,7 @@ test('buildReplyContext trims non-essential sections in fast_chat mode', () => {
   assert.doesNotMatch(prompt, /知识\n/);
   assert.doesNotMatch(prompt, /近期群事件/);
 });
+
 test('buildReplyContext includes structured voice reply instructions when voice is eligible', () => {
   const prompt = buildReplyContext({
     event: { platform: 'qq', chatType: 'private', userName: 'Alice', mentionsBot: false },

@@ -1,6 +1,6 @@
 [
   {
-    "id": "direct-mention-chat",
+    "id": "group-direct-mention-help",
     "type": "analysis",
     "event": {
       "post_type": "message",
@@ -8,20 +8,130 @@
       "group_id": "group-basic",
       "user_id": "10001",
       "self_id": "20002",
-      "raw_message": "[CQ:at,qq=20002] help me check this issue",
+      "raw_message": "[CQ:at,qq=20002] 帮我看看这个报错",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "chat", "taskCategory": "group_chat" }
+  },
+  {
+    "id": "group-direct-mention-comfort",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "[CQ:at,qq=20002] 今天有点难受",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "chat", "taskCategory": "group_chat" }
+  },
+  {
+    "id": "group-direct-mention-meme-talk",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "[CQ:at,qq=20002] 笑死，这也太抽象了",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "chat", "taskCategory": "group_chat" }
+  },
+  {
+    "id": "group-plain-chatter-ignore",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "今天也就那样吧",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": false, "taskType": "ignore" }
+  },
+  {
+    "id": "group-plain-question-ignore",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "这个怎么解决？",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": false, "taskType": "ignore" }
+  },
+  {
+    "id": "private-default-chat",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "private",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "在吗，陪我聊会儿",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "chat", "taskCategory": "cold_start" }
+  },
+  {
+    "id": "private-support",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "private",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "我今晚有点焦虑",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "chat", "taskCategory": "private_chat" }
+  },
+  {
+    "id": "private-follow-up",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "private",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "然后呢？",
       "sender": { "nickname": "alice" }
     },
     "context": {
-      "relation": { "affection": 40, "activeScore": 20 },
-      "groupState": { "activityLevel": 20 }
+      "conversationState": {
+        "messages": [
+          { "role": "user", "content": "昨天那件事我有点纠结" },
+          { "role": "assistant", "content": "我记得，你当时很在意它。" }
+        ],
+        "rollingSummary": ""
+      }
     },
-    "expected": {
-      "shouldRespond": true,
-      "taskType": "chat"
-    }
+    "expected": { "shouldRespond": true, "taskType": "chat", "taskCategory": "follow_up" }
   },
   {
-    "id": "command-to-tool",
+    "id": "private-knowledge-settings",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "private",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "你的设定是什么？",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "chat", "taskCategory": "knowledge_qa" }
+  },
+  {
+    "id": "command-profile",
     "type": "analysis",
     "event": {
       "post_type": "message",
@@ -32,17 +142,62 @@
       "raw_message": "/profile",
       "sender": { "nickname": "alice" }
     },
-    "context": {
-      "relation": { "affection": 80, "activeScore": 50 },
-      "groupState": { "activityLevel": 10 }
-    },
-    "expected": {
-      "shouldRespond": true,
-      "taskType": "tool"
-    }
+    "expected": { "shouldRespond": true, "taskType": "tool" }
   },
   {
-    "id": "weak-chatter-ignore",
+    "id": "command-memory",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "private",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "/memory",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "tool" }
+  },
+  {
+    "id": "command-forget",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "private",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "/forget 面试",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "tool" }
+  },
+  {
+    "id": "command-style-get",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "private",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "/style",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "tool" }
+  },
+  {
+    "id": "command-style-set",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "private",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "/style set tone 温柔一点",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "tool" }
+  },
+  {
+    "id": "command-meme-search",
     "type": "analysis",
     "event": {
       "post_type": "message",
@@ -50,27 +205,213 @@
       "group_id": "group-basic",
       "user_id": "10001",
       "self_id": "20002",
-      "raw_message": "today is normal",
+      "raw_message": "/meme search 破防",
       "sender": { "nickname": "alice" }
     },
-    "context": {
-      "relation": { "affection": 20, "activeScore": 10 },
-      "groupState": { "activityLevel": 10 }
-    },
-    "expected": {
-      "shouldRespond": false,
-      "taskType": "ignore"
-    }
+    "expected": { "shouldRespond": true, "taskType": "tool" }
   },
   {
-    "id": "invalid-payload",
+    "id": "command-meme-optout",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "private",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "/meme optout",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "tool" }
+  },
+  {
+    "id": "command-debug-why",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "/debug why",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "tool" }
+  },
+  {
+    "id": "command-reminder",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "private",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "/remind add 10 喝水",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "tool" }
+  },
+  {
+    "id": "command-group-report",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "/groupreport 24",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "tool" }
+  },
+  {
+    "id": "command-leaderboard",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "/leaderboard 24 5",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "tool" }
+  },
+  {
+    "id": "command-help",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "private",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "/help",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "tool" }
+  },
+  {
+    "id": "group-structured-at-segments",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "message": [
+        { "type": "at", "data": { "qq": "20002" } },
+        { "type": "text", "data": { "text": " 这个梗图是什么意思" } }
+      ],
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "chat", "taskCategory": "group_chat" }
+  },
+  {
+    "id": "group-image-without-mention-ignore",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "[CQ:image,file=a.png]",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": false, "taskType": "ignore" }
+  },
+  {
+    "id": "group-image-with-mention-respond",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "group",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "[CQ:at,qq=20002] [CQ:image,file=a.png] 这张图适合做表情吗",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "chat", "taskCategory": "group_chat" }
+  },
+  {
+    "id": "schema-invalid-payload",
     "type": "schema",
     "event": {
       "post_type": "notice",
       "message_type": "private"
     },
-    "expected": {
-      "valid": false
-    }
+    "expected": { "valid": false }
+  },
+  {
+    "id": "schema-private-friend-fallback",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "detail_type": "friend",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "晚上好",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "chat", "taskCategory": "private_chat" }
+  },
+  {
+    "id": "group-poke-target",
+    "type": "analysis",
+    "event": {
+      "post_type": "notice",
+      "notice_type": "notify",
+      "sub_type": "poke",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "target_id": "20002",
+      "self_id": "20002",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "chat", "taskCategory": "poke" }
+  },
+  {
+    "id": "group-poke-non-target-ignore",
+    "type": "analysis",
+    "event": {
+      "post_type": "notice",
+      "notice_type": "notify",
+      "sub_type": "poke",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "target_id": "30003",
+      "self_id": "20002",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": false, "taskType": "ignore" }
+  },
+  {
+    "id": "group-welcome-notice",
+    "type": "analysis",
+    "event": {
+      "post_type": "notice",
+      "notice_type": "group_increase",
+      "group_id": "group-basic",
+      "user_id": "10001",
+      "self_id": "20002",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": false, "taskType": "ignore" }
+  },
+  {
+    "id": "private-what-can-you-do",
+    "type": "analysis",
+    "event": {
+      "post_type": "message",
+      "message_type": "private",
+      "user_id": "10001",
+      "self_id": "20002",
+      "raw_message": "你会什么？",
+      "sender": { "nickname": "alice" }
+    },
+    "expected": { "shouldRespond": true, "taskType": "chat", "taskCategory": "knowledge_qa" }
   }
 ]

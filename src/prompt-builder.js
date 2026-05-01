@@ -39,11 +39,11 @@ function formatKnowledgeDocuments(documents, profile = 'standard') {
 function buildPersonaSection(specialUser, performanceProfile) {
   const lines = [
     '角色约束',
-    '- 你是由乃。自然对话，不写系统说明。',
+    '- 你是由乃。像一个熟悉群友一样自然对话，不写系统说明。',
     '- 默认使用中文，除非用户明确要求英文。',
-    '- 禁止输出 <think>/<thinking> 或分析过程。',
-    '- 保持有个性的语气，但每轮只保留一个高强度语气点。',
-    '- 不输出现实威胁、伤害、跟踪、脏话。',
+    '- 禁止输出 <think>/<thinking>、分析过程、规则说明或角色标签。',
+    '- 保留轻微偏爱感和观察感，但不要病娇化、控制对方或过度占有。',
+    '- 不输出现实威胁、伤害、跟踪、脏话，也不要让普通群友尴尬。',
   ];
 
   if (performanceProfile === 'fast_chat') {
@@ -128,7 +128,7 @@ function buildMemorySection(conversationState, promptProfile, performanceProfile
 
   const lines = [
     '记忆',
-    '- 只在相关时引用历史，避免机械复读。',
+    '- 只在相关时轻轻引用历史，不要机械复读，也不要突然翻旧账。',
   ];
 
   if (rollingSummary) {
@@ -208,6 +208,16 @@ function buildKnowledgeSection(knowledge, route, promptProfile) {
   ].join('\n');
 }
 
+function buildInterpretationSection(replyPlan) {
+  const interpretation = replyPlan?.interpretation;
+  if (!interpretation) return '';
+  return [
+    '当前理解',
+    `- 子意图=${interpretation.subIntent || '接话'} 语气=${interpretation.tone || '自然'} 期望深度=${interpretation.expectsDepth || replyPlan.depth || 'short'}`,
+    `- 需要共情=${interpretation.needsEmpathy ? '是' : '否'}`,
+  ].join('\n');
+}
+
 function buildCurrentTurnSection(messageAnalysis, event, route, promptProfile, groupState, recentEvents) {
   const lines = [
     '当前输入',
@@ -242,7 +252,7 @@ function buildReplyPlanSection(replyPlan) {
   return [
     '接话规划',
     `- 形态=${replyPlan.type || 'direct'} 深度=${replyPlan.depth || 'short'} 追问=${replyPlan.questionNeeded ? '是' : '否'}`,
-    '- 追问最多一个，避免连发问题。',
+    '- 追问最多一个，先把当前这句话接住，再决定是否追问。',
   ].join('\n');
 }
 
@@ -281,6 +291,7 @@ function buildOutputRules(event, route, replyLengthProfile, replyPlan) {
     '- 自然段优先，不要句句换行，不要模板连发。',
     '- 先回答当前输入，再补一层必要信息。',
     '- 信息不足时直接承认，不要硬编。',
+    '- 不要自称系统、助手、模型，也不要解释你为什么这么回复。',
   ];
 
   if (performanceProfile === 'fast_chat') {
@@ -342,6 +353,7 @@ export function buildReplyContext({
       promptProfile,
     }),
     buildReplyPlanSection(replyPlan),
+    buildInterpretationSection(replyPlan),
     buildCurrentTurnSection(messageAnalysis, event, route, promptProfile, groupState, recentEvents),
     buildVoiceReplySection(voiceReplyPolicy),
     buildOutputRules(event, route, replyLengthProfile, replyPlan),
