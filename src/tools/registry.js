@@ -1,5 +1,25 @@
 import { logger } from '../logger.js';
+import { config } from '../config.js';
 import { validateToolArgs } from '../schemas/tool-schema.js';
+
+function isAdminContext(context = {}, options = {}) {
+  const adminUserId = String(options.adminUserId ?? config.adminQq ?? '');
+  const userId = String(context.event?.userId ?? context.userId ?? '');
+  return Boolean(adminUserId && userId && adminUserId === userId);
+}
+
+function assertToolPermission(tool, context = {}, options = {}) {
+  const permissions = Array.isArray(tool.permissions) ? tool.permissions : [];
+  if (permissions.length === 0 || permissions.includes('member')) {
+    return;
+  }
+
+  if (permissions.includes('admin') && isAdminContext(context, options)) {
+    return;
+  }
+
+  throw new Error(`Tool ${tool.name} requires admin permission`);
+}
 
 export function createToolRegistry(options = {}) {
   const registryLogger = options.logger || logger;
@@ -41,6 +61,7 @@ export function createToolRegistry(options = {}) {
       if (!validation.ok) {
         throw new Error(`Invalid tool input for ${name}: ${validation.errors.join('; ')}`);
       }
+      assertToolPermission(tool, context, options);
 
       registryLogger.info('tool', 'Tool execution started', {
         traceId: trace?.traceId,

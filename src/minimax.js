@@ -453,6 +453,7 @@ function buildMimoTtsRequest(text, voice, runtimeConfig) {
         'api-key': runtimeConfig.ttsApiKey,
         Authorization: `Bearer ${runtimeConfig.ttsApiKey}`,
       },
+      maxRedirects: 0,
       timeout: runtimeConfig.requestTimeoutMs,
     },
   };
@@ -470,6 +471,7 @@ function buildOpenAiCompatibleTtsRequest(text, voice, runtimeConfig) {
     },
     requestOptions: {
       headers: { Authorization: `Bearer ${runtimeConfig.ttsApiKey}` },
+      maxRedirects: 0,
       responseType: 'arraybuffer',
       timeout: runtimeConfig.requestTimeoutMs,
     },

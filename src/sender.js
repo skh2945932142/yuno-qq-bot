@@ -16,6 +16,7 @@ async function postNapcat(action, payload, label) {
   return withRetry(
     () => axios.post(`${config.napcatApi}/${action}`, payload, {
       headers,
+      maxRedirects: 0,
       timeout: config.requestTimeoutMs,
     }),
     {

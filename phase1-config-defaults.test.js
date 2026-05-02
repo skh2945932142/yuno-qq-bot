@@ -87,3 +87,25 @@ test('config exposes companion experience and external enhancement knobs', async
   assert.equal(config.memoryExtractionEnabled, true);
   assert.equal(config.memeVisionEnabled, true);
 });
+
+test('config exposes webhook and metrics security defaults', async () => {
+  const { config } = await loadConfigModule({
+    ONEBOT_WEBHOOK_SECRET: '',
+    WEBHOOK_BODY_LIMIT: '',
+    METRICS_AUTH_TOKEN: '',
+    METRICS_PATH: '/metrics',
+  });
+
+  assert.equal(config.onebotWebhookSecret, '');
+  assert.equal(config.webhookBodyLimit, '128kb');
+  assert.equal(config.metricsAuthToken, '');
+  assert.equal(config.metricsPath, '/metrics');
+});
+
+test('config falls back from unsafe metrics route patterns', async () => {
+  const { config } = await loadConfigModule({
+    METRICS_PATH: '/:bad(.*)',
+  });
+
+  assert.equal(config.metricsPath, '/metrics');
+});

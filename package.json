@@ -9,11 +9,16 @@
     "dev": "node --watch src/index.js",
     "test": "node run-phase1-tests.js",
     "eval": "node evals/run-evals.js",
+    "eval:report": "node evals/run-evals.js --report reports/eval-experience.md",
     "kb:sync": "node scripts/kb-sync.js",
     "doctor": "node doctor.js",
     "smoke": "node smoke.js",
     "smoke:mock": "node scripts/smoke-mock.js",
-    "benchmark:reply": "node scripts/benchmark-reply-latency.js"
+    "benchmark:reply": "node scripts/benchmark-reply-latency.js",
+    "security:audit": "node scripts/security-audit.js",
+    "security:secrets": "node scripts/security-secrets.js",
+    "automation:ideas": "node scripts/experience-ideas.js",
+    "automation:dev-health": "node scripts/dev-health-report.js"
   },
   "keywords": [],
   "author": "",

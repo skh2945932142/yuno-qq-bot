@@ -1,0 +1,47 @@
+{
+  "expiresOn": "2026-06-30",
+  "entries": [
+    {
+      "source": "1116673",
+      "name": "axios",
+      "url": "https://github.com/advisories/GHSA-3p68-rc4w-qgx5",
+      "reason": "No fixed axios release is available in the current npm audit data; outbound authenticated requests disable redirects."
+    },
+    {
+      "source": "1116675",
+      "name": "axios",
+      "url": "https://github.com/advisories/GHSA-fvcv-3m26-pcqx",
+      "reason": "No fixed axios release is available in the current npm audit data; outbound authenticated requests disable redirects."
+    },
+    {
+      "source": "1116560",
+      "name": "follow-redirects",
+      "url": "https://github.com/advisories/GHSA-r4q5-vmmm-2653",
+      "reason": "Latest follow-redirects release is still affected; authenticated axios calls set maxRedirects=0."
+    },
+    {
+      "source": "1115573",
+      "name": "path-to-regexp",
+      "url": "https://github.com/advisories/GHSA-j3q9-mxjg-w52f",
+      "reason": "Express router dependency has no fixed release in current audit data; configurable routes are restricted to simple literal paths."
+    },
+    {
+      "source": "1115582",
+      "name": "path-to-regexp",
+      "url": "https://github.com/advisories/GHSA-27v5-c462-wpq7",
+      "reason": "Express router dependency has no fixed release in current audit data; configurable routes are restricted to simple literal paths."
+    },
+    {
+      "source": "1117042",
+      "name": "protobufjs",
+      "url": "https://github.com/advisories/GHSA-xq3m-2v4x-88gg",
+      "reason": "OpenTelemetry transitive dependency has no fixed stable version in current npm metadata; revisit before expiry."
+    },
+    {
+      "source": "1116970",
+      "name": "uuid",
+      "url": "https://github.com/advisories/GHSA-w5hq-g745-h8pq",
+      "reason": "BullMQ transitive dependency has no direct application exposure to v3/v5/v6 buffer APIs; revisit before expiry."
+    }
+  ]
+}

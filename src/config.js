@@ -50,6 +50,13 @@ function normalizeBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '');
 }
 
+function normalizeMetricsPath(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '/metrics';
+  if (!/^\/[A-Za-z0-9/_-]+$/.test(normalized)) return '/metrics';
+  return normalized;
+}
+
 export const config = Object.freeze({
   nodeEnv: process.env.NODE_ENV || 'development',
   port: readNumber('PORT', 3000),
@@ -118,9 +125,12 @@ export const config = Object.freeze({
   }),
   automationTaskConcurrency: readNumber('AUTOMATION_TASK_CONCURRENCY', 3),
   groupEventRetentionCount: readNumber('GROUP_EVENT_RETENTION_COUNT', 100),
+  onebotWebhookSecret: readTrimmed('ONEBOT_WEBHOOK_SECRET'),
+  webhookBodyLimit: readTrimmed('WEBHOOK_BODY_LIMIT', '128kb'),
   otlpEndpoint: process.env.OTLP_ENDPOINT || '',
   enableMetrics: readBoolean('ENABLE_METRICS', true),
-  metricsPath: process.env.METRICS_PATH || '/metrics',
+  metricsPath: normalizeMetricsPath(process.env.METRICS_PATH || '/metrics'),
+  metricsAuthToken: readTrimmed('METRICS_AUTH_TOKEN'),
   logLevel: process.env.LOG_LEVEL || 'info',
   traceSampleRate: readNumber('TRACE_SAMPLE_RATE', 1),
   visionApiKey: readTrimmed('VISION_API_KEY'),

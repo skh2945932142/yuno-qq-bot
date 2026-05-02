@@ -1,0 +1,36 @@
+version: 2.1
+
+jobs:
+  test-and-security:
+    docker:
+      - image: cimg/node:20.18
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - npm-v1-{{ checksum "package-lock.json" }}
+            - npm-v1-
+      - run:
+          name: Install dependencies
+          command: npm ci
+      - save_cache:
+          key: npm-v1-{{ checksum "package-lock.json" }}
+          paths:
+            - ~/.npm
+      - run:
+          name: Run unit and integration tests
+          command: npm test
+      - run:
+          name: Run mock smoke test
+          command: npm run smoke:mock
+      - run:
+          name: Run dependency security audit
+          command: npm run security:audit
+      - run:
+          name: Scan tracked files for secrets
+          command: npm run security:secrets
+
+workflows:
+  test-and-security:
+    jobs:
+      - test-and-security

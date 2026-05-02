@@ -24,6 +24,7 @@ async function request(method, path, data = null, label = 'qdrant request') {
       url: `${config.qdrantUrl}${path}`,
       data,
       headers: getHeaders(),
+      maxRedirects: 0,
       timeout: config.requestTimeoutMs,
     }),
     {

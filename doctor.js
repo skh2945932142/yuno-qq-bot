@@ -165,6 +165,7 @@ async function checkNapCat() {
     {},
     {
       headers,
+      maxRedirects: 0,
       timeout: config.requestTimeoutMs,
     }
   );
@@ -241,6 +242,7 @@ async function checkQdrant(options = {}) {
       `${runtimeConfig.qdrantUrl}/collections/${runtimeConfig.qdrantCollection}`,
       {
         headers,
+        maxRedirects: 0,
         timeout: runtimeConfig.requestTimeoutMs,
       }
     );

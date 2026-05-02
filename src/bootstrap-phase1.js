@@ -1,5 +1,6 @@
 import express from 'express';
 import axios from 'axios';
+import { timingSafeEqual } from 'node:crypto';
 import { config, describeHttpBaseUrlProblem, validateRuntimeConfig } from './config.js';
 import { connectDB, isDbReady } from './db.js';
 import { logger } from './logger.js';
@@ -18,6 +19,35 @@ import { resolveFfmpegPath } from './services/audio.js';
 
 function buildReplyJobId(event) {
   return `reply:${event.platform}:${event.chatId}:${event.messageId || `${event.userId}:${event.timestamp}`}`;
+}
+
+function constantTimeEquals(actual, expected) {
+  const actualBuffer = Buffer.from(String(actual || ''));
+  const expectedBuffer = Buffer.from(String(expected || ''));
+  if (actualBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+  return timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+function getHeaderValue(req, name) {
+  const direct = req.get?.(name);
+  if (direct) return String(direct);
+  const lower = String(name || '').toLowerCase();
+  return String(req.headers?.[lower] || req.headers?.[name] || '');
+}
+
+function getBearerToken(req) {
+  const authorization = getHeaderValue(req, 'authorization');
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : '';
+}
+
+function hasSharedSecret(req, expectedSecret, headerName) {
+  if (!expectedSecret) return true;
+  const directSecret = getHeaderValue(req, headerName);
+  const bearerToken = getBearerToken(req);
+  return [directSecret, bearerToken].some((candidate) => constantTimeEquals(candidate, expectedSecret));
 }
 
 async function deliverAutomationToolResult(event, toolResult) {
@@ -116,6 +146,7 @@ async function probeQdrantReadiness() {
   try {
     await axios.get(`${config.qdrantUrl}/collections/${config.qdrantCollection}`, {
       headers,
+      maxRedirects: 0,
       timeout: Math.min(config.requestTimeoutMs, 5000),
     });
     return {
@@ -196,11 +227,17 @@ async function probeRuntimeReadiness() {
   return { qdrant, voice };
 }
 
-export function createApp() {
+export function createApp(options = {}) {
+  const runtimeConfig = options.config || config;
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: runtimeConfig.webhookBodyLimit || '128kb' }));
 
   app.post('/onebot', async (req, res) => {
+    if (!hasSharedSecret(req, runtimeConfig.onebotWebhookSecret, 'x-yuno-webhook-secret')) {
+      res.status(401).send('unauthorized');
+      return;
+    }
+
     res.send();
 
     const validation = validateOnebotMessageEvent(req.body);
@@ -324,9 +361,14 @@ export function createApp() {
     });
   });
 
-  app.get(config.metricsPath, (_req, res) => {
-    if (!config.enableMetrics) {
+  app.get(runtimeConfig.metricsPath, (req, res) => {
+    if (!runtimeConfig.enableMetrics) {
       res.status(404).send('metrics disabled');
+      return;
+    }
+
+    if (!hasSharedSecret(req, runtimeConfig.metricsAuthToken, 'x-yuno-metrics-token')) {
+      res.status(401).send('unauthorized');
       return;
     }
 

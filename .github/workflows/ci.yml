@@ -30,3 +30,9 @@ jobs:
 
       - name: Run light smoke (mock)
         run: npm run smoke:mock
+
+      - name: Run dependency security audit
+        run: npm run security:audit
+
+      - name: Scan tracked files for secrets
+        run: npm run security:secrets

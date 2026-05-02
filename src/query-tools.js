@@ -44,6 +44,22 @@ function ensureAdmin(context, toolName) {
   }
 }
 
+function isGroupContext(context) {
+  return context.event?.chatType === 'group';
+}
+
+function buildPrivateOnlyResult(tool, action = '查看') {
+  return buildStructuredToolResult({
+    tool,
+    payload: { privateOnly: true },
+    summary: `这部分属于你的个人记忆和偏好，我不会在群里展开。私聊我再用对应命令${action}。`,
+    visibility: 'default',
+    priority: 'low',
+    followUpHint: '私聊里可以用 /memory、/style 或 /forget <关键词>。',
+    safetyFlags: ['private-memory'],
+  });
+}
+
 function buildRelationToolResult(context) {
   const relation = context.relation;
   const userState = context.userState;
@@ -100,6 +116,10 @@ function buildGroupToolResult(context) {
 }
 
 function buildProfileToolResult(context) {
+  if (isGroupContext(context)) {
+    return buildPrivateOnlyResult('get_profile');
+  }
+
   const relation = context.relation;
   const userProfile = context.userProfile;
   const definition = findToolDefinitionByCommandType('profile');
@@ -133,6 +153,10 @@ function escapeRegex(value) {
 }
 
 async function buildMemoryToolResult(context) {
+  if (isGroupContext(context)) {
+    return buildPrivateOnlyResult('get_memory');
+  }
+
   const profile = context.userProfile || {};
   let memories = Array.isArray(context.memoryContext?.eventMemories)
     ? context.memoryContext.eventMemories
@@ -173,6 +197,10 @@ async function buildMemoryToolResult(context) {
 }
 
 async function forgetUserMemory(args, context) {
+  if (isGroupContext(context)) {
+    return buildPrivateOnlyResult('memory_forget', '删除');
+  }
+
   const query = compactText(args.query, 48);
   if (!query) {
     return buildStructuredToolResult({
@@ -213,6 +241,10 @@ async function forgetUserMemory(args, context) {
 }
 
 function buildStyleToolResult(context) {
+  if (isGroupContext(context)) {
+    return buildPrivateOnlyResult('get_style');
+  }
+
   const profile = context.userProfile || {};
   const summary = [
     profile.preferredName ? `称呼：${profile.preferredName}` : '',
@@ -268,6 +300,10 @@ function normalizeStylePatch(key, value) {
 }
 
 async function updateStylePreference(args, context) {
+  if (isGroupContext(context)) {
+    return buildPrivateOnlyResult('style_updated', '修改');
+  }
+
   const patch = normalizeStylePatch(args.key, args.value);
   if (!patch) {
     return buildStructuredToolResult({

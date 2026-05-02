@@ -1,0 +1,70 @@
+name: Experience Radar
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "20 2 * * 1"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  radar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate eval experience scorecard
+        run: npm run eval:report
+
+      - name: Generate experience ideas
+        run: npm run automation:ideas -- --write reports/experience-ideas.md
+
+      - name: Generate development health report
+        run: npm run automation:dev-health -- --write reports/dev-health.md
+
+      - name: Upload automation reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: yuno-experience-radar
+          path: reports/*.md
+
+      - name: Create weekly idea issue
+        if: github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const evalReport = fs.readFileSync('reports/eval-experience.md', 'utf8');
+            const ideas = fs.readFileSync('reports/experience-ideas.md', 'utf8');
+            const health = fs.readFileSync('reports/dev-health.md', 'utf8');
+            const body = [
+              evalReport,
+              '',
+              '---',
+              '',
+              ideas,
+              '',
+              '---',
+              '',
+              health,
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Yuno experience radar - ${new Date().toISOString().slice(0, 10)}`,
+              body,
+            });

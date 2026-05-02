@@ -206,6 +206,25 @@ QDRANT_API_KEY=<your-api-key>
 
 `QDRANT_URL` 必须是完整 `http://` 或 `https://` URL。只填 `qdrant:6333`、collection 名、空值或带错引号，启动时会显示 `invalid-url:missing-protocol`；云端 key 错误通常会显示 `unreachable:401`。修好后再运行 `npm run kb:sync`。
 
+### 4. Webhook 与指标安全
+
+如果 `/onebot` 会暴露到公网，必须配置共享密钥：
+
+```env
+ONEBOT_WEBHOOK_SECRET=<long-random-secret>
+WEBHOOK_BODY_LIMIT=128kb
+```
+
+NapCat 或反向代理需要给请求加上 `x-yuno-webhook-secret: <long-random-secret>`，也可以用 `Authorization: Bearer <long-random-secret>`。没有配置 `ONEBOT_WEBHOOK_SECRET` 时会保留本地开发兼容模式，但不建议用于公网。
+
+如果开启 `/metrics`，建议同时配置：
+
+```env
+METRICS_AUTH_TOKEN=<long-random-token>
+```
+
+访问指标时使用 `Authorization: Bearer <long-random-token>`。`METRICS_PATH` 只支持类似 `/metrics`、`/internal/metrics` 这样的简单路径，不支持通配符或正则路由。
+
 ## Special Users 配置示例
 
 `SPECIAL_USERS_JSON` 用来按 `userId` 绑定专属人格策略。示例：
@@ -239,17 +258,21 @@ npm run doctor
 npm run smoke
 npm run smoke:mock
 npm run benchmark:reply
+npm run eval:report
 ```
 
 用途分别是：
 
 - `npm test`：跑当前主线和阶段性回归测试
 - `npm run eval`：跑轻量行为评估
+- `npm run eval:report`：跑行为评估并生成 `reports/eval-experience.md` 体验评分卡
 - `npm run kb:sync`：把 `knowledge/` 里的 Markdown 切块、向量化并同步到 Qdrant
 - `npm run doctor`：检查 Mongo、NapCat、LLM、Qdrant、Redis、FFmpeg 是否真的可达；语音关闭和未配置检索显示 `skip` 属于正常状态
 - `npm run smoke`：走真实 `runYunoConversation(...)` 主链，但不外发 QQ、不写会话状态
 - `npm run smoke:mock`：跑不依赖外部服务的轻量 smoke，适合 CI 快速兜底
 - `npm run benchmark:reply`：本地基准脚本，输出 group/private/knowledge 的 P50/P95
+- `npm run automation:ideas`：根据 eval、prompt、命令和 TODO 信号生成体验改进创意
+- `npm run automation:dev-health`：生成开发效率、CI、安全和技术债健康报告
 
 ## AstrBot 接入
 
@@ -302,6 +325,8 @@ npm run benchmark:reply
 - 如果 `ENABLE_QUEUE=false`，或者 BullMQ / Redis 不可用，系统会退回 inline 模式，但队列接口不变。
 - `/ready` 用于检查数据库和队列就绪情况，并返回 voice/qdrant 的降级原因；`/metrics` 暴露 Prometheus 风格指标。
 - 当前唯一活跃运行主线是 `src/message-workflow.js`，旧版群聊工作流已经移除。
+- 安全检查使用 `npm run security:audit` 和 `npm run security:secrets`；依赖告警必须出现在 `security/audit-allowlist.json` 且未过期，否则 CI 会失败。
+- 自动化体验雷达见 [docs/automation-workflows.md](./docs/automation-workflows.md)，可手动运行，也会通过 GitHub Actions 定时生成 eval 体验评分卡、创意报告、健康报告和 Issue。
 
 ## 后续扩展点
 
