@@ -144,14 +144,17 @@ test('analyzeMemeAssetSemantics honors optional OCR and caption generators', asy
 });
 
 test('retrieveMemoryContext returns active memory events and meme semantics by semantic hits', async () => {
+  const filters = [];
   const result = await retrieveMemoryContext({
     userId: 'u1',
+    chatId: 'g1',
     userTurn: '我又在紧张面试了',
     limitEvents: 2,
     limitMemes: 1,
     now: new Date('2026-04-28T00:00:00Z'),
   }, {
     searchPoints: async (_vector, options) => {
+      filters.push(options.filter.must);
       if (options.filter.must[0].match.value === 'memory_event') {
         return [{ payload: { memoryId: 'mem-1' } }];
       }
@@ -178,6 +181,8 @@ test('retrieveMemoryContext returns active memory events and meme semantics by s
 
   assert.equal(result.eventMemories.length, 1);
   assert.equal(result.memeMemories.length, 1);
+  assert.deepEqual(filters[0][1], { key: 'userId', match: { value: 'u1' } });
+  assert.deepEqual(filters[1][1], { key: 'chatId', match: { value: 'g1' } });
   assert.match(result.eventMemories[0].summary, /面试/);
   assert.match(result.memeMemories[0].caption, /无语表情/);
 });

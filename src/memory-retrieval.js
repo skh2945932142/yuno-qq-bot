@@ -142,8 +142,9 @@ async function searchSemanticPoints(query, filter, deps = {}) {
   });
 }
 
-export async function retrieveMemoryContext({ userId, userTurn, limitEvents = 3, limitMemes = 2, now = new Date() } = {}, deps = {}) {
+export async function retrieveMemoryContext({ userId, chatId = '', userTurn, limitEvents = 3, limitMemes = 2, now = new Date() } = {}, deps = {}) {
   const normalizedUserId = String(userId || '').trim();
+  const normalizedChatId = String(chatId || '').trim();
   if (!normalizedUserId || !String(userTurn || '').trim()) {
     return { eventMemories: [], memeMemories: [] };
   }
@@ -162,7 +163,9 @@ export async function retrieveMemoryContext({ userId, userTurn, limitEvents = 3,
       searchSemanticPoints(userTurn, {
         must: [
           { key: 'type', match: { value: 'meme_semantic' } },
-          { key: 'userId', match: { value: normalizedUserId } },
+          normalizedChatId
+            ? { key: 'chatId', match: { value: normalizedChatId } }
+            : { key: 'userId', match: { value: normalizedUserId } },
         ],
       }, { ...deps, limit: limitMemes }),
     ]);

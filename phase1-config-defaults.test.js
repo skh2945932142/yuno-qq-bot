@@ -88,6 +88,20 @@ test('config exposes companion experience and external enhancement knobs', async
   assert.equal(config.memeVisionEnabled, true);
 });
 
+test('config exposes contextual meme auto-send controls', async () => {
+  const { config } = await loadConfigModule({
+    MEME_AUTO_SEND_MODE: 'suggest',
+    MEME_AUTO_SEND_COOLDOWN_MS: '120000',
+    MEME_AUTO_SEND_MIN_SCORE: '0.8',
+    MEME_AUTO_SEND_MAX_PER_HOUR: '2',
+  });
+
+  assert.equal(config.memeAutoSendMode, 'suggest');
+  assert.equal(config.memeAutoSendCooldownMs, 120000);
+  assert.equal(config.memeAutoSendMinScore, 0.8);
+  assert.equal(config.memeAutoSendMaxPerHour, 2);
+});
+
 test('config exposes webhook and metrics security defaults', async () => {
   const { config } = await loadConfigModule({
     ONEBOT_WEBHOOK_SECRET: '',

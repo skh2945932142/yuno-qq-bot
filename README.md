@@ -149,6 +149,10 @@ npm run kb:sync
 - `MEME_ENABLED`
 - `MEME_AUTO_COLLECT`
 - `MEME_AUTO_SEND`
+- `MEME_AUTO_SEND_MODE`
+- `MEME_AUTO_SEND_COOLDOWN_MS`
+- `MEME_AUTO_SEND_MIN_SCORE`
+- `MEME_AUTO_SEND_MAX_PER_HOUR`
 - `MEME_VISION_ENABLED`
 - `MEME_STORAGE_DIR`
 - `MEME_ENABLED_GROUPS`
@@ -306,7 +310,7 @@ npm run eval:report
 - 生成：单条消息仿聊天截图 SVG
 - 决策：判断是收藏、发库存、现做一张，还是这次不发图
 
-默认情况下，自动发图是关闭的。需要显式配置 `MEME_AUTO_SEND=true`，并配好群白名单或 opt-out 规则后再启用。
+默认情况下，自动发图是关闭的。建议先用 `MEME_AUTO_SEND_MODE=suggest` 观察日志和报告，只记录“这轮适合哪张图”但不真正发图；确认匹配质量后，再把 `MEME_AUTO_SEND=true` 和 `MEME_AUTO_SEND_MODE=auto` 打开，并配好 `MEME_ENABLED_GROUPS`、冷却时间和 opt-out 规则。
 
 ## 用户文案规范
 

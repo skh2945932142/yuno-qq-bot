@@ -436,7 +436,7 @@ function buildMimoTtsRequest(text, voice, runtimeConfig) {
       messages: [
         {
           role: 'user',
-          content: '用自然、清晰、适合即时聊天回复的语气朗读，不要额外补充内容。',
+          content: '用我妻由乃的音色朗读：年轻少女声线，温柔轻柔，语气温和甜美，略带一丝病娇感，声音清澈但有轻微气音，语速适中偏慢，不要额外补充内容。',
         },
         {
           role: 'assistant',

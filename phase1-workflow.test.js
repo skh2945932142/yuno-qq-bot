@@ -110,6 +110,76 @@ test('processIncomingMessage runs the unified workflow and persists memory with 
   assert.equal(persistedMessages[1].role, 'assistant');
 });
 
+test('processIncomingMessage can send contextual meme as structured text plus image', async () => {
+  const event = createEvent({
+    chatType: 'group',
+    chatId: 'meme-group',
+    rawText: '[CQ:at,qq=bot] 笑死，太离谱了',
+    text: '笑死，太离谱了',
+    mentionsBot: true,
+  });
+  const structuredReplies = [];
+  const textReplies = [];
+  const usedMemes = [];
+  const precomputed = createPrecomputedContext(event, {
+    memoryContext: {
+      eventMemories: [],
+      memeMemories: [{
+        assetId: 'meme-1',
+        storagePath: 'memes/funny.png',
+        safetyStatus: 'safe',
+        semanticTags: ['funny'],
+        usageContext: 'group-reaction',
+      }],
+    },
+    analysis: {
+      shouldRespond: true,
+      confidence: 0.95,
+      intent: 'chat',
+      sentiment: 'positive',
+      relevance: 0.9,
+      reason: 'basic-direct-mention-pass',
+      topics: ['meme'],
+      ruleSignals: ['direct-mention'],
+      replyStyle: 'playful',
+    },
+  });
+
+  const reply = await processIncomingMessage(event, precomputed, {
+    deps: createWorkflowDeps({
+      sendReply: async (_target, text) => textReplies.push(text),
+      sendStructuredReply: async (_target, outputs) => {
+        structuredReplies.push(outputs);
+        return true;
+      },
+      markMemeUsed: async (assetId) => usedMemes.push(assetId),
+      planContextualMemeReply: () => ({
+        shouldSend: true,
+        suggested: true,
+        reason: 'high-semantic-match',
+        mode: 'auto',
+        score: 0.9,
+        asset: {
+          assetId: 'meme-1',
+          storagePath: 'memes/funny.png',
+        },
+        recordSent: () => {},
+      }),
+      chat: async (_messages, _systemPrompt, userTurn) => JSON.stringify({
+        text: `reply:${userTurn}`,
+        sendVoice: false,
+      }),
+    }),
+  });
+
+  assert.equal(reply, 'reply:笑死，太离谱了');
+  assert.equal(textReplies.length, 0);
+  assert.equal(structuredReplies.length, 1);
+  assert.deepEqual(structuredReplies[0][0], { type: 'text', text: 'reply:笑死，太离谱了' });
+  assert.deepEqual(structuredReplies[0][1], { type: 'image', image: { file: 'memes/funny.png' } });
+  assert.deepEqual(usedMemes, ['meme-1']);
+});
+
 test('processIncomingMessage sends text and voice in private chat when model requests voice', async () => {
   const event = createEvent({
     rawText: 'say something nice',
