@@ -13,12 +13,60 @@ function formatList(items, fallback = '无', maxItems = 4) {
     .join(' / ');
 }
 
+function formatStrategyValue(value, fallback = '默认') {
+  return compactText(value, 40, fallback);
+}
+
 function formatRecentMessages(messages, limit = 3) {
   if (!Array.isArray(messages) || messages.length === 0) return '无';
   return messages
     .slice(-limit)
     .map((item) => `${item.role === 'assistant' ? '由乃' : '对方'}: ${compactText(item.content, 48, '')}`)
     .join(' | ');
+}
+
+function buildPersonalityStrategySection(personalityStrategy, replyLengthProfile) {
+  if (!personalityStrategy) return '';
+
+  const promptProfile = replyLengthProfile?.promptProfile || 'standard';
+  const phraseCandidates = Array.isArray(personalityStrategy.phraseStyle?.candidates)
+    ? personalityStrategy.phraseStyle.candidates
+    : [];
+  const phraseLimit = promptProfile === 'fast' ? 2 : 4;
+  const hints = Array.isArray(personalityStrategy.promptHints)
+    ? personalityStrategy.promptHints
+    : [];
+  const forbiddenMoves = Array.isArray(personalityStrategy.forbiddenMoves)
+    ? personalityStrategy.forbiddenMoves
+    : [];
+  const memoryUse = personalityStrategy.memoryUse || {};
+
+  const lines = [
+    '人格策略',
+    `- 关系阶段=${formatStrategyValue(personalityStrategy.relationshipStage)} 立场=${formatStrategyValue(personalityStrategy.stance)} 温度=${formatStrategyValue(personalityStrategy.warmth)} 占有感=${formatStrategyValue(personalityStrategy.possessiveness)} 幽默=${formatStrategyValue(personalityStrategy.humor)}`,
+    `- 记忆引用=${formatStrategyValue(memoryUse.level, 'none')} 可用类型=${formatList(memoryUse.matchedTypes || memoryUse.allowedTypes, '无', promptProfile === 'fast' ? 3 : 5)}`,
+    `- 追问方式=${formatStrategyValue(personalityStrategy.followupStyle, 'none')}`,
+  ];
+
+  if (phraseCandidates.length > 0 && promptProfile !== 'fast') {
+    lines.push(`- 句式指纹=${formatList(phraseCandidates, '无', phraseLimit)}。只借方向，不要照抄成固定模板。`);
+  } else if (phraseCandidates.length > 0) {
+    lines.push(`- 句式倾向=${formatList(phraseCandidates, '无', phraseLimit)}。不要固定复读。`);
+  }
+
+  if (personalityStrategy.phraseStyle?.guidance) {
+    lines.push(`- 重复保护=${compactText(personalityStrategy.phraseStyle.guidance, 72, '')}`);
+  }
+
+  for (const hint of hints.slice(0, promptProfile === 'fast' ? 3 : 5)) {
+    lines.push(`- ${compactText(hint, 96, '')}`);
+  }
+
+  for (const forbidden of forbiddenMoves.slice(0, promptProfile === 'fast' ? 2 : 4)) {
+    lines.push(`- 边界: ${compactText(forbidden, 96, '')}`);
+  }
+
+  return lines.join('\n');
 }
 
 function formatKnowledgeDocuments(documents, profile = 'standard') {
@@ -334,6 +382,7 @@ export function buildReplyContext({
   specialUser = null,
   replyLengthProfile = null,
   replyPlan = null,
+  personalityStrategy = null,
   voiceReplyPolicy = null,
 }) {
   const promptProfile = replyLengthProfile?.promptProfile || 'standard';
@@ -353,6 +402,7 @@ export function buildReplyContext({
       promptProfile,
     }),
     buildReplyPlanSection(replyPlan),
+    buildPersonalityStrategySection(personalityStrategy, replyLengthProfile),
     buildInterpretationSection(replyPlan),
     buildCurrentTurnSection(messageAnalysis, event, route, promptProfile, groupState, recentEvents),
     buildVoiceReplySection(voiceReplyPolicy),
@@ -390,6 +440,8 @@ export function buildScheduledPrompt({ groupState, recentEvents, plan }) {
     '你是由乃，要发一条主动群消息。',
     '只输出最终消息，不要分析，不要 <think>。',
     '风格自然、简短、有情绪，不像公告。',
+    '像自然插话：冷群抛一个话题，气氛紧时降温，特殊对象在场也要克制偏爱。',
+    '不要扩大主动频率，不要连续刷屏，不要公开展开私人记忆。',
     '',
     `时段=${plan.slot} 主题=${plan.topic} 语气=${plan.tone}`,
     `最大行数=${plan.maxLines || 2}`,

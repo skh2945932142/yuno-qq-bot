@@ -104,7 +104,20 @@ npm run kb:sync
 - `TTS_BASE_URL`
 - `TTS_MODEL`
 - `YUNO_VOICE_URI`
+- `VOICE_REPLY_MODE`
+- `VOICE_REPLY_COOLDOWN_MS`
+- `VOICE_REPLY_MAX_CHARS`
+- `VOICE_REPLY_ON_USER_RECORD`
 - `FFMPEG_PATH`
+
+语音回复策略：
+
+- `VOICE_REPLY_MODE=auto` 是默认策略：模型可建议语音，但最终会由代码结合场景、长度、冷却和用户是否发语音裁决
+- `VOICE_REPLY_MODE=model` 只采纳模型的 `sendVoice=true`
+- `VOICE_REPLY_MODE=force` 在允许场景里尽量发语音，仍会受长度和冷却保护
+- `VOICE_REPLY_MODE=off` 关闭自动语音裁决
+- `VOICE_REPLY_MAX_CHARS` 控制可朗读文本长度，长知识答复会保留文字不转 TTS
+- `VOICE_REPLY_ON_USER_RECORD=true` 时，用户发语音后 bot 会更倾向用短语音补充回复；当前不会自动 ASR 转写用户语音
 
 检索相关：
 

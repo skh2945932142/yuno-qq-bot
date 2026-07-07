@@ -54,11 +54,34 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
         needsEmpathy: true,
       },
     },
+    personalityStrategy: {
+      relationshipStage: 'exclusive',
+      stance: 'attached',
+      warmth: 'high',
+      possessiveness: 'medium',
+      humor: 'none',
+      memoryUse: {
+        level: 'high',
+        matchedTypes: ['promise'],
+        allowedTypes: ['promise', 'milestone', 'emotion'],
+        guidance: '可以低频引用共同记忆或约定，但只点到为止。',
+      },
+      followupStyle: 'single_soft_question',
+      phraseStyle: {
+        candidates: ['我当然会先看你这边。', '这件事我会替你记着。'],
+        guidance: '可借用句式方向，但不要连续复用同一句开场、口癖或收尾。',
+        repeatGuard: true,
+      },
+      promptHints: ['特殊关系可以有偏爱和共同记忆，但不要现实控制。'],
+      forbiddenMoves: ['不要现实威胁、跟踪、控制对方或暗示线下伤害。'],
+    },
   });
 
   assert.match(prompt, /默认使用中文/);
   assert.match(prompt, /特殊对象/);
   assert.match(prompt, /Scathach/);
+  assert.match(prompt, /人格策略/);
+  assert.match(prompt, /关系阶段=exclusive/);
   assert.match(prompt, /记忆/);
   assert.match(prompt, /特殊羁绊=/);
   assert.match(prompt, /现实威胁|伤害/);
@@ -102,11 +125,103 @@ test('buildReplyContext trims non-essential sections in fast_chat mode', () => {
       depth: 'short',
       questionNeeded: false,
     },
+    personalityStrategy: {
+      relationshipStage: 'familiar',
+      stance: 'brief_observant',
+      warmth: 'medium',
+      possessiveness: 'none',
+      humor: 'none',
+      memoryUse: {
+        level: 'none',
+        matchedTypes: [],
+        allowedTypes: ['inside_joke', 'preference'],
+      },
+      followupStyle: 'none',
+      phraseStyle: {
+        candidates: ['这轮先收住。', '我看到了。', '我当然会先看你这边。'],
+        guidance: '可借用句式方向，但不要连续复用同一句开场、口癖或收尾。',
+        repeatGuard: true,
+      },
+      promptHints: ['群聊里短接话，不写私聊式长文，也不公开展开私人记忆。'],
+      forbiddenMoves: ['群聊不要公开展开私人记忆、暧昧长文或连续刷屏。'],
+    },
   });
 
   assert.match(prompt, /轻量群聊回复/);
+  assert.match(prompt, /人格策略/);
+  assert.match(prompt, /句式倾向/);
+  assert.doesNotMatch(prompt, /我当然会先看你这边/);
   assert.doesNotMatch(prompt, /知识\n/);
   assert.doesNotMatch(prompt, /近期群事件/);
+});
+
+test('buildReplyContext keeps special-user memory restrained in group strategy', () => {
+  const prompt = buildReplyContext({
+    event: { platform: 'qq', chatType: 'group', userName: 'Scathach' },
+    route: { category: 'group_chat', allowFollowUp: false },
+    relation: { affection: 92, memorySummary: '特殊对象。' },
+    userState: { currentEmotion: 'FIXATED' },
+    userProfile: {
+      profileSummary: '特殊关系对象。',
+      favoriteTopics: [],
+      dislikes: [],
+      specialBondSummary: '共同记忆:约定。',
+    },
+    conversationState: { rollingSummary: '聊过约定。', messages: [] },
+    groupState: { mood: 'CALM', activityLevel: 40, recentTopics: [] },
+    recentEvents: [],
+    memoryContext: {
+      eventMemories: [{ eventType: 'promise', summary: '约定。' }],
+      memeMemories: [],
+    },
+    messageAnalysis: { intent: 'chat', sentiment: 'positive', relevance: 0.88, ruleSignals: ['special-user'] },
+    emotionResult: { emotion: 'FIXATED', intensity: 0.8, toneHints: ['偏爱'] },
+    knowledge: { documents: [] },
+    isAdmin: false,
+    specialUser: {
+      label: 'Scathach',
+      addressUserAs: 'Scathach',
+      groupStyle: '群聊更克制但会护短。',
+    },
+    replyLengthProfile: {
+      tier: 'balanced',
+      maxTokens: 360,
+      historyLimit: 4,
+      promptProfile: 'standard',
+      performanceProfile: 'standard_chat',
+      guidance: '群聊最多补一层。',
+    },
+    replyPlan: {
+      type: 'direct',
+      depth: 'short',
+      questionNeeded: false,
+    },
+    personalityStrategy: {
+      relationshipStage: 'exclusive',
+      stance: 'restrained_attached',
+      warmth: 'high',
+      possessiveness: 'low',
+      humor: 'none',
+      memoryUse: {
+        level: 'low',
+        matchedTypes: ['promise'],
+        allowedTypes: ['inside_joke', 'preference', 'promise'],
+        guidance: '只在自然相关时轻轻带一句记忆，不复述流水账。',
+      },
+      followupStyle: 'none',
+      phraseStyle: {
+        candidates: ['这件事我会替你记着。'],
+        guidance: '可借用句式方向，但不要连续复用同一句开场、口癖或收尾。',
+        repeatGuard: true,
+      },
+      promptHints: ['特殊关系在群里也要克制偏爱，不刷屏。'],
+      forbiddenMoves: ['群聊不要公开展开私人记忆、暧昧长文或连续刷屏。'],
+    },
+  });
+
+  assert.match(prompt, /人格策略/);
+  assert.match(prompt, /特殊关系在群里也要克制偏爱/);
+  assert.match(prompt, /群聊不要公开展开私人记忆/);
 });
 
 test('buildReplyContext includes structured voice reply instructions when voice is eligible', () => {

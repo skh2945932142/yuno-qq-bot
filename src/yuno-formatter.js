@@ -9,6 +9,62 @@ function pickLabel(policy = {}) {
   return '你';
 }
 
+function compactReason(value, fallback = 'unknown') {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return fallback;
+  return normalized.length <= 48 ? normalized : `${normalized.slice(0, 47)}…`;
+}
+
+function hasEmptyPayload(toolResult) {
+  const payload = toolResult?.payload || {};
+  if (payload.empty === true || payload.count === 0 || payload.total === 0) {
+    return true;
+  }
+  if (Array.isArray(payload.items) && payload.items.length === 0) return true;
+  if (Array.isArray(payload.results) && payload.results.length === 0) return true;
+  if (Array.isArray(payload.documents) && payload.documents.length === 0) return true;
+  return false;
+}
+
+function renderExceptionalToolReply(toolResult, policy = {}) {
+  const payload = toolResult?.payload || {};
+  const flags = new Set([
+    ...(Array.isArray(toolResult?.safetyFlags) ? toolResult.safetyFlags : []),
+    ...(Array.isArray(payload.safetyFlags) ? payload.safetyFlags : []),
+  ]);
+  const status = String(toolResult?.status || payload.status || '').toLowerCase();
+  const reason = compactReason(toolResult?.error || payload.error || payload.reason || toolResult?.reason, '');
+  const toolName = toolResult?.tool || 'tool';
+
+  if (flags.has('permission-denied') || status === 'permission_denied' || /requires admin|权限|permission/i.test(reason)) {
+    return `这个我不能直接替${pickLabel(policy)}做，权限不在我手里。${reason ? `边界是：${reason}。` : ''}`.trim();
+  }
+
+  if (flags.has('timeout') || status === 'timeout' || /timeout|timed out|超时/i.test(reason)) {
+    return reason
+      ? `这一步刚才卡住了，我先不乱说。原因是：${reason}。`
+      : '这一步刚才卡住了，我先不乱说。你再发一次，我重新接。';
+  }
+
+  if (flags.has('knowledge-empty') || status === 'knowledge_empty' || (toolName === 'knowledge_lookup' && hasEmptyPayload(toolResult))) {
+    return toolResult.summary
+      ? `我只查到这点：${toolResult.summary}`
+      : '这部分我没查到可靠依据，不想骗你。';
+  }
+
+  if (flags.has('tool-empty') || status === 'empty' || hasEmptyPayload(toolResult)) {
+    return toolResult.summary || '我翻过了，但这次没有拿到可用结果。';
+  }
+
+  if (flags.has('tool-error') || status === 'error' || toolResult?.ok === false || payload.ok === false) {
+    return reason
+      ? `这一步没跑稳，我先停住。原因是：${reason}。`
+      : '这一步没跑稳，我先停住，不把没确认的结果讲给你。';
+  }
+
+  return '';
+}
+
 export function buildStructuredToolResult({
   tool,
   payload = {},
@@ -168,7 +224,7 @@ function renderMemeReply(toolResult, policy) {
   if (toolResult.tool === 'meme_search') {
     const count = Number(toolResult.payload?.count || 0);
     return count > 0
-      ? `我找到了 ${count} 张可能合适的表情包。`
+      ? `我翻了一下，挑出 ${count} 张可能合现在气氛的表情包。`
       : toolResult.summary || '我暂时没找到合适的表情包。';
   }
 
@@ -198,6 +254,10 @@ function renderMemeReply(toolResult, policy) {
 }
 
 function renderKnowledgeReply(toolResult, policy) {
+  if (hasEmptyPayload(toolResult) && !toolResult.summary) {
+    return '这部分我没查到可靠依据，不想骗你。';
+  }
+
   if (toolResult.summary) {
     return policy.specialUser
       ? `我替你把关键点理好了：${toolResult.summary}`
@@ -227,6 +287,11 @@ function renderWelcomeReply(toolResult) {
 export function formatToolResultAsYuno(toolResult, policy = {}) {
   if (!toolResult) {
     return '这件事我先替你记下了。';
+  }
+
+  const exceptionalReply = renderExceptionalToolReply(toolResult, policy);
+  if (exceptionalReply) {
+    return exceptionalReply;
   }
 
   if (toolResult.tool?.startsWith('get_')) {

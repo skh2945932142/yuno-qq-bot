@@ -38,3 +38,16 @@ test('tool definition fallback messages are localized for user-visible paths', (
     assert.doesNotMatch(definition.fallbackMessage, /\bI could not\b|\bThere is no\b/i);
   }
 });
+
+test('formatter failure replies stay in Yuno voice instead of system panels', () => {
+  const text = formatToolResultAsYuno({
+    tool: 'knowledge_lookup',
+    payload: { documents: [] },
+    safetyFlags: ['knowledge-empty'],
+    summary: '',
+  });
+
+  assert.match(text, /我|这部分/);
+  assert.match(text, /可靠依据|不想骗你/);
+  assert.doesNotMatch(text, /\bDone\b|\bSuccess\b|\bError\b|\bFailed\b/i);
+});

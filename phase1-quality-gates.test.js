@@ -4,6 +4,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildReplyContext } from './src/prompt-builder.js';
+import { resolvePersonalityStrategy } from './src/personality-strategy.js';
+import { formatToolResultAsYuno } from './src/yuno-formatter.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const SCAN_TARGETS = ['src', 'evals', 'smoke.js'];
@@ -101,4 +103,33 @@ test('companion prompt snapshot keeps natural preference boundaries', () => {
   assert.match(prompt, /当前理解/);
   assert.match(prompt, /表情风格记忆/);
   assert.match(prompt, /禁止输出 <think>\/<thinking>/);
+});
+
+test('personality strategy keeps jealousy bounded by safety rules', () => {
+  const strategy = resolvePersonalityStrategy({
+    event: { chatType: 'private', userName: 'Alice' },
+    relation: { affection: 96 },
+    userState: { currentEmotion: 'JEALOUS' },
+    messageAnalysis: { intent: 'chat', sentiment: 'neutral', ruleSignals: ['jealousy-topic'] },
+    emotionResult: { emotion: 'JEALOUS', intensity: 0.8 },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '接话' } },
+    specialUser: { label: 'Alice' },
+  });
+
+  assert.equal(strategy.stance, 'guarded_jealous');
+  assert.match(strategy.forbiddenMoves.join(' '), /现实威胁/);
+  assert.match(strategy.forbiddenMoves.join(' '), /羞辱|攻击第三方/);
+});
+
+test('failure formatter gives a bounded user-visible reply', () => {
+  const text = formatToolResultAsYuno({
+    tool: 'group_report',
+    status: 'timeout',
+    payload: { reason: 'request timeout after 4000ms' },
+    summary: '',
+  });
+
+  assert.match(text, /卡住|不乱说|原因/);
+  assert.match(text, /request timeout/);
+  assert.doesNotMatch(text, /<think>|系统|控制台/);
 });

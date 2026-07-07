@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { processIncomingMessage } from './src/message-workflow.js';
+import {
+  normalizeVoiceTtsText,
+  processIncomingMessage,
+  resolveVoiceReplyDecision,
+} from './src/message-workflow.js';
 
 function createEvent(overrides = {}) {
   return {
@@ -60,10 +64,145 @@ function createWorkflowDeps(overrides = {}) {
     updateUserState: async () => null,
     updateUserProfileMemory: async () => null,
     shouldSendVoiceForEmotion: () => false,
-    resolveVoiceRuntimeConfig: () => ({ enableVoice: true, voiceName: 'mimo_voice' }),
+    resolveVoiceRuntimeConfig: () => ({
+      enableVoice: true,
+      voiceName: 'mimo_voice',
+      mode: 'auto',
+      cooldownMs: 0,
+      maxChars: 90,
+      onUserRecord: true,
+    }),
     ...overrides,
   };
 }
+
+test('resolveVoiceReplyDecision allows short private voice suggested by model', () => {
+  const event = createEvent({ chatType: 'private', text: '哄哄我' });
+
+  const decision = resolveVoiceReplyDecision({
+    event,
+    route: { category: 'private_chat' },
+    replyDecision: { sendVoice: true },
+    replyText: '我在，先别一个人硬撑。',
+    voiceText: '我在，先别一个人硬撑。',
+    emotionResult: { emotion: 'AFFECTIONATE', intensity: 0.7 },
+    nowMs: 1000,
+    runtimeConfig: {
+      mode: 'auto',
+      enableVoice: true,
+      voiceName: 'mimo_voice',
+      maxChars: 80,
+      cooldownMs: 60000,
+      onUserRecord: true,
+    },
+  });
+
+  assert.equal(decision.shouldSend, true);
+  assert.equal(decision.reason, 'model-suggested');
+});
+
+test('resolveVoiceReplyDecision rejects long knowledge replies even when model suggests voice', () => {
+  const event = createEvent({ chatType: 'private', text: '讲一下设定' });
+
+  const decision = resolveVoiceReplyDecision({
+    event,
+    route: { category: 'knowledge_qa' },
+    replyDecision: { sendVoice: true },
+    replyText: 'a'.repeat(120),
+    voiceText: 'a'.repeat(120),
+    emotionResult: { emotion: 'CALM', intensity: 0.4 },
+    nowMs: 1000,
+    runtimeConfig: {
+      mode: 'auto',
+      enableVoice: true,
+      voiceName: 'mimo_voice',
+      maxChars: 80,
+      cooldownMs: 60000,
+      onUserRecord: true,
+    },
+  });
+
+  assert.equal(decision.shouldSend, false);
+  assert.equal(decision.reason, 'voice-text-too-long');
+});
+
+test('resolveVoiceReplyDecision can actively answer user voice with TTS', () => {
+  const event = createEvent({
+    chatType: 'private',
+    text: '',
+    rawText: '[CQ:record,file=voice.silk]',
+    attachments: [{ type: 'record', data: { file: 'voice.silk' } }],
+  });
+
+  const decision = resolveVoiceReplyDecision({
+    event,
+    route: { category: 'private_chat' },
+    replyDecision: { sendVoice: false },
+    replyText: '听到了，我先陪你把这句接住。',
+    voiceText: '听到了，我先陪你把这句接住。',
+    emotionResult: { emotion: 'CALM', intensity: 0.4 },
+    nowMs: 1000,
+    runtimeConfig: {
+      mode: 'auto',
+      enableVoice: true,
+      voiceName: 'mimo_voice',
+      maxChars: 80,
+      cooldownMs: 60000,
+      onUserRecord: true,
+    },
+  });
+
+  assert.equal(decision.shouldSend, true);
+  assert.equal(decision.reason, 'user-sent-voice');
+});
+
+test('resolveVoiceReplyDecision applies per-chat cooldown', () => {
+  const event = createEvent({ chatType: 'private', chatId: 'cooldown-chat' });
+  const runtimeConfig = {
+    mode: 'auto',
+    enableVoice: true,
+    voiceName: 'mimo_voice',
+    maxChars: 80,
+    cooldownMs: 60000,
+    onUserRecord: true,
+  };
+
+  const first = resolveVoiceReplyDecision({
+    event,
+    route: { category: 'private_chat' },
+    replyDecision: { sendVoice: true },
+    replyText: '第一句短语音。',
+    voiceText: '第一句短语音。',
+    emotionResult: { emotion: 'AFFECTIONATE', intensity: 0.8 },
+    nowMs: 1000,
+    runtimeConfig,
+    lastVoiceSentAtByChat: new Map([['private:cooldown-chat', 800]]),
+  });
+
+  const second = resolveVoiceReplyDecision({
+    event,
+    route: { category: 'private_chat' },
+    replyDecision: { sendVoice: true },
+    replyText: '第二句短语音。',
+    voiceText: '第二句短语音。',
+    emotionResult: { emotion: 'AFFECTIONATE', intensity: 0.8 },
+    nowMs: 70000,
+    runtimeConfig,
+    lastVoiceSentAtByChat: new Map([['private:cooldown-chat', 800]]),
+  });
+
+  assert.equal(first.shouldSend, false);
+  assert.equal(first.reason, 'voice-cooldown');
+  assert.equal(second.shouldSend, true);
+});
+
+test('normalizeVoiceTtsText strips formatting and trims to a speakable line', () => {
+  const result = normalizeVoiceTtsText('**别急**\n- [CQ:image,file=meme.png] 我在。\n```js\nnope\n```', {
+    maxChars: 12,
+  });
+
+  assert.equal(result, '别急 我在。');
+});
 
 test('processIncomingMessage runs the unified workflow and persists memory with mocks', async () => {
   const sentReplies = [];
@@ -275,6 +414,67 @@ test('processIncomingMessage sends voice in group chat when bot is mentioned', a
 
   assert.equal(sentVoices.length, 1);
   assert.equal(sentVoices[0], 'audio:reply:say one line');
+});
+
+test('processIncomingMessage sends voice when user sends record in private chat', async () => {
+  const event = createEvent({
+    rawText: '[CQ:record,file=voice.silk]',
+    text: '',
+    attachments: [{ type: 'record', data: { file: 'voice.silk' } }],
+  });
+  const sentVoices = [];
+  const ttsInputs = [];
+
+  await processIncomingMessage(event, createPrecomputedContext(event), {
+    deps: createWorkflowDeps({
+      sendVoice: async (_target, audio) => {
+        sentVoices.push(audio.toString());
+        return true;
+      },
+      tts: async (text) => {
+        ttsInputs.push(text);
+        return Buffer.from(`audio:${text}`);
+      },
+      chat: async () => JSON.stringify({
+        text: '听到了，我先陪你把这句接住。',
+        sendVoice: false,
+      }),
+    }),
+  });
+
+  assert.deepEqual(ttsInputs, ['听到了，我先陪你把这句接住。']);
+  assert.deepEqual(sentVoices, ['audio:听到了，我先陪你把这句接住。']);
+});
+
+test('processIncomingMessage skips voice when generated voice text is too long', async () => {
+  const event = createEvent({
+    rawText: 'say a long thing',
+    text: 'say a long thing',
+  });
+  const sentVoices = [];
+  const longText = [
+    '这段我先完整说明一下。',
+    '第一点是语音只适合短句陪伴，不适合把所有信息都念出来。',
+    '第二点是群聊里如果直接发很长语音，会打断其他人的聊天节奏。',
+    '第三点是知识型回答本来就更适合文字留档，所以这里应该保留文字回复。',
+  ].join('');
+
+  await processIncomingMessage(event, createPrecomputedContext(event), {
+    deps: createWorkflowDeps({
+      sendVoice: async (_target, audio) => {
+        sentVoices.push(audio.toString());
+        return true;
+      },
+      tts: async (text) => Buffer.from(`audio:${text}`),
+      chat: async () => JSON.stringify({
+        text: longText,
+        sendVoice: true,
+        voiceText: longText,
+      }),
+    }),
+  });
+
+  assert.equal(sentVoices.length, 0);
 });
 
 test('processIncomingMessage falls back to plain text when model reply is not structured json', async () => {

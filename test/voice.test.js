@@ -88,6 +88,46 @@ test('sendVoiceWithDeps skips voice when ffmpeg is unavailable', async () => {
   assert.equal(logs.some((entry) => entry[2] === 'voice_skipped'), true);
 });
 
+test('sendVoiceWithDeps skips empty audio without posting', async () => {
+  const sentPayloads = [];
+
+  const success = await sendVoiceWithDeps('12345', Buffer.alloc(0), {
+    logger: {
+      info: () => {},
+      warn: () => {},
+    },
+    resolveFfmpegPath: async () => 'C:\\ffmpeg\\bin\\ffmpeg.exe',
+    postNapcat: async (payload) => {
+      sentPayloads.push(payload);
+    },
+  });
+
+  assert.equal(success, false);
+  assert.equal(sentPayloads.length, 0);
+});
+
+test('sendVoiceWithDeps returns false when silk encoding fails', async () => {
+  const sentPayloads = [];
+
+  const success = await sendVoiceWithDeps('12345', Buffer.from('wav-data'), {
+    logger: {
+      info: () => {},
+      warn: () => {},
+    },
+    resolveFfmpegPath: async () => 'C:\\ffmpeg\\bin\\ffmpeg.exe',
+    transcodeMp3ToSpeechPcm: async () => Buffer.from('wav-data'),
+    encodeTencentSilk: async () => {
+      throw new Error('encode failed');
+    },
+    postNapcat: async (payload) => {
+      sentPayloads.push(payload);
+    },
+  });
+
+  assert.equal(success, false);
+  assert.equal(sentPayloads.length, 0);
+});
+
 test('sendVoiceWithDeps posts qq-compatible record after transcoding', async () => {
   const sentPayloads = [];
 

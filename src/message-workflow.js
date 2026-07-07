@@ -34,6 +34,7 @@ import { resolveUserPersonaPolicy } from './persona-policy.js';
 import { formatToolResultAsYuno, normalizeFormatterOutputs } from './yuno-formatter.js';
 import { resolveReplyLengthProfile } from './reply-length.js';
 import { resolveReplyIntentPlan } from './reply-intent-plan.js';
+import { resolvePersonalityStrategy } from './personality-strategy.js';
 import { persistUserMemoryEvents } from './user-memory-events.js';
 import { collectMemeAssetForEvent } from './meme-collector.js';
 import { indexMemeAssetSemantics, indexUserMemoryEvents, retrieveMemoryContext } from './memory-retrieval.js';
@@ -49,7 +50,14 @@ const OPEN_THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*$/i;
 const THINK_FENCE_REGEX = /```(?:think|thinking|reasoning|analysis)\s*[\s\S]*?```/gi;
 const REASONING_LABEL_REGEX = /^(?:\s{0,3}(?:思考过程|思路|分析|推理|内心独白|reasoning|analysis|thought process|thinking)\s*[:：]|(?:step\s*\d+|步骤\s*\d+)\s*[:：])/i;
 const REASONING_CONTINUATION_REGEX = /^(?:\s*[-*•]\s+|\s*\d+[.)]\s+|\s*[（(]?\d+[）)]\s+|\s*首先[，,:：]?\s*|\s*然后[，,:：]?\s*|\s*最后[，,:：]?\s*)/i;
+const MARKDOWN_CODE_FENCE_REGEX = /```[\s\S]*?```/g;
+const MARKDOWN_INLINE_CODE_REGEX = /`([^`]+)`/g;
+const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\([^)]+\)/g;
+const MARKDOWN_DECORATION_REGEX = /[*_~>#]+/g;
+const VOICE_REQUEST_REGEX = /(语音|声音|念给我|读给我|说给我听|用嘴说|开麦|voice|tts)/i;
+const VOICE_TEXT_HARD_MAX_CHARS = 220;
 const REPLY_BUDGET_MIN_GENERATION_MS = 350;
+const lastVoiceSentAtByChat = new Map();
 
 function summarizeIncomingMessage(username, text) {
   const cleaned = stripCqCodes(text).slice(0, 80);
@@ -298,16 +306,192 @@ export function stripHiddenReasoning(text) {
     .trim();
 }
 
+function normalizeVoiceReplyText(text) {
+  return normalizeReplyFormatting(stripHiddenReasoning(text));
+}
+
+function hasRecordAttachment(event) {
+  return (event?.attachments || []).some((item) => String(item?.type || '').toLowerCase() === 'record');
+}
+
+function hasExplicitVoiceRequest(event) {
+  return VOICE_REQUEST_REGEX.test(stripCqCodes(event?.rawText || event?.text || ''));
+}
+
+function getVoiceChatCooldownKey(event) {
+  return `${event?.chatType || 'unknown'}:${event?.chatId || ''}`;
+}
+
+function normalizeVoiceReplyMode(value) {
+  const mode = String(value || 'auto').trim().toLowerCase();
+  return ['off', 'model', 'auto', 'force'].includes(mode) ? mode : 'auto';
+}
+
+function normalizeVoiceMaxChars(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 90;
+  }
+
+  return Math.min(Math.round(parsed), VOICE_TEXT_HARD_MAX_CHARS);
+}
+
+function resolveVoicePolicyRuntimeConfig(runtimeConfig = {}) {
+  const maxChars = Number(runtimeConfig.maxChars ?? runtimeConfig.voiceReplyMaxChars ?? config.voiceReplyMaxChars);
+  const cooldownMs = Number(runtimeConfig.cooldownMs ?? runtimeConfig.voiceReplyCooldownMs ?? config.voiceReplyCooldownMs);
+
+  return {
+    enableVoice: Boolean(runtimeConfig.enableVoice ?? config.enableVoice),
+    voiceName: String(runtimeConfig.voiceName ?? config.ttsVoice ?? config.yunoVoiceUri ?? '').trim(),
+    mode: normalizeVoiceReplyMode(runtimeConfig.mode ?? config.voiceReplyMode),
+    maxChars: normalizeVoiceMaxChars(maxChars),
+    cooldownMs: Number.isFinite(cooldownMs) && cooldownMs > 0 ? Math.round(cooldownMs) : 0,
+    onUserRecord: Boolean(runtimeConfig.onUserRecord ?? config.voiceReplyOnUserRecord),
+  };
+}
+
+function normalizeVoiceTtsTextBase(text) {
+  const withoutHidden = stripHiddenReasoning(text)
+    .replace(MARKDOWN_CODE_FENCE_REGEX, ' ')
+    .replace(/\[CQ:[^\]]+\]/g, ' ')
+    .replace(MARKDOWN_LINK_REGEX, '$1')
+    .replace(MARKDOWN_INLINE_CODE_REGEX, '$1')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+[.)]\s+/gm, '')
+    .replace(MARKDOWN_DECORATION_REGEX, ' ')
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, '链接')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+  const normalized = normalizeReplyFormatting(withoutHidden)
+    .replace(/[“”"]/g, '')
+    .replace(/\s*([，。！？!?、；;：:])\s*/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+  return normalized;
+}
+
+export function normalizeVoiceTtsText(text, options = {}) {
+  const maxChars = normalizeVoiceMaxChars(options.maxChars || config.voiceReplyMaxChars);
+  const normalized = normalizeVoiceTtsTextBase(text);
+
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+
+  const sentenceMatch = normalized.match(/^.{1,220}?[。！？!?]/);
+  if (sentenceMatch && sentenceMatch[0].length <= maxChars) {
+    return sentenceMatch[0].trim();
+  }
+
+  return normalized.slice(0, maxChars).replace(/[，、；;：:,.\s]+$/g, '').trim();
+}
+
 function shouldAllowVoiceReplyForEvent(event) {
   if (event?.chatType === 'private') {
     return true;
   }
 
-  return event?.chatType === 'group' && Boolean(event?.mentionsBot);
+  if (event?.chatType !== 'group') {
+    return false;
+  }
+
+  return Boolean(event?.mentionsBot) || hasExplicitVoiceRequest(event);
 }
 
-function normalizeVoiceReplyText(text) {
-  return normalizeReplyFormatting(stripHiddenReasoning(text));
+function isVoiceFriendlyRoute(route) {
+  return !['knowledge_qa', 'command', 'ignore'].includes(String(route?.category || ''));
+}
+
+function isVoiceFriendlyEmotion(emotionResult = {}) {
+  return ['AFFECTIONATE', 'SAD', 'ANGRY', 'PROTECTIVE', 'FIXATED'].includes(emotionResult.emotion)
+    && Number(emotionResult.intensity || 0) >= 0.55;
+}
+
+export function resolveVoiceReplyDecision({
+  event,
+  route,
+  replyDecision,
+  replyText,
+  voiceText,
+  emotionResult,
+  nowMs = Date.now(),
+  runtimeConfig = {},
+  lastVoiceSentAtByChat: cooldownState = lastVoiceSentAtByChat,
+} = {}) {
+  const resolvedConfig = resolveVoicePolicyRuntimeConfig(runtimeConfig);
+  const fullVoiceText = normalizeVoiceTtsTextBase(voiceText || replyText);
+  const candidateText = normalizeVoiceTtsText(fullVoiceText, {
+    maxChars: resolvedConfig.maxChars,
+  });
+  const allowedByScene = shouldAllowVoiceReplyForEvent(event);
+  const modelSuggested = Boolean(replyDecision?.sendVoice);
+  const userSentVoice = hasRecordAttachment(event);
+  const explicitRequest = hasExplicitVoiceRequest(event);
+  const emotionSuggested = isVoiceFriendlyEmotion(emotionResult);
+
+  if (!resolvedConfig.enableVoice) {
+    return { shouldSend: false, reason: 'voice-disabled', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  if (!resolvedConfig.voiceName) {
+    return { shouldSend: false, reason: 'missing-voice', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  if (resolvedConfig.mode === 'off') {
+    return { shouldSend: false, reason: 'mode-off', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  if (!allowedByScene) {
+    return { shouldSend: false, reason: 'scene-not-allowed', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  if (!fullVoiceText) {
+    return { shouldSend: false, reason: 'empty-voice-text', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  if (fullVoiceText.length > resolvedConfig.maxChars) {
+    return { shouldSend: false, reason: 'voice-text-too-long', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  if (!isVoiceFriendlyRoute(route) && !explicitRequest) {
+    return { shouldSend: false, reason: 'route-not-voice-friendly', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  const shouldSendByPolicy = resolvedConfig.mode === 'force'
+    || (resolvedConfig.mode === 'model' && modelSuggested)
+    || (resolvedConfig.mode === 'auto' && (
+      modelSuggested
+      || explicitRequest
+      || (resolvedConfig.onUserRecord && userSentVoice)
+      || emotionSuggested
+    ));
+
+  if (!shouldSendByPolicy) {
+    return { shouldSend: false, reason: 'policy-not-suggested', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  const cooldownKey = getVoiceChatCooldownKey(event);
+  const lastSentAt = Number(cooldownState?.get?.(cooldownKey) || 0);
+  if (resolvedConfig.cooldownMs > 0 && lastSentAt > 0 && nowMs - lastSentAt < resolvedConfig.cooldownMs) {
+    return { shouldSend: false, reason: 'voice-cooldown', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  let reason = 'policy-suggested';
+  if (resolvedConfig.mode === 'force') reason = 'mode-force';
+  else if (explicitRequest) reason = 'explicit-request';
+  else if (resolvedConfig.onUserRecord && userSentVoice) reason = 'user-sent-voice';
+  else if (modelSuggested) reason = 'model-suggested';
+  else if (emotionSuggested) reason = 'emotion-suggested';
+
+  return {
+    shouldSend: true,
+    reason,
+    voiceText: candidateText,
+    modelSuggested,
+    allowedByScene,
+    cooldownKey,
+  };
 }
 
 function parseChatReplyDecision(rawReplyText, options = {}) {
@@ -342,6 +526,10 @@ function resolveVoiceRuntimeConfig() {
   return {
     enableVoice: Boolean(config.enableVoice),
     voiceName: String(config.ttsVoice || config.yunoVoiceUri || '').trim(),
+    mode: config.voiceReplyMode,
+    cooldownMs: config.voiceReplyCooldownMs,
+    maxChars: config.voiceReplyMaxChars,
+    onUserRecord: config.voiceReplyOnUserRecord,
   };
 }
 
@@ -385,6 +573,7 @@ function createWorkflowDeps(deps = {}) {
     updateGroupStateFromAnalysis: deps.updateGroupStateFromAnalysis || updateGroupStateFromAnalysis,
     resolveEmotion: deps.resolveEmotion || resolveEmotion,
     shouldSendVoiceForEmotion: deps.shouldSendVoiceForEmotion || shouldSendVoiceForEmotion,
+    resolvePersonalityStrategy: deps.resolvePersonalityStrategy || resolvePersonalityStrategy,
     buildReplyContext: deps.buildReplyContext || buildReplyContext,
     chat: deps.chat || chat,
     tts: deps.tts || tts,
@@ -1061,6 +1250,18 @@ export async function processIncomingMessage(event, precomputed = null, options 
       analysis,
       conversationState: workflowContext.conversationState,
     });
+    const personalityStrategy = deps.resolvePersonalityStrategy({
+      event: normalizedEvent,
+      relation: workflowContext.relation,
+      userState: workflowContext.userState,
+      userProfile: workflowContext.userProfile,
+      conversationState: workflowContext.conversationState,
+      memoryContext: workflowContext.memoryContext,
+      messageAnalysis: analysis,
+      emotionResult,
+      replyPlan,
+      specialUser: workflowContext.specialUser,
+    });
 
     const voiceReplyPolicy = {
       allowed: shouldAllowVoiceReplyForEvent(normalizedEvent),
@@ -1083,12 +1284,15 @@ export async function processIncomingMessage(event, precomputed = null, options 
       specialUser: workflowContext.specialUser,
       replyLengthProfile,
       replyPlan,
+      personalityStrategy,
       voiceReplyPolicy,
     })), {
       route: task.category,
       promptProfile: replyLengthProfile.promptProfile,
       performanceProfile: replyLengthProfile.performanceProfile,
       replyPlanType: replyPlan.type,
+      personalityStance: personalityStrategy.stance,
+      relationshipStage: personalityStrategy.relationshipStage,
     });
 
     let visibleReplyText = '';
@@ -1370,24 +1574,63 @@ export async function processIncomingMessage(event, precomputed = null, options 
     const voiceReadiness = getRuntimeServices().readiness?.voice;
     const voiceConfig = deps.resolveVoiceRuntimeConfig();
     const voiceAvailable = !(voiceReadiness?.enabled && !voiceReadiness.ready);
+    const finalVoiceDecision = resolveVoiceReplyDecision({
+      event: normalizedEvent,
+      route: task,
+      replyDecision,
+      replyText,
+      voiceText,
+      emotionResult,
+      runtimeConfig: voiceConfig,
+    });
+    recordWorkflowMetric('yuno_voice_reply_decisions_total', 1, {
+      chat_type: normalizedEvent.chatType,
+      route: task.category,
+      decision: finalVoiceDecision.shouldSend ? 'send' : 'skip',
+      reason: voiceAvailable ? finalVoiceDecision.reason : 'voice-readiness-degraded',
+      model_suggested: finalVoiceDecision.modelSuggested ? 'true' : 'false',
+    });
+
+    if (finalVoiceDecision.shouldSend && !voiceAvailable) {
+      logger.warn('model', 'Voice generation skipped', {
+        traceId: trace.traceId,
+        chatId: normalizedEvent.chatId,
+        messageId: normalizedEvent.messageId,
+        reason: 'voice-readiness-degraded',
+        readinessReason: voiceReadiness?.reason,
+      });
+    }
+
     if (
       voiceAvailable
-      && voiceConfig.enableVoice
-      && voiceConfig.voiceName
-      && voiceReplyPolicy.allowed
-      && replyDecision.sendVoice
+      && finalVoiceDecision.shouldSend
     ) {
       try {
-        const audio = await withTraceSpan(trace, 'tts', () => deps.tts(voiceText, {
+        const audio = await withTraceSpan(trace, 'tts', () => deps.tts(finalVoiceDecision.voiceText, {
           traceContext: trace,
           operation: 'tts',
         }));
-        await withTraceSpan(trace, 'send-voice', () => deps.sendVoice({
+        const sent = await withTraceSpan(trace, 'send-voice', () => deps.sendVoice({
           platform: normalizedEvent.platform,
           chatType: normalizedEvent.chatType,
           chatId: normalizedEvent.chatId,
         }, audio));
+        recordWorkflowMetric('yuno_voice_replies_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          route: task.category,
+          result: sent ? 'sent' : 'not_sent',
+          reason: finalVoiceDecision.reason,
+        });
+        if (sent && finalVoiceDecision.cooldownKey) {
+          lastVoiceSentAtByChat.set(finalVoiceDecision.cooldownKey, Date.now());
+        }
       } catch (error) {
+        recordWorkflowMetric('yuno_voice_replies_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          route: task.category,
+          result: 'failed',
+          reason: String(error.code || error.status || 'error').toLowerCase(),
+        });
         logger.warn('model', 'Voice generation skipped', {
           traceId: trace.traceId,
           chatId: normalizedEvent.chatId,

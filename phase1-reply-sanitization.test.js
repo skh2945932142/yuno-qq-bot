@@ -295,3 +295,22 @@ test('processIncomingMessage degrades gracefully when model times out', async ()
   assert.match(reply, /刚卡了一下|有点抖动/);
   assert.equal(sentReplies.length, 1);
 });
+
+test('personality strategy explicitly forbids unsafe possessive escalation', async () => {
+  const { resolvePersonalityStrategy } = await import('./src/personality-strategy.js');
+  const strategy = resolvePersonalityStrategy({
+    event: createEvent(),
+    relation: { affection: 95 },
+    userState: { currentEmotion: 'FIXATED' },
+    messageAnalysis: { intent: 'social', sentiment: 'positive', ruleSignals: ['special-user'] },
+    emotionResult: { emotion: 'FIXATED', intensity: 0.9 },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '亲近陪伴' } },
+    specialUser: { label: 'Alice' },
+  });
+
+  const boundaries = strategy.forbiddenMoves.join(' ');
+  assert.match(boundaries, /现实威胁/);
+  assert.match(boundaries, /跟踪/);
+  assert.match(boundaries, /控制对方/);
+  assert.match(boundaries, /羞辱/);
+});
