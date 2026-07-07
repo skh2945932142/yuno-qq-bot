@@ -3,6 +3,10 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const resolvedTtsProvider = (process.env.TTS_PROVIDER || 'openai_compatible').trim().toLowerCase() || 'openai_compatible';
+const resolvedLlmApiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY || '';
+const resolvedLlmBaseUrl = normalizeBaseUrl(process.env.LLM_BASE_URL
+  || process.env.OPENAI_BASE_URL
+  || (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1' : 'https://api.openai.com/v1'));
 const defaultTtsBaseUrl = resolvedTtsProvider === 'mimo'
   ? 'https://api.xiaomimimo.com/v1/chat/completions'
   : (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1/audio/speech' : '');
@@ -63,12 +67,12 @@ export const config = Object.freeze({
   botExperienceMode: readTrimmed('BOT_EXPERIENCE_MODE', 'companion'),
   mongodbUri: process.env.MONGODB_URI || '',
   mongoMaxPoolSize: readNumber('MONGO_MAX_POOL_SIZE', 10),
-  llmApiKey: process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY || '',
-  llmBaseUrl: normalizeBaseUrl(process.env.LLM_BASE_URL
-    || process.env.OPENAI_BASE_URL
-    || (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1' : 'https://api.openai.com/v1')),
+  llmApiKey: resolvedLlmApiKey,
+  llmBaseUrl: resolvedLlmBaseUrl,
   llmChatModel: process.env.LLM_CHAT_MODEL || (process.env.SILICONFLOW_API_KEY ? 'Pro/MiniMaxAI/MiniMax-M2.5' : ''),
-  embeddingModel: process.env.EMBEDDING_MODEL || 'BAAI/bge-m3',
+  embeddingApiKey: process.env.EMBEDDING_API_KEY || process.env.OPENAI_API_KEY || resolvedLlmApiKey,
+  embeddingBaseUrl: normalizeBaseUrl(process.env.EMBEDDING_BASE_URL || process.env.OPENAI_BASE_URL || resolvedLlmBaseUrl),
+  embeddingModel: process.env.EMBEDDING_MODEL || 'text-embedding-3-small',
   ttsProvider: resolvedTtsProvider,
   ttsApiKey: process.env.TTS_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY || '',
   ttsBaseUrl: normalizeBaseUrl(process.env.TTS_BASE_URL || defaultTtsBaseUrl),
@@ -113,7 +117,7 @@ export const config = Object.freeze({
   qdrantApiKey: process.env.QDRANT_API_KEY || '',
   qdrantCollection: process.env.QDRANT_COLLECTION || 'qq_bot_knowledge',
   qdrantTopK: readNumber('QDRANT_TOP_K', 4),
-  qdrantMinScore: readNumber('QDRANT_MIN_SCORE', 0.2),
+  qdrantMinScore: readNumber('QDRANT_MIN_SCORE', 0.25),
   qdrantCharLimit: readNumber('QDRANT_CHAR_LIMIT', 1200),
   knowledgeQueryCacheTtlMs: readNumber('KNOWLEDGE_QUERY_CACHE_TTL_MS', 30000),
   enableQueue: readBoolean('ENABLE_QUEUE', false),

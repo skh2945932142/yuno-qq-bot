@@ -45,16 +45,27 @@ export async function ensureQdrantCollection(vectorSize, options = {}) {
   }
 
   try {
+    const existing = await request('get', `/collections/${config.qdrantCollection}`, null, 'inspect qdrant collection');
+    const vectors = existing.result?.config?.params?.vectors;
+    const existingSize = Number(vectors?.size || vectors?.default?.size || 0);
+    return { enabled: true, vectorSize: existingSize || vectorSize };
+  } catch (error) {
+    if (error.response?.status !== 404) {
+      throw error;
+    }
+  }
+
+  try {
     await request('put', `/collections/${config.qdrantCollection}`, {
       vectors: {
         size: vectorSize,
         distance: options.distance || 'Cosine',
       },
     }, 'ensure qdrant collection');
-    return { enabled: true };
+    return { enabled: true, vectorSize };
   } catch (error) {
     if (error.response?.status === 409) {
-      return { enabled: true };
+      return { enabled: true, vectorSize };
     }
     throw error;
   }

@@ -11,10 +11,17 @@ import {
   stripCqCodes,
 } from './utils.js';
 
-const client = new OpenAI({
-  apiKey: config.llmApiKey,
-  baseURL: config.llmBaseUrl,
-});
+export function buildOpenAiClientConfig(kind = 'chat', source = config) {
+  const useEmbeddingProvider = kind === 'embedding';
+  return {
+    apiKey: useEmbeddingProvider ? source.embeddingApiKey : source.llmApiKey,
+    baseURL: useEmbeddingProvider ? source.embeddingBaseUrl : source.llmBaseUrl,
+    timeout: source.requestTimeoutMs,
+  };
+}
+
+const client = new OpenAI(buildOpenAiClientConfig('chat'));
+const embeddingClient = new OpenAI(buildOpenAiClientConfig('embedding'));
 
 const breakerState = {
   consecutiveFailures: 0,
@@ -197,7 +204,7 @@ export async function createEmbeddings(input, options = {}) {
   try {
     const response = await withRetry(
       () => withTimeout(
-        () => client.embeddings.create({
+        () => embeddingClient.embeddings.create({
           model: options.model || config.embeddingModel,
           input: normalizedInput,
         }),

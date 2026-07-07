@@ -111,6 +111,19 @@ function parseMetadata(sectionText, fallbackCategory, fallbackTitle) {
   };
 }
 
+function stripMetadataLines(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .filter((line) => !/^(?:Tags|标签|Priority|优先级)\s*:/i.test(line.trim()))
+    .join('\n')
+    .trim();
+}
+
+function isPlaceholderSection(section) {
+  const text = stripMetadataLines(section?.text || '');
+  return !text || /待补充|TODO|TBD/i.test(text);
+}
+
 function splitMarkdownSections(content) {
   const lines = String(content || '').split(/\r?\n/);
   const sections = [];
@@ -261,13 +274,27 @@ export async function loadKnowledgeDocuments(rootDir = KNOWLEDGE_DIR) {
     const documents = [];
 
     for (const filePath of files) {
+      if (path.basename(filePath).toLowerCase() === 'readme.md') {
+        continue;
+      }
+
       const category = path.basename(path.dirname(filePath));
       const raw = await fs.readFile(filePath, 'utf8');
       const sections = splitMarkdownSections(raw);
+      const fileMetadata = parseMetadata(raw, category, path.basename(filePath, '.md'));
 
       for (const section of sections) {
-        const metadata = parseMetadata(section.text, category, section.title || path.basename(filePath, '.md'));
-        const chunks = chunkText(section.text);
+        if (isPlaceholderSection(section)) {
+          continue;
+        }
+
+        const sectionMetadata = parseMetadata(section.text, category, section.title || path.basename(filePath, '.md'));
+        const metadata = {
+          ...sectionMetadata,
+          tags: sectionMetadata.tags.length > 0 ? sectionMetadata.tags : fileMetadata.tags,
+          priority: sectionMetadata.priority !== 1 ? sectionMetadata.priority : fileMetadata.priority,
+        };
+        const chunks = chunkText(stripMetadataLines(section.text));
         chunks.forEach((chunk, index) => {
           documents.push({
             id: buildChunkId(filePath, metadata.title, index),
@@ -377,7 +404,11 @@ export async function syncKnowledgeBase(options = {}) {
   }
   const vectorSize = validation.vectors[0].length;
 
-  await ensureCollection(vectorSize);
+  const collection = await ensureCollection(vectorSize);
+  if (collection?.vectorSize && Number(collection.vectorSize) !== vectorSize) {
+    recordWorkflowMetric('yuno_knowledge_sync_total', 1, { result: 'error' });
+    throw new Error(`Qdrant collection vector size mismatch: expected ${vectorSize}, got ${collection.vectorSize}`);
+  }
   const version = createKnowledgeVersion(documents);
   await upsertPoints(documents.map((item, index) => ({
     id: item.id,
@@ -417,16 +448,15 @@ export async function syncKnowledgeBase(options = {}) {
 
 function rankKnowledgeHits(hits, preferredTags = []) {
   const tagSet = new Set(preferredTags.map((item) => String(item || '').trim()).filter(Boolean));
-  if (tagSet.size === 0) {
-    return hits;
-  }
 
   return [...hits].sort((left, right) => {
     const leftTags = new Set(left.payload?.tags || []);
     const rightTags = new Set(right.payload?.tags || []);
     const leftBoost = [...tagSet].some((tag) => leftTags.has(tag)) ? 0.25 : 0;
     const rightBoost = [...tagSet].some((tag) => rightTags.has(tag)) ? 0.25 : 0;
-    return (right.score + rightBoost) - (left.score + leftBoost);
+    const scoreDiff = (right.score + rightBoost) - (left.score + leftBoost);
+    if (Math.abs(scoreDiff) > 0.08) return scoreDiff;
+    return Number(right.payload?.priority || 1) - Number(left.payload?.priority || 1);
   });
 }
 
@@ -533,8 +563,12 @@ export async function retrieveKnowledge(query, options = {}) {
   try {
     const [embeddingVector] = validation.vectors;
 
+    const requestedLimit = options.limit || config.qdrantTopK;
+    const candidateLimit = (options.preferredTags || []).length > 0
+      ? Math.max(requestedLimit, requestedLimit * 3)
+      : requestedLimit;
     const hits = await search(embeddingVector, {
-      limit: options.limit || config.qdrantTopK,
+      limit: candidateLimit,
       scoreThreshold: options.scoreThreshold ?? config.qdrantMinScore,
       filter: {
         must: [{

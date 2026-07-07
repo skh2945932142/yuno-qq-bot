@@ -81,3 +81,27 @@ test('syncKnowledgeBase fails when embedding payload is invalid', async () => {
     /empty embedding vector/
   );
 });
+
+test('syncKnowledgeBase fails before upsert when qdrant vector size mismatches embeddings', async () => {
+  let upserted = false;
+
+  await assert.rejects(
+    () => syncKnowledgeBase({
+      documents: [
+        {
+          id: 'doc-1',
+          text: 'one',
+          metadata: { category: 'persona', title: 'one', source: 'one.md', chunkIndex: 0 },
+        },
+      ],
+      createEmbeddings: async () => [{ embedding: [0.1, 0.2, 0.3] }],
+      ensureQdrantCollection: async () => ({ enabled: true, vectorSize: 2 }),
+      upsertKnowledgePoints: async () => {
+        upserted = true;
+      },
+    }),
+    /Qdrant collection vector size mismatch/
+  );
+
+  assert.equal(upserted, false);
+});

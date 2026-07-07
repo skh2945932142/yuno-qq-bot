@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { buildOpenAiClientConfig } from './src/minimax.js';
 
 async function loadConfigModule(overrides = {}) {
   const keys = Object.keys(overrides);
@@ -70,6 +71,36 @@ test('config trims qdrant url and diagnoses missing protocol', async () => {
 
   assert.equal(config.qdrantUrl, 'qdrant:6333');
   assert.equal(describeHttpBaseUrlProblem(config.qdrantUrl), 'missing-protocol');
+});
+
+test('config exposes independent embedding provider settings', async () => {
+  const { config } = await loadConfigModule({
+    LLM_API_KEY: 'chat-key',
+    LLM_BASE_URL: 'https://api.minimaxi.com/v1',
+    EMBEDDING_API_KEY: 'embedding-key',
+    EMBEDDING_BASE_URL: 'https://api.openai.com/v1/',
+    EMBEDDING_MODEL: 'text-embedding-3-small',
+    QDRANT_MIN_SCORE: '',
+  });
+
+  assert.equal(config.embeddingApiKey, 'embedding-key');
+  assert.equal(config.embeddingBaseUrl, 'https://api.openai.com/v1');
+  assert.equal(config.embeddingModel, 'text-embedding-3-small');
+  assert.equal(config.qdrantMinScore, 0.25);
+});
+
+test('embedding OpenAI client config uses embedding provider instead of chat provider', () => {
+  const clientConfig = buildOpenAiClientConfig('embedding', {
+    llmApiKey: 'chat-key',
+    llmBaseUrl: 'https://api.minimaxi.com/v1',
+    embeddingApiKey: 'embedding-key',
+    embeddingBaseUrl: 'https://api.openai.com/v1',
+    requestTimeoutMs: 15000,
+  });
+
+  assert.equal(clientConfig.apiKey, 'embedding-key');
+  assert.equal(clientConfig.baseURL, 'https://api.openai.com/v1');
+  assert.equal(clientConfig.timeout, 15000);
 });
 
 test('config exposes companion experience and external enhancement knobs', async () => {
