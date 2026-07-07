@@ -35,6 +35,7 @@ services:
       - ../..:/workspace
     depends_on:
       - mongo
+      - qdrant
 
   mongo:
     image: mongo:7
@@ -47,5 +48,7 @@ services:
     image: qdrant/qdrant:latest
     container_name: yuno-qdrant
     restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
     volumes:
       - ./data/qdrant:/qdrant/storage

@@ -3,6 +3,8 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import { withRetry } from './retry.js';
 
+const KNOWLEDGE_MANIFEST_POINT_ID = '00000000-0000-5000-8000-000000000001';
+
 function getHeaders() {
   return config.qdrantApiKey
     ? { 'api-key': config.qdrantApiKey }
@@ -11,6 +13,22 @@ function getHeaders() {
 
 function isConfigured() {
   return Boolean(config.qdrantUrl && config.qdrantCollection);
+}
+
+function extractVectorSize(collectionResult) {
+  const vectorConfig = collectionResult?.config?.params?.vectors;
+  if (typeof vectorConfig?.size === 'number') {
+    return vectorConfig.size;
+  }
+
+  if (vectorConfig && typeof vectorConfig === 'object') {
+    const firstVector = Object.values(vectorConfig)[0];
+    if (typeof firstVector?.size === 'number') {
+      return firstVector.size;
+    }
+  }
+
+  return null;
 }
 
 async function request(method, path, data = null, label = 'qdrant request') {
@@ -46,9 +64,11 @@ export async function ensureQdrantCollection(vectorSize, options = {}) {
 
   try {
     const existing = await request('get', `/collections/${config.qdrantCollection}`, null, 'inspect qdrant collection');
-    const vectors = existing.result?.config?.params?.vectors;
-    const existingSize = Number(vectors?.size || vectors?.default?.size || 0);
-    return { enabled: true, vectorSize: existingSize || vectorSize };
+    return {
+      enabled: true,
+      created: false,
+      vectorSize: extractVectorSize(existing.result),
+    };
   } catch (error) {
     if (error.response?.status !== 404) {
       throw error;
@@ -62,10 +82,15 @@ export async function ensureQdrantCollection(vectorSize, options = {}) {
         distance: options.distance || 'Cosine',
       },
     }, 'ensure qdrant collection');
-    return { enabled: true, vectorSize };
+    return { enabled: true, created: true, vectorSize };
   } catch (error) {
     if (error.response?.status === 409) {
-      return { enabled: true, vectorSize };
+      const existing = await request('get', `/collections/${config.qdrantCollection}`, null, 'inspect qdrant collection');
+      return {
+        enabled: true,
+        created: false,
+        vectorSize: extractVectorSize(existing.result),
+      };
     }
     throw error;
   }
@@ -120,7 +145,7 @@ export async function setKnowledgeManifest(manifest, vectorSize = 1) {
   }
 
   await upsertKnowledgePoints([{
-    id: 'knowledge_manifest',
+    id: KNOWLEDGE_MANIFEST_POINT_ID,
     vector: Array.from({ length: vectorSize }, () => 0),
     payload: {
       type: 'manifest',

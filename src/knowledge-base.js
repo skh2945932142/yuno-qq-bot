@@ -179,10 +179,17 @@ function chunkText(text, maxLength = CHUNK_TARGET, overlap = CHUNK_OVERLAP) {
 }
 
 function buildChunkId(filePath, title, index) {
-  return crypto
+  const hex = crypto
     .createHash('sha1')
     .update(`${filePath}:${title}:${index}`)
     .digest('hex');
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    `5${hex.slice(13, 16)}`,
+    `${(parseInt(hex.slice(16, 18), 16) & 0x3f | 0x80).toString(16).padStart(2, '0')}${hex.slice(18, 20)}`,
+    hex.slice(20, 32),
+  ].join('-');
 }
 
 function createKnowledgeVersion(documents) {
@@ -583,6 +590,10 @@ export async function retrieveKnowledge(query, options = {}) {
     const documents = [];
 
     for (const hit of rankedHits) {
+      if (documents.length >= requestedLimit) {
+        break;
+      }
+
       const text = truncateText(hit.payload?.text || '', remainingChars);
       if (!text) continue;
 

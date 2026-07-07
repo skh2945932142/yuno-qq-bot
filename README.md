@@ -73,6 +73,8 @@ npm run kb:sync
 常用可选项：
 
 - `LLM_BASE_URL`
+- `EMBEDDING_API_KEY`
+- `EMBEDDING_BASE_URL`
 - `EMBEDDING_MODEL`
 - `TARGET_GROUP_ID`
 - `ADMIN_QQ`
@@ -121,11 +123,14 @@ npm run kb:sync
 
 检索相关：
 
+- `EMBEDDING_API_KEY`
+- `EMBEDDING_BASE_URL`
+- `EMBEDDING_MODEL`（默认 `text-embedding-3-small`）
 - `QDRANT_URL`
 - `QDRANT_API_KEY`
 - `QDRANT_COLLECTION`
-- `QDRANT_TOP_K`
-- `QDRANT_MIN_SCORE`
+- `QDRANT_TOP_K`（默认 `4`）
+- `QDRANT_MIN_SCORE`（默认 `0.25`）
 - `QDRANT_CHAR_LIMIT`
 - `KNOWLEDGE_QUERY_CACHE_TTL_MS`
 
@@ -194,6 +199,7 @@ npm run kb:sync
 - 文本链路建议先跑通，语音默认保持关闭；只有在显式设置 `ENABLE_VOICE=true` 后，`FFMPEG_PATH` 才需要指向真实存在的 ffmpeg，可执行文件通常是 `/usr/bin/ffmpeg`
 - `SELF_QQ` 最好显式填写 bot 自己的 QQ 号，避免上游 notice 缺字段时无法正确识别 @ 与 poke 目标
 - 检索不是默认开启的；只有在填好 `QDRANT_URL`、`QDRANT_COLLECTION` 并执行 `npm run kb:sync` 之后，RAG 才会真正参与回复
+- `EMBEDDING_BASE_URL` 必须指向支持 OpenAI-compatible `/v1/embeddings` 的服务；如果聊天模型和 embedding 不在同一个 provider，不要只依赖 `LLM_BASE_URL`
 
 ### 2. Docker / Compose 同网段运行
 
@@ -208,9 +214,13 @@ Zeabur 上以服务的 `Variables` 页面为准，不要只看仓库里的 `.env
 推荐先确认这些值：
 
 ```env
+EMBEDDING_BASE_URL=https://api.openai.com/v1
+EMBEDDING_API_KEY=<your-embedding-api-key>
+EMBEDDING_MODEL=text-embedding-3-small
 QDRANT_URL=http://<qdrant-service-host>:6333
 QDRANT_COLLECTION=qq_bot_knowledge
 QDRANT_API_KEY=
+QDRANT_MIN_SCORE=0.25
 ```
 
 如果使用 Qdrant Cloud，则通常是：
@@ -222,6 +232,8 @@ QDRANT_API_KEY=<your-api-key>
 ```
 
 `QDRANT_URL` 必须是完整 `http://` 或 `https://` URL。只填 `qdrant:6333`、collection 名、空值或带错引号，启动时会显示 `invalid-url:missing-protocol`；云端 key 错误通常会显示 `unreachable:401`。修好后再运行 `npm run kb:sync`。
+
+如果更换过 `EMBEDDING_MODEL`，旧 collection 的向量维度可能和新模型不一致；`npm run kb:sync` 会在 upsert 前报出维度不匹配。确认不需要保留旧向量后，删除或重建对应 Qdrant collection，再重新同步。
 
 ### 4. Webhook 与指标安全
 
@@ -339,6 +351,7 @@ npm run eval:report
 ## 运行与运维说明
 
 - 检索是正式功能，不是占位边界。只有在 `QDRANT_URL` 和 `QDRANT_COLLECTION` 都配置后，并且执行过 `npm run kb:sync`，它才会真正启用。
+- 知识库同步会跳过 `knowledge/README.md`，并把 Markdown 文件头部的 `Tags:`、`Priority:` 继承到子章节；占位片段不会入库。
 - 如果 `ENABLE_QUEUE=false`，或者 BullMQ / Redis 不可用，系统会退回 inline 模式，但队列接口不变。
 - `/ready` 用于检查数据库和队列就绪情况，并返回 voice/qdrant 的降级原因；`/metrics` 暴露 Prometheus 风格指标。
 - 当前唯一活跃运行主线是 `src/message-workflow.js`，旧版群聊工作流已经移除。

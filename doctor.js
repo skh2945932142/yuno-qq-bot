@@ -5,6 +5,7 @@ import Redis from 'ioredis';
 import { pathToFileURL } from 'node:url';
 import { config, describeHttpBaseUrlProblem, validateRuntimeConfig } from './src/config.js';
 import { resolveFfmpegPath } from './src/services/audio.js';
+import { createEmbeddings } from './src/minimax.js';
 
 function truncateValue(value, limit = 120) {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
@@ -215,6 +216,31 @@ async function checkLlm() {
   };
 }
 
+async function checkEmbedding(options = {}) {
+  const runtimeConfig = options.config || config;
+  const createEmbeddingRows = options.createEmbeddings || createEmbeddings;
+  if (!runtimeConfig.qdrantUrl || !runtimeConfig.qdrantCollection) {
+    return {
+      status: 'skip',
+      detail: 'retrieval is not configured, so embedding health is not required.',
+    };
+  }
+
+  const rows = await createEmbeddingRows(['embedding health check'], {
+    model: runtimeConfig.embeddingModel,
+    operation: 'embedding-health-check',
+    timeoutMs: Math.min(runtimeConfig.requestTimeoutMs, 15000),
+  });
+  const vector = rows?.[0]?.embedding;
+  if (!Array.isArray(vector) || vector.length === 0 || !vector.every((item) => Number.isFinite(item))) {
+    throw new Error(`Embedding provider returned an invalid vector for ${runtimeConfig.embeddingModel || '(unset)'}`);
+  }
+
+  return {
+    detail: `model=${runtimeConfig.embeddingModel}, baseUrl=${runtimeConfig.embeddingBaseUrl || '(unset)'}, vectorSize=${vector.length}`,
+  };
+}
+
 async function checkQdrant(options = {}) {
   const runtimeConfig = options.config || config;
   const httpGet = options.httpGet || axios.get;
@@ -331,6 +357,7 @@ async function main() {
     ['mongo', checkMongo],
     ['napcat', checkNapCat],
     ['llm', checkLlm],
+    ['embedding', checkEmbedding],
     ['qdrant', checkQdrant],
     ['voice', checkVoiceRuntime],
     ['queue', checkQueueRuntime],
@@ -355,6 +382,7 @@ export {
   checkMongo,
   checkNapCat,
   checkLlm,
+  checkEmbedding,
   checkQdrant,
   checkVoiceRuntime,
   checkQueueRuntime,
