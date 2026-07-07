@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {
   normalizeVoiceTtsText,
   processIncomingMessage,
@@ -317,6 +320,143 @@ test('processIncomingMessage can send contextual meme as structured text plus im
   assert.deepEqual(structuredReplies[0][0], { type: 'text', text: 'reply:笑死，太离谱了' });
   assert.deepEqual(structuredReplies[0][1], { type: 'image', image: { file: 'memes/funny.png' } });
   assert.deepEqual(usedMemes, ['meme-1']);
+});
+
+test('processIncomingMessage merges provider meme candidates into planner input', async () => {
+  const event = createEvent({
+    chatType: 'group',
+    chatId: 'provider-group',
+    rawText: '[CQ:at,qq=bot] 笑死，太离谱了',
+    text: '笑死，太离谱了',
+    mentionsBot: true,
+  });
+  const seenCandidateIds = [];
+  const structuredReplies = [];
+  const precomputed = createPrecomputedContext(event, {
+    memoryContext: {
+      eventMemories: [],
+      memeMemories: [{
+        assetId: 'semantic-memory',
+        storagePath: 'memes/memory.png',
+        safetyStatus: 'safe',
+      }],
+    },
+    analysis: {
+      shouldRespond: true,
+      confidence: 0.95,
+      intent: 'chat',
+      sentiment: 'positive',
+      relevance: 0.9,
+      reason: 'basic-direct-mention-pass',
+      topics: ['meme'],
+      ruleSignals: ['direct-mention'],
+      replyStyle: 'playful',
+    },
+  });
+
+  await processIncomingMessage(event, precomputed, {
+    deps: createWorkflowDeps({
+      getMemeCandidates: async () => [{
+        assetId: 'provider-global',
+        storagePath: 'memes/global.png',
+        safetyStatus: 'safe',
+      }],
+      sendStructuredReply: async (_target, outputs) => {
+        structuredReplies.push(outputs);
+        return true;
+      },
+      markMemeUsed: async () => null,
+      planContextualMemeReply: ({ memeCandidates }) => {
+        seenCandidateIds.push(...memeCandidates.map((item) => item.assetId));
+        return {
+          shouldSend: true,
+          suggested: true,
+          reason: 'high-semantic-match',
+          mode: 'auto',
+          score: 0.9,
+          asset: memeCandidates.find((item) => item.assetId === 'provider-global'),
+          recordSent: () => {},
+        };
+      },
+      chat: async (_messages, _systemPrompt, userTurn) => JSON.stringify({
+        text: `reply:${userTurn}`,
+        sendVoice: false,
+      }),
+    }),
+  });
+
+  assert.deepEqual(seenCandidateIds, ['semantic-memory', 'provider-global']);
+  assert.deepEqual(structuredReplies[0][1], { type: 'image', image: { file: 'memes/global.png' } });
+});
+
+test('processIncomingMessage retries a local meme file as base64 when file send fails', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'yuno-workflow-meme-'));
+  try {
+    const filePath = path.join(dir, 'local.png');
+    const fileBytes = Buffer.from('local-image-bytes');
+    await writeFile(filePath, fileBytes);
+
+    const event = createEvent({
+      chatType: 'group',
+      chatId: 'fallback-group',
+      rawText: '[CQ:at,qq=bot] 笑死',
+      text: '笑死',
+      mentionsBot: true,
+    });
+    const structuredReplies = [];
+    const textReplies = [];
+    const usedMemes = [];
+
+    await processIncomingMessage(event, createPrecomputedContext(event, {
+      analysis: {
+        shouldRespond: true,
+        confidence: 0.95,
+        intent: 'chat',
+        sentiment: 'positive',
+        relevance: 0.9,
+        reason: 'basic-direct-mention-pass',
+        topics: ['meme'],
+        ruleSignals: ['direct-mention'],
+        replyStyle: 'playful',
+      },
+    }), {
+      deps: createWorkflowDeps({
+        sendReply: async (_target, text) => textReplies.push(text),
+        sendStructuredReply: async (_target, outputs) => {
+          structuredReplies.push(outputs);
+          if (outputs[1]?.image?.file === filePath) {
+            throw new Error('napcat cannot read local file');
+          }
+          return true;
+        },
+        markMemeUsed: async (assetId) => usedMemes.push(assetId),
+        planContextualMemeReply: () => ({
+          shouldSend: true,
+          suggested: true,
+          reason: 'high-semantic-match',
+          mode: 'auto',
+          score: 0.9,
+          asset: {
+            assetId: 'local-meme',
+            storagePath: filePath,
+          },
+          recordSent: () => {},
+        }),
+        chat: async (_messages, _systemPrompt, userTurn) => JSON.stringify({
+          text: `reply:${userTurn}`,
+          sendVoice: false,
+        }),
+      }),
+    });
+
+    assert.equal(textReplies.length, 0);
+    assert.equal(structuredReplies.length, 2);
+    assert.equal(structuredReplies[0][1].image.file, filePath);
+    assert.equal(structuredReplies[1][1].image.base64, fileBytes.toString('base64'));
+    assert.deepEqual(usedMemes, ['local-meme']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('processIncomingMessage sends text and voice in private chat when model requests voice', async () => {

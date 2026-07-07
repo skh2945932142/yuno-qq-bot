@@ -117,6 +117,8 @@ test('config exposes companion experience and external enhancement knobs', async
   assert.equal(config.externalToolTimeoutMs, 4000);
   assert.equal(config.memoryExtractionEnabled, true);
   assert.equal(config.memeVisionEnabled, true);
+  assert.equal(config.maxActiveRemindersPerUser, 20);
+  assert.equal(config.maxActiveSubscriptionsPerUser, 10);
 });
 
 test('config exposes contextual meme auto-send controls', async () => {
@@ -125,12 +127,32 @@ test('config exposes contextual meme auto-send controls', async () => {
     MEME_AUTO_SEND_COOLDOWN_MS: '120000',
     MEME_AUTO_SEND_MIN_SCORE: '0.8',
     MEME_AUTO_SEND_MAX_PER_HOUR: '2',
+    MEME_AUTO_SEND_PROBABILITY: '0.4',
+    MEME_PROVIDER: 'napcat-favorites',
+    MEME_IMPORT_DIR: 'custom/memes',
+    MEME_NAPCAT_FAVORITES_COUNT: '24',
+    MEME_NAPCAT_FAVORITES_SYNC_TTL_MS: '30000',
   });
 
   assert.equal(config.memeAutoSendMode, 'suggest');
   assert.equal(config.memeAutoSendCooldownMs, 120000);
   assert.equal(config.memeAutoSendMinScore, 0.8);
   assert.equal(config.memeAutoSendMaxPerHour, 2);
+  assert.equal(config.memeAutoSendProbability, 0.4);
+  assert.equal(config.memeProvider, 'napcat-favorites');
+  assert.equal(config.memeImportDir, 'custom/memes');
+  assert.equal(config.memeNapcatFavoritesCount, 24);
+  assert.equal(config.memeNapcatFavoritesSyncTtlMs, 30000);
+});
+
+test('config clamps meme auto-send probability to a safe range', async () => {
+  const high = await loadConfigModule({ MEME_AUTO_SEND_PROBABILITY: '2' });
+  const low = await loadConfigModule({ MEME_AUTO_SEND_PROBABILITY: '-1' });
+  const fallback = await loadConfigModule({ MEME_AUTO_SEND_PROBABILITY: 'not-a-number' });
+
+  assert.equal(high.config.memeAutoSendProbability, 1);
+  assert.equal(low.config.memeAutoSendProbability, 0);
+  assert.equal(fallback.config.memeAutoSendProbability, 0.25);
 });
 
 test('config exposes webhook and metrics security defaults', async () => {

@@ -620,7 +620,11 @@ async function listReminders(context) {
 }
 
 async function cancelReminder(args, context) {
-  const task = await cancelReminderTask(args.taskId);
+  const task = await cancelReminderTask(args.taskId, {
+    chatId: context.event.chatId,
+    userId: context.event.userId,
+    isAdmin: String(context.event.userId || '') === String(config.adminQq || ''),
+  });
   return buildStructuredToolResult({
     tool: 'reminder_cancelled',
     payload: { taskId: args.taskId, cancelled: Boolean(task) },
@@ -675,8 +679,12 @@ async function listSubscriptions(context) {
   });
 }
 
-async function cancelSubscription(args) {
-  const task = await cancelSubscriptionTask(args.taskId);
+async function cancelSubscription(args, context) {
+  const task = await cancelSubscriptionTask(args.taskId, {
+    chatId: context.event.chatId,
+    userId: context.event.userId,
+    isAdmin: String(context.event.userId || '') === String(config.adminQq || ''),
+  });
   return buildStructuredToolResult({
     tool: 'subscription_cancelled',
     payload: { taskId: args.taskId, cancelled: Boolean(task) },

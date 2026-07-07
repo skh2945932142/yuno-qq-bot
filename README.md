@@ -61,6 +61,24 @@ npm start
 npm run kb:sync
 ```
 
+如果你要把 QQ 账号里已添加/已导出的收藏表情接入自动跟发，先把图片放到 `MEME_IMPORT_DIR`（默认 `data/qq-favorite-memes`），再执行：
+
+```bash
+npm run meme:import
+```
+
+导入会把图片缓存为全局 `MemeAsset`（`chatId="__global__"`），`assetId` 使用文件内容 SHA-256（`qqfav:<hash>`）去重；同一文件重复导入会更新元数据，不会重复创建。可选 `meme-manifest.json` 支持按相对路径覆盖 `tags`、`semanticTags`、`caption`、`usageContext`、`emotion`、`safetyStatus` 和 `disabled`。
+
+如果要直接读取 NapCat 当前登录 QQ 账号里的收藏/自定义表情，把 provider 切到：
+
+```env
+MEME_PROVIDER=napcat-favorites
+MEME_NAPCAT_FAVORITES_COUNT=48
+MEME_NAPCAT_FAVORITES_SYNC_TTL_MS=3600000
+```
+
+`napcat-favorites` 会调用 NapCat 的 `fetch_custom_face` 拉取自定义表情，空结果时再尝试 `get_collection_list`，然后缓存成全局 `MemeAsset` 继续复用语境跟发逻辑。缓存 TTL 内不会重复拉取。
+
 ## 关键环境变量
 
 必填：
@@ -164,6 +182,8 @@ npm run kb:sync
 - `SPECIAL_USERS_JSON`
 - `MEMORY_EXTRACTION_ENABLED`
 - `MEMORY_SUMMARY_MODEL`
+- `MAX_ACTIVE_REMINDERS_PER_USER`
+- `MAX_ACTIVE_SUBSCRIPTIONS_PER_USER`
 - `MEME_ENABLED`
 - `MEME_AUTO_COLLECT`
 - `MEME_AUTO_SEND`
@@ -171,6 +191,11 @@ npm run kb:sync
 - `MEME_AUTO_SEND_COOLDOWN_MS`
 - `MEME_AUTO_SEND_MIN_SCORE`
 - `MEME_AUTO_SEND_MAX_PER_HOUR`
+- `MEME_AUTO_SEND_PROBABILITY`
+- `MEME_PROVIDER`
+- `MEME_IMPORT_DIR`
+- `MEME_NAPCAT_FAVORITES_COUNT`
+- `MEME_NAPCAT_FAVORITES_SYNC_TTL_MS`
 - `MEME_VISION_ENABLED`
 - `MEME_STORAGE_DIR`
 - `MEME_ENABLED_GROUPS`
@@ -244,7 +269,7 @@ ONEBOT_WEBHOOK_SECRET=<long-random-secret>
 WEBHOOK_BODY_LIMIT=128kb
 ```
 
-NapCat 或反向代理需要给请求加上 `x-yuno-webhook-secret: <long-random-secret>`，也可以用 `Authorization: Bearer <long-random-secret>`。没有配置 `ONEBOT_WEBHOOK_SECRET` 时会保留本地开发兼容模式，但不建议用于公网。
+NapCat 或反向代理需要给请求加上 `x-yuno-webhook-secret: <long-random-secret>`，也可以用 `Authorization: Bearer <long-random-secret>`。生产模式下未配置 `ONEBOT_WEBHOOK_SECRET` 会直接拒绝 `/onebot` 请求；开发模式保留本地兼容。
 
 如果开启 `/metrics`，建议同时配置：
 

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { config } from './config.js';
 import { AutomationTask } from './models.js';
 
 function buildTaskId() {
@@ -20,6 +21,70 @@ function toTask(task) {
 
 function filterTasks(tasks, predicate) {
   return tasks.filter(predicate).map((task) => ({ ...task }));
+}
+
+function looksLikeDeps(value) {
+  return Boolean(value && (
+    Array.isArray(value.tasks)
+    || value.AutomationTask
+  ));
+}
+
+function splitScopeAndDeps(scope = {}, deps = {}) {
+  if (looksLikeDeps(scope) && (!deps || Object.keys(deps).length === 0)) {
+    return { scope: {}, deps: scope };
+  }
+
+  return { scope: scope || {}, deps: deps || {} };
+}
+
+function applyOwnerScope(query, scope = {}) {
+  if (scope.isAdmin) {
+    return query;
+  }
+
+  const scopedQuery = { ...query };
+  if (scope.chatId) scopedQuery.chatId = String(scope.chatId);
+  if (scope.userId) scopedQuery.userId = String(scope.userId);
+  return scopedQuery;
+}
+
+function taskMatchesOwnerScope(task, scope = {}) {
+  if (scope.isAdmin) {
+    return true;
+  }
+  if (scope.chatId && String(task.chatId) !== String(scope.chatId)) {
+    return false;
+  }
+  if (scope.userId && String(task.userId) !== String(scope.userId)) {
+    return false;
+  }
+  return true;
+}
+
+async function enforceActiveTaskQuota(task, maxActive, deps = {}) {
+  const safeMax = Math.max(0, Number(maxActive || 0));
+  if (safeMax <= 0 || !task.userId || !task.chatId) {
+    return;
+  }
+
+  const matches = (item) => item.taskType === task.taskType
+    && item.enabled !== false
+    && String(item.chatId) === String(task.chatId)
+    && String(item.userId) === String(task.userId);
+
+  const activeCount = Array.isArray(deps.tasks)
+    ? deps.tasks.filter(matches).length
+    : await getTaskModel(deps).countDocuments({
+        taskType: task.taskType,
+        enabled: true,
+        chatId: String(task.chatId),
+        userId: String(task.userId),
+      });
+
+  if (activeCount >= safeMax) {
+    throw new Error(`Active ${task.taskType} quota exceeded for this user`);
+  }
 }
 
 export async function createReminderTask(input, deps = {}) {
@@ -45,6 +110,8 @@ export async function createReminderTask(input, deps = {}) {
       delayMinutes,
     },
   };
+
+  await enforceActiveTaskQuota(task, input.maxActivePerUser ?? config.maxActiveRemindersPerUser, deps);
 
   if (Array.isArray(deps.tasks)) {
     deps.tasks.push({ ...task, createdAt: now, updatedAt: now });
@@ -72,9 +139,13 @@ export async function listReminderTasks(scope = {}, deps = {}) {
   return results.map(toTask);
 }
 
-export async function cancelReminderTask(taskId, deps = {}) {
+export async function cancelReminderTask(taskId, scope = {}, maybeDeps = {}) {
+  const { scope: resolvedScope, deps } = splitScopeAndDeps(scope, maybeDeps);
+
   if (Array.isArray(deps.tasks)) {
-    const task = deps.tasks.find((item) => item.taskId === taskId && item.taskType === 'reminder');
+    const task = deps.tasks.find((item) => item.taskId === taskId
+      && item.taskType === 'reminder'
+      && taskMatchesOwnerScope(item, resolvedScope));
     if (!task) return null;
     task.enabled = false;
     task.updatedAt = new Date();
@@ -83,7 +154,7 @@ export async function cancelReminderTask(taskId, deps = {}) {
 
   const model = getTaskModel(deps);
   const updated = await model.findOneAndUpdate(
-    { taskId: String(taskId || ''), taskType: 'reminder' },
+    applyOwnerScope({ taskId: String(taskId || ''), taskType: 'reminder' }, resolvedScope),
     { $set: { enabled: false } },
     { returnDocument: 'after' }
   );
@@ -115,6 +186,8 @@ export async function createSubscriptionTask(input, deps = {}) {
     },
   };
 
+  await enforceActiveTaskQuota(task, input.maxActivePerUser ?? config.maxActiveSubscriptionsPerUser, deps);
+
   if (Array.isArray(deps.tasks)) {
     deps.tasks.push({ ...task, createdAt: now, updatedAt: now });
     return { ...deps.tasks[deps.tasks.length - 1] };
@@ -141,9 +214,13 @@ export async function listSubscriptionTasks(scope = {}, deps = {}) {
   return results.map(toTask);
 }
 
-export async function cancelSubscriptionTask(taskId, deps = {}) {
+export async function cancelSubscriptionTask(taskId, scope = {}, maybeDeps = {}) {
+  const { scope: resolvedScope, deps } = splitScopeAndDeps(scope, maybeDeps);
+
   if (Array.isArray(deps.tasks)) {
-    const task = deps.tasks.find((item) => item.taskId === taskId && item.taskType === 'subscription');
+    const task = deps.tasks.find((item) => item.taskId === taskId
+      && item.taskType === 'subscription'
+      && taskMatchesOwnerScope(item, resolvedScope));
     if (!task) return null;
     task.enabled = false;
     task.updatedAt = new Date();
@@ -152,7 +229,7 @@ export async function cancelSubscriptionTask(taskId, deps = {}) {
 
   const model = getTaskModel(deps);
   const updated = await model.findOneAndUpdate(
-    { taskId: String(taskId || ''), taskType: 'subscription' },
+    applyOwnerScope({ taskId: String(taskId || ''), taskType: 'subscription' }, resolvedScope),
     { $set: { enabled: false } },
     { returnDocument: 'after' }
   );

@@ -22,6 +22,12 @@ function readNumber(name, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function readProbability(name, fallback) {
+  const parsed = readNumber(name, fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(1, Math.max(0, parsed));
+}
+
 function readBoolean(name, fallback) {
   const value = process.env[name];
   if (value === undefined) return fallback;
@@ -132,6 +138,8 @@ export const config = Object.freeze({
     persist: readNumber('QUEUE_CONCURRENCY_PERSIST', 4),
   }),
   automationTaskConcurrency: readNumber('AUTOMATION_TASK_CONCURRENCY', 3),
+  maxActiveRemindersPerUser: readNumber('MAX_ACTIVE_REMINDERS_PER_USER', 20),
+  maxActiveSubscriptionsPerUser: readNumber('MAX_ACTIVE_SUBSCRIPTIONS_PER_USER', 10),
   groupEventRetentionCount: readNumber('GROUP_EVENT_RETENTION_COUNT', 100),
   onebotWebhookSecret: readTrimmed('ONEBOT_WEBHOOK_SECRET'),
   webhookBodyLimit: readTrimmed('WEBHOOK_BODY_LIMIT', '128kb'),
@@ -158,6 +166,11 @@ export const config = Object.freeze({
   memeAutoSendCooldownMs: readNumber('MEME_AUTO_SEND_COOLDOWN_MS', 300000),
   memeAutoSendMinScore: readNumber('MEME_AUTO_SEND_MIN_SCORE', 0.72),
   memeAutoSendMaxPerHour: readNumber('MEME_AUTO_SEND_MAX_PER_HOUR', 3),
+  memeAutoSendProbability: readProbability('MEME_AUTO_SEND_PROBABILITY', 0.25),
+  memeProvider: readTrimmed('MEME_PROVIDER', 'local-cache').toLowerCase(),
+  memeImportDir: readTrimmed('MEME_IMPORT_DIR', 'data/qq-favorite-memes'),
+  memeNapcatFavoritesCount: readNumber('MEME_NAPCAT_FAVORITES_COUNT', 48),
+  memeNapcatFavoritesSyncTtlMs: readNumber('MEME_NAPCAT_FAVORITES_SYNC_TTL_MS', 3600000),
   memeVisionEnabled: readBoolean('MEME_VISION_ENABLED', true),
   memeStorageDir: process.env.MEME_STORAGE_DIR || 'data/memes',
   memeEnabledGroups: readJson('MEME_ENABLED_GROUPS', []),

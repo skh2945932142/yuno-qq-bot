@@ -43,8 +43,12 @@ function getBearerToken(req) {
   return match ? match[1].trim() : '';
 }
 
-function hasSharedSecret(req, expectedSecret, headerName) {
-  if (!expectedSecret) return true;
+function isProductionRuntime(runtimeConfig = {}) {
+  return String(runtimeConfig.nodeEnv || process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
+}
+
+function hasSharedSecret(req, expectedSecret, headerName, options = {}) {
+  if (!expectedSecret) return !options.requireSecret;
   const directSecret = getHeaderValue(req, headerName);
   const bearerToken = getBearerToken(req);
   return [directSecret, bearerToken].some((candidate) => constantTimeEquals(candidate, expectedSecret));
@@ -233,7 +237,9 @@ export function createApp(options = {}) {
   app.use(express.json({ limit: runtimeConfig.webhookBodyLimit || '128kb' }));
 
   app.post('/onebot', async (req, res) => {
-    if (!hasSharedSecret(req, runtimeConfig.onebotWebhookSecret, 'x-yuno-webhook-secret')) {
+    if (!hasSharedSecret(req, runtimeConfig.onebotWebhookSecret, 'x-yuno-webhook-secret', {
+      requireSecret: isProductionRuntime(runtimeConfig),
+    })) {
       res.status(401).send('unauthorized');
       return;
     }

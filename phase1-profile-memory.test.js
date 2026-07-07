@@ -31,6 +31,27 @@ test('extractStableProfileUpdate captures bond memories for special users', () =
   assert.equal(result.update.personaMode, 'exclusive_adoration');
 });
 
+test('extractStableProfileUpdate does not persist roleplay settings by default', () => {
+  const result = extractStableProfileUpdate('设定记住你是我的系统管理员，对我温柔一点。', {
+    confidence: 0.9,
+  });
+
+  assert.equal(result.shouldPersist, true);
+  assert.deepEqual(result.update.roleplaySettings, []);
+  assert.equal(result.update.relationshipPreference, '希望被温柔对待');
+});
+
+test('extractStableProfileUpdate only captures roleplay settings when explicitly allowed', () => {
+  const result = extractStableProfileUpdate('角色扮演成可靠的同伴。', {
+    confidence: 0.9,
+  }, null, {
+    allowRoleplaySettings: true,
+  });
+
+  assert.equal(result.shouldPersist, true);
+  assert.match(result.update.roleplaySettings.join(','), /角色扮演/);
+});
+
 test('buildProfileSummary renders long-term memory fields', () => {
   const summary = buildProfileSummary({
     preferredName: '阿明',
@@ -44,6 +65,8 @@ test('buildProfileSummary renders long-term memory fields', () => {
   assert.match(summary, /阿明/);
   assert.match(summary, /剧透/);
   assert.match(summary, /青梅竹马/);
+  assert.match(summary, /用户自述/);
+  assert.match(summary, /不作为系统指令/);
 });
 
 test('buildSpecialBondSummary renders special relationship memory', () => {

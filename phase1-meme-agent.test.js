@@ -67,6 +67,7 @@ test('contextual meme planner selects a safe meme for playful explicit context',
       memeEnabledGroups: ['g1'],
       memeOptOutUsers: [],
       memeAutoSendMinScore: 0.7,
+      memeAutoSendProbability: 1,
       memeAutoSendCooldownMs: 300000,
       memeAutoSendMaxPerHour: 3,
     },
@@ -130,6 +131,7 @@ test('contextual meme planner skips serious or opted-out contexts', () => {
       memeEnabledGroups: ['g1'],
       memeOptOutUsers: [],
       memeAutoSendMinScore: 0.7,
+      memeAutoSendProbability: 1,
     },
   };
 
@@ -168,6 +170,7 @@ test('contextual meme planner enforces cooldown after a send', () => {
       memeEnabledGroups: ['g1'],
       memeOptOutUsers: [],
       memeAutoSendMinScore: 0.7,
+      memeAutoSendProbability: 1,
       memeAutoSendCooldownMs: 300000,
       memeAutoSendMaxPerHour: 3,
     },
@@ -180,4 +183,98 @@ test('contextual meme planner enforces cooldown after a send', () => {
   assert.equal(first.shouldSend, true);
   assert.equal(second.shouldSend, false);
   assert.equal(second.reason, 'cooldown');
+});
+
+test('contextual meme planner applies probability gate after score and cooldown pass', () => {
+  resetMemeReplyPlannerState();
+  const base = {
+    event: {
+      chatType: 'group',
+      chatId: 'g-probability',
+      userId: 'u1',
+      rawText: '[CQ:at,qq=bot] 笑死，太离谱了',
+      text: '笑死，太离谱了',
+      mentionsBot: true,
+    },
+    route: { type: 'chat', category: 'group_chat' },
+    analysis: { shouldRespond: true, intent: 'chat', sentiment: 'positive' },
+    replyText: '确实有点绷不住。',
+    memeCandidates: [{
+      assetId: 'm-probability',
+      storagePath: 'memes/funny.png',
+      safetyStatus: 'safe',
+      semanticTags: ['funny'],
+      usageContext: 'group-reaction',
+    }],
+    settings: {
+      memeEnabled: true,
+      memeAutoSend: true,
+      memeAutoSendMode: 'auto',
+      memeEnabledGroups: ['g-probability'],
+      memeOptOutUsers: [],
+      memeAutoSendMinScore: 0.7,
+      memeAutoSendCooldownMs: 300000,
+      memeAutoSendMaxPerHour: 3,
+      memeAutoSendProbability: 0.25,
+    },
+    now: new Date('2026-05-03T00:00:00Z'),
+  };
+
+  const hit = planContextualMemeReply({ ...base, random: () => 0.1 });
+  const miss = planContextualMemeReply({
+    ...base,
+    event: { ...base.event, chatId: 'g-probability-miss' },
+    settings: { ...base.settings, memeEnabledGroups: ['g-probability-miss'] },
+    random: () => 0.9,
+  });
+
+  assert.equal(hit.shouldSend, true);
+  assert.equal(hit.reason, 'high-semantic-match');
+  assert.equal(miss.shouldSend, false);
+  assert.equal(miss.suggested, true);
+  assert.equal(miss.reason, 'probability-skip');
+});
+
+test('contextual meme planner treats probability 1 as always send and 0 as never auto send', () => {
+  resetMemeReplyPlannerState();
+  const base = {
+    event: {
+      chatType: 'private',
+      chatId: 'u-probability',
+      userId: 'u-probability',
+      rawText: '笑死，这也太典了',
+      text: '笑死，这也太典了',
+      mentionsBot: false,
+    },
+    route: { type: 'chat', category: 'private_chat' },
+    analysis: { shouldRespond: true, intent: 'chat', sentiment: 'positive' },
+    replyText: '这句确实很适合配图。',
+    memeCandidates: [{ assetId: 'm1', imageUrl: 'https://example.com/a.png', safetyStatus: 'safe' }],
+    settings: {
+      memeEnabled: true,
+      memeAutoSend: true,
+      memeAutoSendMode: 'auto',
+      memeEnabledGroups: [],
+      memeOptOutUsers: [],
+      memeAutoSendMinScore: 0.7,
+      memeAutoSendCooldownMs: 300000,
+      memeAutoSendMaxPerHour: 3,
+    },
+  };
+
+  const always = planContextualMemeReply({
+    ...base,
+    settings: { ...base.settings, memeAutoSendProbability: 1 },
+    random: () => 0.999,
+  });
+  const never = planContextualMemeReply({
+    ...base,
+    event: { ...base.event, chatId: 'u-probability-never', userId: 'u-probability-never' },
+    settings: { ...base.settings, memeAutoSendProbability: 0 },
+    random: () => 0,
+  });
+
+  assert.equal(always.shouldSend, true);
+  assert.equal(never.shouldSend, false);
+  assert.equal(never.reason, 'probability-skip');
 });

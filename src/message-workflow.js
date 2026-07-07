@@ -1,4 +1,5 @@
 ﻿import { config } from './config.js';
+import { readFile } from 'node:fs/promises';
 import { logger } from './logger.js';
 import { chat, tts } from './minimax.js';
 import { sendReply, sendStructuredReply, sendVoice } from './sender.js';
@@ -40,6 +41,7 @@ import { collectMemeAssetForEvent } from './meme-collector.js';
 import { indexMemeAssetSemantics, indexUserMemoryEvents, retrieveMemoryContext } from './memory-retrieval.js';
 import { markMemeUsed } from './meme-library.js';
 import { planContextualMemeReply } from './meme-reply-planner.js';
+import { getMemeCandidates, mergeMemeCandidates } from './meme-provider.js';
 
 registerQueryTools(toolRegistry);
 
@@ -546,6 +548,66 @@ function resolveUserTurn(event) {
   return cleanText;
 }
 
+function isLikelyLocalImagePath(value) {
+  const source = String(value || '').trim();
+  if (!source) return false;
+  if (/^(?:https?:|data:|base64:\/\/|file:\/\/)/i.test(source)) {
+    return false;
+  }
+  return true;
+}
+
+export async function buildMemeImageOutput(asset = {}, options = {}, deps = {}) {
+  const storagePath = String(asset.storagePath || '').trim();
+  const imageUrl = String(asset.imageUrl || '').trim();
+
+  if (options.preferBase64 && storagePath && isLikelyLocalImagePath(storagePath)) {
+    const bytes = await (deps.readFile || readFile)(storagePath);
+    return {
+      type: 'image',
+      image: {
+        base64: bytes.toString('base64'),
+      },
+    };
+  }
+
+  return {
+    type: 'image',
+    image: {
+      file: storagePath || imageUrl,
+    },
+  };
+}
+
+async function loadMemeCandidatesForReply({ event, trace, memoryContext }, deps) {
+  const memoryCandidates = Array.isArray(memoryContext?.memeMemories)
+    ? memoryContext.memeMemories
+    : [];
+
+  try {
+    const providerCandidates = await withTraceSpan(trace, 'load-meme-candidates', () => deps.getMemeCandidates({
+      chatId: event.chatId,
+      userId: event.userId,
+      limit: 8,
+      provider: config.memeProvider,
+    }), {
+      chatType: event.chatType,
+      chatId: event.chatId,
+      provider: config.memeProvider,
+    });
+    return mergeMemeCandidates(memoryCandidates, providerCandidates);
+  } catch (error) {
+    logger.warn('meme', 'Meme provider lookup failed; using memory candidates only', {
+      traceId: trace.traceId,
+      chatType: event.chatType,
+      chatId: event.chatId,
+      userId: event.userId,
+      message: error.message,
+    });
+    return mergeMemeCandidates(memoryCandidates);
+  }
+}
+
 function createWorkflowDeps(deps = {}) {
   const runtimeServices = getRuntimeServices();
 
@@ -582,6 +644,8 @@ function createWorkflowDeps(deps = {}) {
     sendVoice: deps.sendVoice || sendVoice,
     markMemeUsed: deps.markMemeUsed || markMemeUsed,
     planContextualMemeReply: deps.planContextualMemeReply || planContextualMemeReply,
+    getMemeCandidates: deps.getMemeCandidates || getMemeCandidates,
+    buildMemeImageOutput: deps.buildMemeImageOutput || buildMemeImageOutput,
     resolveVoiceRuntimeConfig: deps.resolveVoiceRuntimeConfig || resolveVoiceRuntimeConfig,
     toolRegistry: deps.toolRegistry || toolRegistry,
     enqueuePersistJob: deps.enqueuePersistJob || runtimeServices.queueManager?.enqueuePersist || null,
@@ -1471,13 +1535,18 @@ export async function processIncomingMessage(event, precomputed = null, options 
       chatType: normalizedEvent.chatType,
       chatId: normalizedEvent.chatId,
     };
+    const memeCandidates = await loadMemeCandidatesForReply({
+      event: normalizedEvent,
+      trace,
+      memoryContext: workflowContext.memoryContext,
+    }, deps);
     const memeDecision = deps.planContextualMemeReply({
       event: normalizedEvent,
       route: task,
       analysis,
       emotionResult,
       replyText,
-      memeCandidates: workflowContext.memoryContext?.memeMemories || [],
+      memeCandidates,
       userProfile: workflowContext.userProfile,
       settings: config,
     });
@@ -1495,19 +1564,42 @@ export async function processIncomingMessage(event, precomputed = null, options 
 
     await withTraceSpan(trace, 'send-text', async () => {
       if (memeDecision.shouldSend && memeDecision.asset) {
+        let memeSent = false;
+        let sendError = null;
         try {
+          const imageOutput = await deps.buildMemeImageOutput(memeDecision.asset);
           const sent = await deps.sendStructuredReply(replyTarget, [
             { type: 'text', text: replyText },
-            {
-              type: 'image',
-              image: {
-                file: memeDecision.asset.storagePath || memeDecision.asset.imageUrl,
-              },
-            },
+            imageOutput,
           ]);
           if (!sent) {
             throw new Error('structured-meme-message-empty');
           }
+          memeSent = true;
+        } catch (error) {
+          sendError = error;
+        }
+
+        if (!memeSent && memeDecision.asset.storagePath) {
+          try {
+            const imageOutput = await deps.buildMemeImageOutput(memeDecision.asset, { preferBase64: true });
+            if (!imageOutput?.image?.base64) {
+              throw sendError || new Error('meme-base64-fallback-unavailable');
+            }
+            const sent = await deps.sendStructuredReply(replyTarget, [
+              { type: 'text', text: replyText },
+              imageOutput,
+            ]);
+            if (!sent) {
+              throw new Error('structured-meme-message-empty');
+            }
+            memeSent = true;
+          } catch (error) {
+            sendError = error;
+          }
+        }
+
+        if (memeSent) {
           memeDecision.recordSent?.();
           recordWorkflowMetric('yuno_meme_auto_sent_total', 1, {
             chat_type: normalizedEvent.chatType,
@@ -1521,20 +1613,20 @@ export async function processIncomingMessage(event, precomputed = null, options 
             });
           });
           return;
-        } catch (error) {
-          recordWorkflowMetric('yuno_meme_auto_skipped_total', 1, {
-            chat_type: normalizedEvent.chatType,
-            reason: 'send-failed',
-          });
-          logger.warn('meme', 'Contextual meme send failed; falling back to text reply', {
-            traceId: trace.traceId,
-            chatType: normalizedEvent.chatType,
-            chatId: normalizedEvent.chatId,
-            userId: normalizedEvent.userId,
-            assetId: memeDecision.asset.assetId,
-            message: error.message,
-          });
         }
+
+        recordWorkflowMetric('yuno_meme_auto_skipped_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          reason: 'send-failed',
+        });
+        logger.warn('meme', 'Contextual meme send failed; falling back to text reply', {
+          traceId: trace.traceId,
+          chatType: normalizedEvent.chatType,
+          chatId: normalizedEvent.chatId,
+          userId: normalizedEvent.userId,
+          assetId: memeDecision.asset.assetId,
+          message: sendError?.message || 'unknown-error',
+        });
       } else if (memeDecision.reason && !['mode-off', 'disabled', 'no-candidate'].includes(memeDecision.reason)) {
         recordWorkflowMetric('yuno_meme_auto_skipped_total', 1, {
           chat_type: normalizedEvent.chatType,

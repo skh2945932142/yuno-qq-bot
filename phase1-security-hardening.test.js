@@ -88,6 +88,32 @@ test('onebot webhook rejects missing or invalid shared secret before processing 
   assert.equal(invalid.statusCode, 401);
 });
 
+test('onebot webhook requires a configured shared secret in production mode', async () => {
+  const app = createApp({
+    config: {
+      ...config,
+      nodeEnv: 'production',
+      onebotWebhookSecret: '',
+      webhookBodyLimit: '128kb',
+    },
+  });
+
+  const response = await invokeApp(app, {
+    method: 'POST',
+    url: '/onebot',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      post_type: 'message',
+      message_type: 'group',
+      group_id: 'group-1',
+      user_id: config.adminQq || 'admin-user',
+      raw_message: '/watch add owned',
+    },
+  });
+
+  assert.equal(response.statusCode, 401);
+});
+
 test('onebot webhook accepts x-yuno-webhook-secret and bearer authorization', async () => {
   const app = createApp({
     config: {
@@ -166,6 +192,51 @@ test('tool registry enforces admin permissions before tool execution', async () 
 
   const result = await registry.execute('admin_only_tool', {}, { event: { userId: 'admin-user' } });
   assert.deepEqual(result, { ok: true });
+});
+
+test('tool registry rate limits member write tools without blocking admins', async () => {
+  let executed = 0;
+  const registry = createToolRegistry({
+    logger: makeLogger(),
+    adminUserId: 'admin-user',
+    rateLimitState: new Map(),
+    nowMs: () => 1000,
+  });
+  registry.register({
+    name: 'member_write_tool',
+    permissions: ['member', 'admin'],
+    rateLimitMs: 10000,
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    execute: async () => {
+      executed += 1;
+      return { ok: true };
+    },
+  });
+
+  const memberContext = {
+    event: {
+      platform: 'qq',
+      chatType: 'private',
+      chatId: 'user-1',
+      userId: 'user-1',
+    },
+  };
+  await registry.execute('member_write_tool', {}, memberContext);
+  await assert.rejects(
+    () => registry.execute('member_write_tool', {}, memberContext),
+    /rate limited/i
+  );
+
+  await registry.execute('member_write_tool', {}, {
+    event: {
+      platform: 'qq',
+      chatType: 'private',
+      chatId: 'admin-user',
+      userId: 'admin-user',
+    },
+  });
+
+  assert.equal(executed, 2);
 });
 
 test('memory and style commands do not reveal profile details in group chat', async () => {

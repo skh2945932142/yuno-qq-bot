@@ -3,6 +3,7 @@ import { config } from './config.js';
 const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_MIN_SCORE = 0.72;
 const DEFAULT_MAX_PER_HOUR = 3;
+const DEFAULT_AUTO_SEND_PROBABILITY = 0.25;
 const HOUR_MS = 60 * 60 * 1000;
 
 const cooldownState = new Map();
@@ -56,6 +57,14 @@ function hasAny(text, words) {
 
 function getAssetPath(asset = {}) {
   return asset.storagePath || asset.imageUrl || '';
+}
+
+function normalizeProbability(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_AUTO_SEND_PROBABILITY;
+  }
+  return Math.min(1, Math.max(0, parsed));
 }
 
 function normalizeCandidate(asset) {
@@ -163,6 +172,7 @@ export function planContextualMemeReply({
   userProfile = {},
   settings = config,
   now = new Date(),
+  random = Math.random,
 } = {}) {
   const mode = normalizeMode(settings);
   if (!(settings.memeEnabled ?? true)) {
@@ -260,6 +270,21 @@ export function planContextualMemeReply({
       mode,
       asset: best.asset,
       score: best.score,
+    };
+  }
+
+  const probability = normalizeProbability(settings.memeAutoSendProbability);
+  const rawRoll = typeof random === 'function' ? Number(random()) : Math.random();
+  const roll = Number.isFinite(rawRoll) ? rawRoll : 1;
+  if (probability <= 0 || (probability < 1 && roll >= probability)) {
+    return {
+      shouldSend: false,
+      suggested: true,
+      reason: 'probability-skip',
+      mode,
+      asset: best.asset,
+      score: best.score,
+      probability,
     };
   }
 
