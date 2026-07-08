@@ -868,13 +868,29 @@ async function runToolTask(task, context, trace, deps) {
 }
 
 function isRecoverableMemoryExtractionError(error) {
-  const status = Number(error?.response?.status || error?.status || 0);
+  const status = extractHttpStatusFromError(error);
   if ([400, 401, 403, 404, 422].includes(status)) {
     return true;
   }
 
   const code = String(error?.code || '').toUpperCase();
   return code === 'ERR_BAD_REQUEST';
+}
+
+function extractHttpStatusFromError(error) {
+  const directStatus = Number(error?.response?.status || error?.status || 0);
+  if (Number.isFinite(directStatus) && directStatus > 0) {
+    return directStatus;
+  }
+
+  const message = String(error?.message || '');
+  const match = message.match(/(?:status code|HTTP|status)\s*[:=]?\s*(\d{3})/i);
+  if (!match?.[1]) {
+    return 0;
+  }
+
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 async function persistReplyState(context, payload, trace, deps) {
@@ -944,7 +960,7 @@ async function persistReplyState(context, payload, trace, deps) {
           chatId: context.event.chatId,
           userId: context.event.userId,
           messageId: context.event.messageId,
-          status: error.response?.status || error.status,
+          status: extractHttpStatusFromError(error) || undefined,
           code: error.code,
           message: error.message,
         });
