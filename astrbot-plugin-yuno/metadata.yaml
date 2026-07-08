@@ -1,0 +1,5 @@
+name: yuno_qq_bot
+version: 1.0.0
+author: Yuno Bot Team
+desc: Yuno 人格核心 HTTP 调用插件，通过 API 连接到 yuno-qq-bot 服务
+repo: https://github.com/skh2945932142/yuno-qq-bot
