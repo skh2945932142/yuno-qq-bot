@@ -252,6 +252,57 @@ test('processIncomingMessage runs the unified workflow and persists memory with 
   assert.equal(persistedMessages[1].role, 'assistant');
 });
 
+test('processIncomingMessage injects retrieved human style examples into reply prompt', async () => {
+  const capturedPrompts = [];
+  const styleCalls = [];
+  const event = createEvent({
+    rawText: '今天有点难受',
+    text: '今天有点难受',
+  });
+
+  const reply = await processIncomingMessage(event, createPrecomputedContext(event, {
+    analysis: {
+      shouldRespond: true,
+      confidence: 0.92,
+      intent: 'help',
+      sentiment: 'negative',
+      relevance: 0.95,
+      reason: 'private-default-reply',
+      topics: ['emotion'],
+      ruleSignals: ['private-chat'],
+      replyStyle: 'comfort',
+    },
+  }), {
+    deps: createWorkflowDeps({
+      retrieveReplyStyleExamples: async (args) => {
+        styleCalls.push(args);
+        return [{
+          id: 'private-comfort-short',
+          scene: 'private',
+          intent: 'help',
+          userText: '今晚有点撑不住',
+          humanReply: '先缓一下，我在听。你不用一下子讲完。',
+          tags: ['comfort', 'short'],
+        }];
+      },
+      chat: async (_messages, systemPrompt, userTurn) => {
+        capturedPrompts.push(systemPrompt);
+        return JSON.stringify({
+          text: `reply:${userTurn}`,
+          sendVoice: false,
+          voiceText: '',
+        });
+      },
+    }),
+  });
+
+  assert.equal(reply, 'reply:今天有点难受');
+  assert.equal(styleCalls.length, 1);
+  assert.equal(styleCalls[0].userTurn, '今天有点难受');
+  assert.match(capturedPrompts[0], /真人回复风格参考/);
+  assert.match(capturedPrompts[0], /先缓一下，我在听/);
+});
+
 test('processIncomingMessage can send contextual meme as structured text plus image', async () => {
   const event = createEvent({
     chatType: 'group',

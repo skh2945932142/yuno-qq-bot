@@ -1,0 +1,28 @@
+[
+  {
+    "id": "private-comfort-natural",
+    "input": "我今晚有点焦虑",
+    "reply": "先慢一点，我在听。你不用一下子讲完。",
+    "context": {
+      "event": { "chatType": "private" },
+      "route": { "category": "private_chat" },
+      "analysis": { "intent": "help", "sentiment": "negative", "ruleSignals": ["private-chat"] },
+      "emotionResult": { "emotion": "SAD" },
+      "replyPlan": { "interpretation": { "needsEmpathy": true, "subIntent": "情绪承接" } }
+    },
+    "expected": { "maxNaturalnessFlags": 0, "minStyleExamples": 1 }
+  },
+  {
+    "id": "group-meme-natural",
+    "input": "笑死，这也太抽象了",
+    "reply": "这个梗我接到了，确实有点离谱。",
+    "context": {
+      "event": { "chatType": "group" },
+      "route": { "category": "group_chat" },
+      "analysis": { "intent": "chat", "sentiment": "positive", "ruleSignals": ["direct-mention", "meme-topic"] },
+      "emotionResult": { "emotion": "CALM" },
+      "replyPlan": { "interpretation": { "needsEmpathy": false, "subIntent": "玩梗" } }
+    },
+    "expected": { "maxNaturalnessFlags": 0, "minStyleExamples": 1 }
+  }
+]

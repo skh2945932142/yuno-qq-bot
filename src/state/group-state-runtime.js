@@ -3,6 +3,7 @@ import { logger } from '../logger.js';
 import { GroupEvent, GroupState } from '../models.js';
 import { clamp } from '../utils.js';
 import { recordWorkflowMetric } from '../metrics.js';
+import { updateGroupStyleProfile } from '../group-style-memory.js';
 
 const GROUP_STATE_CACHE_TTL_MS = 15_000;
 const RECENT_EVENTS_CACHE_TTL_MS = 10_000;
@@ -200,6 +201,10 @@ export async function updateGroupStateFromAnalysis({
     0,
     100
   );
+  const nextStyleProfile = updateGroupStyleProfile(existing.styleProfile, {
+    text: summary,
+    analysis,
+  });
 
   const topicSet = [];
   for (const topic of [...(analysis.topics || []), ...(existing.recentTopics || [])]) {
@@ -215,6 +220,7 @@ export async function updateGroupStateFromAnalysis({
       moodIntensity: nextIntensity,
       activityLevel: nextActivity,
       recentTopics: topicSet,
+      styleProfile: nextStyleProfile,
       lastMessageAt: now,
       lastActiveWindowAt: nextActivity >= 60 ? now : existing.lastActiveWindowAt,
       lastInteractionSummary: summary || existing.lastInteractionSummary,

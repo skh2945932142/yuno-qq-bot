@@ -10,6 +10,8 @@
     "test": "node run-phase1-tests.js",
     "eval": "node evals/run-evals.js",
     "eval:report": "node evals/run-evals.js --report reports/eval-experience.md",
+    "eval:style": "node evals/run-style-evals.js",
+    "eval:style:report": "node evals/run-style-evals.js --report reports/eval-reply-style.md",
     "kb:sync": "node scripts/kb-sync.js",
     "meme:import": "node scripts/meme-import.js",
     "doctor": "node doctor.js",

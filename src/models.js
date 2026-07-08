@@ -64,6 +64,7 @@ const GroupStateSchema = new mongoose.Schema({
   lastMessageAt: { type: Date, default: Date.now },
   lastActiveWindowAt: { type: Date, default: null },
   lastInteractionSummary: { type: String, default: '' },
+  styleProfile: { type: mongoose.Schema.Types.Mixed, default: {} },
 }, { minimize: false });
 export const GroupState = mongoose.model('GroupState', GroupStateSchema);
 

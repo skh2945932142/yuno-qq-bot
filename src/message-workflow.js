@@ -42,6 +42,8 @@ import { indexMemeAssetSemantics, indexUserMemoryEvents, retrieveMemoryContext }
 import { markMemeUsed } from './meme-library.js';
 import { planContextualMemeReply } from './meme-reply-planner.js';
 import { getMemeCandidates, mergeMemeCandidates } from './meme-provider.js';
+import { retrieveReplyStyleExamples } from './reply-style-retriever.js';
+import { inspectReplyNaturalness, polishReplyNaturalness } from './reply-naturalness.js';
 
 registerQueryTools(toolRegistry);
 
@@ -646,6 +648,10 @@ function createWorkflowDeps(deps = {}) {
     planContextualMemeReply: deps.planContextualMemeReply || planContextualMemeReply,
     getMemeCandidates: deps.getMemeCandidates || getMemeCandidates,
     buildMemeImageOutput: deps.buildMemeImageOutput || buildMemeImageOutput,
+    logger: deps.logger || logger,
+    retrieveReplyStyleExamples: deps.retrieveReplyStyleExamples || retrieveReplyStyleExamples,
+    inspectReplyNaturalness: deps.inspectReplyNaturalness || inspectReplyNaturalness,
+    polishReplyNaturalness: deps.polishReplyNaturalness || polishReplyNaturalness,
     resolveVoiceRuntimeConfig: deps.resolveVoiceRuntimeConfig || resolveVoiceRuntimeConfig,
     toolRegistry: deps.toolRegistry || toolRegistry,
     enqueuePersistJob: deps.enqueuePersistJob || runtimeServices.queueManager?.enqueuePersist || null,
@@ -912,7 +918,24 @@ async function persistReplyState(context, payload, trace, deps) {
         userProfile: context.userProfile,
       });
       if (events.length > 0) {
-        await deps.indexUserMemoryEvents(events);
+        try {
+          await deps.indexUserMemoryEvents(events);
+        } catch (error) {
+          recordWorkflowMetric('yuno_memory_vector_index_failures_total', 1, {
+            chat_type: context.event.chatType,
+          });
+          deps.logger.warn('memory', 'User memory vector indexing failed after persistence', {
+            traceId: trace.traceId,
+            chatType: context.event.chatType,
+            chatId: context.event.chatId,
+            userId: context.event.userId,
+            messageId: context.event.messageId,
+            count: events.length,
+            status: error.response?.status || error.status,
+            code: error.code,
+            message: error.message,
+          });
+        }
       }
       return events;
     },
@@ -1327,6 +1350,36 @@ export async function processIncomingMessage(event, precomputed = null, options 
       specialUser: workflowContext.specialUser,
     });
 
+    let replyStyleExamples = [];
+    try {
+      replyStyleExamples = await withTraceSpan(trace, 'retrieve-reply-style-examples', () => deps.retrieveReplyStyleExamples({
+        event: normalizedEvent,
+        route: task,
+        analysis,
+        emotionResult,
+        replyPlan,
+        userTurn,
+        replyLengthProfile,
+      }), {
+        route: task.category,
+        promptProfile: replyLengthProfile.promptProfile,
+      });
+    } catch (error) {
+      recordWorkflowMetric('yuno_reply_style_retrieval_failures_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        route: task.category,
+      });
+      deps.logger.warn('model', 'Reply style example retrieval failed', {
+        traceId: trace.traceId,
+        chatType: normalizedEvent.chatType,
+        chatId: normalizedEvent.chatId,
+        userId: normalizedEvent.userId,
+        messageId: normalizedEvent.messageId,
+        message: error.message,
+      });
+      replyStyleExamples = [];
+    }
+
     const voiceReplyPolicy = {
       allowed: shouldAllowVoiceReplyForEvent(normalizedEvent),
       suggestedByEmotion: deps.shouldSendVoiceForEmotion(emotionResult),
@@ -1350,6 +1403,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       replyPlan,
       personalityStrategy,
       voiceReplyPolicy,
+      replyStyleExamples,
     })), {
       route: task.category,
       promptProfile: replyLengthProfile.promptProfile,
@@ -1357,6 +1411,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       replyPlanType: replyPlan.type,
       personalityStance: personalityStrategy.stance,
       relationshipStage: personalityStrategy.relationshipStage,
+      replyStyleExampleCount: replyStyleExamples.length,
     });
 
     let visibleReplyText = '';
@@ -1528,8 +1583,32 @@ export async function processIncomingMessage(event, precomputed = null, options 
       });
     }
 
-    const replyText = shapeChatReplyText(visibleReplyText, emotionResult);
-    const voiceText = shapeChatReplyText(replyDecision.voiceText || replyText, emotionResult);
+    const shapedReplyText = shapeChatReplyText(visibleReplyText, emotionResult);
+    const naturalness = deps.inspectReplyNaturalness(shapedReplyText, {
+      event: normalizedEvent,
+      route: task,
+      replyLengthProfile,
+    });
+    if (!naturalness.ok) {
+      for (const flag of naturalness.flags) {
+        recordWorkflowMetric('yuno_reply_naturalness_flags_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          route: task.category,
+          flag,
+        });
+      }
+    }
+    const replyText = deps.polishReplyNaturalness(shapedReplyText, {
+      event: normalizedEvent,
+      route: task,
+      replyLengthProfile,
+    });
+    const shapedVoiceText = shapeChatReplyText(replyDecision.voiceText || replyText, emotionResult);
+    const voiceText = deps.polishReplyNaturalness(shapedVoiceText, {
+      event: normalizedEvent,
+      route: task,
+      replyLengthProfile,
+    });
     const replyTarget = {
       platform: normalizedEvent.platform,
       chatType: normalizedEvent.chatType,
