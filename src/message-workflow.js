@@ -867,6 +867,16 @@ async function runToolTask(task, context, trace, deps) {
   ), { toolName: task.toolName });
 }
 
+function isRecoverableMemoryExtractionError(error) {
+  const status = Number(error?.response?.status || error?.status || 0);
+  if ([400, 401, 403, 404, 422].includes(status)) {
+    return true;
+  }
+
+  const code = String(error?.code || '').toUpperCase();
+  return code === 'ERR_BAD_REQUEST';
+}
+
 async function persistReplyState(context, payload, trace, deps) {
   const namedTasks = [];
 
@@ -911,12 +921,35 @@ async function persistReplyState(context, payload, trace, deps) {
       if (!config.memoryExtractionEnabled) {
         return [];
       }
-      const events = await deps.persistUserMemoryEvents({
-        event: context.event,
-        text: payload.userTurn,
-        analysis: payload.analysis,
-        userProfile: context.userProfile,
-      });
+      let events = [];
+      try {
+        events = await deps.persistUserMemoryEvents({
+          event: context.event,
+          text: payload.userTurn,
+          analysis: payload.analysis,
+          userProfile: context.userProfile,
+        });
+      } catch (error) {
+        if (!isRecoverableMemoryExtractionError(error)) {
+          throw error;
+        }
+
+        recordWorkflowMetric('yuno_memory_extraction_skipped_total', 1, {
+          chat_type: context.event.chatType,
+          reason: 'provider-error',
+        });
+        deps.logger.warn('memory', 'User memory extraction skipped after provider error', {
+          traceId: trace.traceId,
+          chatType: context.event.chatType,
+          chatId: context.event.chatId,
+          userId: context.event.userId,
+          messageId: context.event.messageId,
+          status: error.response?.status || error.status,
+          code: error.code,
+          message: error.message,
+        });
+        return [];
+      }
       if (events.length > 0) {
         try {
           await deps.indexUserMemoryEvents(events);

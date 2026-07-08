@@ -182,3 +182,72 @@ test('processPersistJob does not fail post-reply updates when memory vector inde
   assert.equal(warnings[0].message, 'User memory vector indexing failed after persistence');
   assert.equal(warnings[0].fields.status, 400);
 });
+
+test('processPersistJob treats memory extraction provider 400 as a skipped optional update', async () => {
+  const calls = [];
+  const warnings = [];
+  const extractionError = new Error('Request failed with status code 400');
+  extractionError.response = { status: 400 };
+
+  const result = await processPersistJob({
+    event: {
+      platform: 'qq',
+      chatType: 'private',
+      chatId: '2945932142',
+      userId: '2945932142',
+      userName: 'Tester',
+      text: '记住我下周有面试',
+      rawText: '记住我下周有面试',
+      messageId: '2031350560',
+    },
+    analysis: {
+      reason: 'private-default-reply',
+      sentiment: 'neutral',
+      intent: 'help',
+      relevance: 0.9,
+      confidence: 0.9,
+      ruleSignals: [],
+    },
+    emotionResult: { emotion: 'CALM', intensity: 0.4 },
+    summary: 'Tester: 记住我下周有面试',
+    username: 'Tester',
+    rawText: '记住我下周有面试',
+    userTurn: '记住我下周有面试',
+    nextMessages: [
+      { role: 'user', content: '记住我下周有面试' },
+      { role: 'assistant', content: '我记住了。' },
+    ],
+    contextSnapshot: {
+      session: { platform: 'qq', chatType: 'private', chatId: '2945932142', userId: '2945932142' },
+      isAdvanced: false,
+      specialUser: null,
+      contextMode: 'snapshot',
+      relation: null,
+      userState: null,
+      userProfile: null,
+    },
+  }, {
+    deps: {
+      appendConversationMessages: async () => {
+        calls.push('history');
+      },
+      persistUserMemoryEvents: async () => {
+        calls.push('memory-extraction-attempted');
+        throw extractionError;
+      },
+      indexUserMemoryEvents: async () => {
+        calls.push('memory-index-unexpected');
+      },
+      logger: {
+        warn: (category, message, fields) => warnings.push({ category, message, fields }),
+        info: () => {},
+      },
+    },
+  });
+
+  assert.equal(result, true);
+  assert.deepEqual(calls, ['history', 'memory-extraction-attempted']);
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].message, 'User memory extraction skipped after provider error');
+  assert.equal(warnings[0].fields.status, 400);
+});
