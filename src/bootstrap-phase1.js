@@ -14,7 +14,6 @@ import { getTelemetryStatus, initializeTelemetry } from './telemetry.js';
 import { setRuntimeServices, getRuntimeServices } from './runtime-services.js';
 import { recordInboundGroupObservation } from './group-ops.js';
 import { evaluateGroupAutomation } from './group-automation.js';
-import { runYunoConversation } from './yuno-core.js';
 import { isNonTargetPokeEvent } from './message-analysis.js';
 import { resolveFfmpegPath } from './services/audio.js';
 
