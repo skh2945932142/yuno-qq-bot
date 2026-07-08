@@ -7,6 +7,7 @@ import { logger } from './logger.js';
 import { startScheduler } from './scheduler.js';
 import { validateOnebotMessageEvent } from './adapters/onebot-event.js';
 import { processPersistJob, processReplyJob, shouldRespondToEvent } from './message-workflow.js';
+import { runYunoConversation } from './yuno-core.js';
 import { createQueueManager } from './queue-manager.js';
 import { metrics, recordWorkflowMetric } from './metrics.js';
 import { getTelemetryStatus, initializeTelemetry } from './telemetry.js';
@@ -343,6 +344,34 @@ export function createApp(options = {}) {
         chatId: event.chatId,
         userId: event.userId,
         messageId: event.messageId,
+      });
+    }
+  });
+
+  app.post('/api/yuno/conversation', async (req, res) => {
+    if (!hasSharedSecret(req, runtimeConfig.onebotWebhookSecret, 'x-yuno-api-secret', {
+      requireSecret: isProductionRuntime(runtimeConfig),
+    })) {
+      res.status(401).json({ error: 'unauthorized' });
+      return;
+    }
+
+    try {
+      const result = await runYunoConversation(req.body.input, {
+        responseMode: req.body.responseMode || 'capture',
+        pluginRoute: req.body.pluginRoute,
+        toolResult: req.body.toolResult,
+      });
+
+      res.json(result);
+    } catch (error) {
+      logger.error('api', 'Yuno conversation API failed', {
+        message: error.message,
+        stack: error.stack,
+      });
+      res.status(500).json({
+        error: 'internal_error',
+        message: error.message,
       });
     }
   });
