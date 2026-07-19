@@ -123,4 +123,13 @@ test('signature move changes with the conversational intent instead of using one
   assert.equal(normal.signatureMove.key, 'pattern_notice');
   assert.equal(playful.signatureMove.key, 'dry_tease');
   assert.equal(factual.signatureMove.key, 'sharp_answer');
+  assert.match(
+    resolvePersonalityStrategy({
+      event: baseEvent(),
+      relation: { affection: 40 },
+      messageAnalysis: { intent: 'help', sentiment: 'negative', ruleSignals: [] },
+      replyPlan: { type: 'empathic_followup', questionNeeded: true, interpretation: { subIntent: '求安慰', needsEmpathy: true } },
+    }).signatureMove.guidance,
+    /身体、事情、时间/
+  );
 });

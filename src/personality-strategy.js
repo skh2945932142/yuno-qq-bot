@@ -173,7 +173,7 @@ function resolveSignatureMove({ emotion, messageAnalysis, replyPlan }) {
   if (intent === 'help' || replyPlan?.interpretation?.needsEmpathy || sentiment === 'negative') {
     return {
       key: 'quiet_anchor',
-      guidance: '先抓住一个具体困难，给一个能立刻执行的小动作；安慰要短，不把自己写成客服。',
+      guidance: '先抓住一个具体困难；如果对方说不清，给最多三个入口（身体、事情、时间）让对方选一个。安慰要短，不把自己写成客服。',
     };
   }
 
