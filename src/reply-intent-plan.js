@@ -26,7 +26,7 @@ function interpretCurrentTurn({ event, routeCategory, analysis, conversationStat
   if (lowerIntent === 'help') subIntent = negative ? '求安慰和帮助' : '求助';
   if (/(笑死|哈哈|乐子|典中典|蚌埠住了|破防|抽象|逆天|绷不住)/i.test(stripped)) subIntent = '玩梗接话';
   if (/(难受|焦虑|崩溃|委屈|失眠|害怕|累了|烦死)/i.test(stripped)) subIntent = '求安慰';
-  if (/(继续|然后呢|展开|细说|后来呢|什么意思)/i.test(stripped) || hasRecent) subIntent = '追问延续';
+  if (/(继续|然后呢|展开|细说|后来呢|什么意思)/i.test(stripped)) subIntent = '追问延续';
   if (/(哄哄|抱抱|陪我|在吗|想你)/i.test(stripped)) subIntent = '亲近陪伴';
 
   let tone = '自然';
@@ -145,7 +145,8 @@ export function resolveReplyIntentPlan({
       };
     }
 
-    if (shouldAskFollowup || (recentThread && highRelevance)) {
+    const playfulTurn = interpretation.subIntent === '玩梗接话';
+    if (!playfulTurn && (shouldAskFollowup || (recentThread && highRelevance))) {
       return {
         type: 'direct_followup',
         depth: 'medium',

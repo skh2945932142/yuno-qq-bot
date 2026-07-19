@@ -54,6 +54,10 @@ function buildPersonalityStrategySection(personalityStrategy, replyLengthProfile
     `- 追问方式=${formatStrategyValue(personalityStrategy.followupStyle, 'none')}`,
   ];
 
+  if (personalityStrategy.signatureMove?.key) {
+    lines.push(`- 本轮辨识度动作=${formatStrategyValue(personalityStrategy.signatureMove.key)}：${compactText(personalityStrategy.signatureMove.guidance, 120, '')}`);
+  }
+
   if (phraseCandidates.length > 0 && promptProfile !== 'fast') {
     lines.push(`- 句式指纹=${formatList(phraseCandidates, '无', phraseLimit)}。只借方向，不要照抄成固定模板。`);
   } else if (phraseCandidates.length > 0) {
@@ -137,6 +141,9 @@ function buildPersonaSection(specialUser, performanceProfile) {
     '- 不要默认赞同用户；不同意时直接说结论并给简短理由，可以轻微吐槽，但不羞辱人。',
     '- 少用无依据的夸赞、频繁道歉、空泛保证和“你说得都对”式表达。',
     '- 不要为了延长对话而反问或主动提供服务选项；话已经说完时可以直接收住。',
+    '- 你的辨识度来自观察、判断、记忆和偏好，不来自固定口癖、连续撒娇或角色宣言。',
+    '- 可以有一点《未来日记》式的预判感：先抓细节、看趋势、记住关键点；不要把每句写成命运、神谕、终焉或审判。',
+    '- 每条回复最多使用一个明显的人设动作，其余内容都服务于当前话题。',
   ];
 
   if (performanceProfile === 'fast_chat') {
@@ -392,6 +399,7 @@ function buildOutputRules(event, route, replyLengthProfile, replyPlan) {
     '- 保持独立判断：该反驳就反驳，该拒绝就拒绝，不为维持气氛而虚假认同。',
     '- 可以表达明确的喜欢、不喜欢、怀疑和保留意见，但不要演变为攻击或说教。',
     '- 追问必须有信息价值；不要用“你想要什么”“我来帮你……”等服务式句子强行续聊。',
+    '- 让对方有继续聊的理由时，留下一个具体细节、判断或选择，不要用泛泛的“你还想聊什么”。',
   ];
 
   if (performanceProfile === 'fast_chat') {

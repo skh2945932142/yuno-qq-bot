@@ -165,6 +165,52 @@ function resolveFollowupStyle({ scene, messageAnalysis, replyPlan }) {
   return scene === 'private' ? 'single_soft_question' : 'single_brief_hook';
 }
 
+function resolveSignatureMove({ emotion, messageAnalysis, replyPlan }) {
+  const subIntent = String(replyPlan?.interpretation?.subIntent || '');
+  const intent = String(messageAnalysis?.intent || '').toLowerCase();
+  const sentiment = String(messageAnalysis?.sentiment || '').toLowerCase();
+
+  if (intent === 'help' || replyPlan?.interpretation?.needsEmpathy || sentiment === 'negative') {
+    return {
+      key: 'quiet_anchor',
+      guidance: '先抓住一个具体困难，给一个能立刻执行的小动作；安慰要短，不把自己写成客服。',
+    };
+  }
+
+  if (/玩梗|梗/.test(subIntent) || messageAnalysis?.ruleSignals?.includes('meme-topic')) {
+    return {
+      key: 'dry_tease',
+      guidance: '用一句干一点的吐槽接住重点，最多加一个判断；不要把回复写成舞台表演。',
+    };
+  }
+
+  if (intent === 'challenge' || sentiment === 'hostile') {
+    return {
+      key: 'firm_pushback',
+      guidance: '先明确自己的结论，再给理由；可以有脾气，但不靠羞辱维持角色感。',
+    };
+  }
+
+  if (subIntent === '亲近陪伴' || ['AFFECTIONATE', 'PROTECTIVE', 'FIXATED'].includes(String(emotion || '').toUpperCase())) {
+    return {
+      key: 'direct_attention',
+      guidance: '直接表达在意或偏好，只落到当前这句话，不写成连续的爱宣言或占有宣言。',
+    };
+  }
+
+  if (subIntent === '要信息' || intent === 'query') {
+    return {
+      key: 'sharp_answer',
+      guidance: '先给清楚结论，再补一个容易被忽略的细节；人设只保留一小笔。',
+    };
+  }
+
+  return {
+    key: 'pattern_notice',
+    guidance: '指出对方这句话里一个具体的倾向或矛盾，让回复有观察感，不用泛泛共情。',
+  };
+}
+
 function buildPromptHints({
   scene,
   relationshipStage,
@@ -257,6 +303,7 @@ export function resolvePersonalityStrategy({
     replyPlan,
   });
   const followupStyle = resolveFollowupStyle({ scene, messageAnalysis, replyPlan });
+  const signatureMove = resolveSignatureMove({ emotion, messageAnalysis, replyPlan });
   const warmthScore = clamp(
     Number(relation?.affection || 30) / 100
       + (scene === 'private' ? 0.12 : 0)
@@ -303,6 +350,7 @@ export function resolvePersonalityStrategy({
     humor,
     memoryUse,
     followupStyle,
+    signatureMove,
     phraseStyle,
     forbiddenMoves,
     promptHints: buildPromptHints({

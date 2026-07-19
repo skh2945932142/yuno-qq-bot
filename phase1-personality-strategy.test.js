@@ -99,3 +99,28 @@ test('jealous strategy keeps safety boundaries explicit', () => {
   assert.match(strategy.promptHints.join(' '), /不能攻击第三方/);
   assert.match(strategy.forbiddenMoves.join(' '), /现实威胁|羞辱|攻击第三方/);
 });
+
+test('signature move changes with the conversational intent instead of using one catchphrase', () => {
+  const normal = resolvePersonalityStrategy({
+    event: baseEvent(),
+    relation: { affection: 40 },
+    messageAnalysis: { intent: 'chat', sentiment: 'neutral', ruleSignals: [] },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '接话' } },
+  });
+  const playful = resolvePersonalityStrategy({
+    event: baseEvent({ chatType: 'group', chatId: 'g1' }),
+    relation: { affection: 40 },
+    messageAnalysis: { intent: 'chat', sentiment: 'positive', ruleSignals: ['meme-topic'] },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '玩梗接话' } },
+  });
+  const factual = resolvePersonalityStrategy({
+    event: baseEvent(),
+    relation: { affection: 40 },
+    messageAnalysis: { intent: 'query', sentiment: 'neutral', ruleSignals: [] },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '要信息' } },
+  });
+
+  assert.equal(normal.signatureMove.key, 'pattern_notice');
+  assert.equal(playful.signatureMove.key, 'dry_tease');
+  assert.equal(factual.signatureMove.key, 'sharp_answer');
+});

@@ -67,6 +67,10 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
         guidance: '可以低频引用共同记忆或约定，但只点到为止。',
       },
       followupStyle: 'single_soft_question',
+      signatureMove: {
+        key: 'direct_attention',
+        guidance: '直接表达在意或偏好，只落到当前这句话。',
+      },
       phraseStyle: {
         candidates: ['我当然会先看你这边。', '这件事我会替你记着。'],
         guidance: '可借用句式方向，但不要连续复用同一句开场、口癖或收尾。',
@@ -87,6 +91,8 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
   assert.match(prompt, /现实威胁|伤害/);
   assert.match(prompt, /不要为了延长对话而反问/);
   assert.match(prompt, /服务式句子/);
+  assert.match(prompt, /未来日记/);
+  assert.match(prompt, /本轮辨识度动作/);
   assert.match(prompt, /接话规划/);
   assert.match(prompt, /当前理解/);
 });

@@ -50,3 +50,22 @@ test('group default stays conservative', () => {
   assert.equal(plan.depth, 'short');
 });
 
+test('recent private meme chatter keeps its playful interpretation without forcing a follow-up question', () => {
+  const plan = resolveReplyIntentPlan({
+    event: createEvent({ chatType: 'private' }),
+    route: { category: 'private_chat' },
+    analysis: { intent: 'chat', sentiment: 'positive', relevance: 0.95 },
+    conversationState: { messages: [{}, {}, {}] },
+  });
+
+  const playfulPlan = resolveReplyIntentPlan({
+    event: createEvent({ chatType: 'private', rawText: '笑死，这也太抽象了', text: '笑死，这也太抽象了' }),
+    route: { category: 'private_chat' },
+    analysis: { intent: 'chat', sentiment: 'positive', relevance: 0.95 },
+    conversationState: { messages: [{}, {}, {}] },
+  });
+
+  assert.equal(plan.questionNeeded, true);
+  assert.equal(playfulPlan.interpretation.subIntent, '玩梗接话');
+  assert.equal(playfulPlan.questionNeeded, false);
+});
