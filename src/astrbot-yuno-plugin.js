@@ -1,5 +1,6 @@
 import { runYunoConversation } from './yuno-core.js';
 import { createAstrBotPluginRouter } from './astrbot-plugin-router.js';
+import { shouldBypassAstrBotCommand } from './astrbot-command-bypass.js';
 
 function normalizeAstrBotScene(context = {}) {
   return String(context.scene || context.chatType || context.messageType || 'group').toLowerCase() === 'private'
@@ -38,6 +39,52 @@ export function adaptAstrBotMessage(context = {}) {
   };
 }
 
+export function extractYunoReplyPayload(result = {}) {
+  if (!result || result.suppressed) {
+    return null;
+  }
+
+  const response = result.response || {};
+  const outputs = result.outputs || response.outputs || {};
+  const texts = [];
+  const legacyText = String(response.text || '').trim();
+  if (legacyText) {
+    texts.push(legacyText);
+  }
+
+  const replies = Array.isArray(outputs.replies) ? outputs.replies : [];
+  for (const item of replies) {
+    if (item?.type !== 'text') {
+      continue;
+    }
+    const text = String(item.text || '').trim();
+    if (text) {
+      texts.push(text);
+    }
+  }
+
+  const uniqueTexts = [...new Set(texts)];
+  if (uniqueTexts.length === 0) {
+    return null;
+  }
+
+  const structuredOutputs = Array.isArray(response.outputs) && response.outputs.length > 0
+    ? response.outputs
+    : Array.isArray(outputs.outputs) && outputs.outputs.length > 0
+      ? outputs.outputs
+      : replies;
+
+  return {
+    text: uniqueTexts.join('\n'),
+    outputs: structuredOutputs,
+    voices: Array.isArray(response.voices)
+      ? response.voices
+      : Array.isArray(outputs.voices)
+        ? outputs.voices
+        : [],
+  };
+}
+
 export function createAstrBotYunoPlugin(options = {}) {
   const runConversation = options.runConversation || runYunoConversation;
   const router = options.router || createAstrBotPluginRouter({
@@ -48,21 +95,26 @@ export function createAstrBotYunoPlugin(options = {}) {
   return {
     name: 'yuno-entry',
     async onMessage(context) {
+      if (shouldBypassAstrBotCommand(context)) {
+        return null;
+      }
+
       const input = adaptAstrBotMessage(context);
       const result = await router.route({
         ...context,
         input,
       });
+      const reply = extractYunoReplyPayload(result);
 
-      if (!result || result.suppressed || !result.response?.text) {
+      if (!reply) {
         return null;
       }
 
       return {
         plugin: result.plugin,
-        text: result.response.text,
-        outputs: result.response.outputs || [],
-        voices: result.response.voices || [],
+        text: reply.text,
+        outputs: reply.outputs,
+        voices: reply.voices,
         analysis: result.analysis,
         event: result.event,
       };

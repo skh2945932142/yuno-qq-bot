@@ -85,6 +85,8 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
   assert.match(prompt, /记忆/);
   assert.match(prompt, /特殊羁绊=/);
   assert.match(prompt, /现实威胁|伤害/);
+  assert.match(prompt, /不要为了延长对话而反问/);
+  assert.match(prompt, /服务式句子/);
   assert.match(prompt, /接话规划/);
   assert.match(prompt, /当前理解/);
 });

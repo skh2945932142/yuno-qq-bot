@@ -140,6 +140,41 @@ test('napcat-favorites provider falls back to get_collection_list when custom fa
   assert.match(result[0].semanticTags.join(','), /reaction/);
 });
 
+test('napcat-favorites provider accepts common nested NapCat favorite fields', async () => {
+  resetMemeProviderState();
+  const model = createFakeMemeModel();
+
+  const result = await getMemeCandidates({
+    chatId: 'g1',
+    provider: 'napcat-favorites',
+    limit: 2,
+  }, {
+    model,
+    postNapcat: async () => ({
+      data: {
+        data: [{
+          data: {
+            file_url: 'https://example.com/nested/favorite.webp',
+          },
+          name: 'nested-favorite',
+          file_md5: 'nested-md5',
+        }, {
+          data: {
+            base64: Buffer.from('gif-data').toString('base64'),
+          },
+          id: 'base64-face',
+        }],
+      },
+    }),
+    nowMs: 1000,
+  });
+
+  assert.equal(result.length, 2);
+  assert.equal(result[0].assetId, 'napcatfav:nested-md5');
+  assert.equal(result[0].imageUrl, 'https://example.com/nested/favorite.webp');
+  assert.match(result[1].imageUrl, /^base64:\/\//);
+});
+
 test('napcat-favorites provider uses cached global assets within sync ttl', async () => {
   resetMemeProviderState();
   const model = createFakeMemeModel();

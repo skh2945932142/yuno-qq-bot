@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adaptAstrBotMessage, createAstrBotYunoPlugin } from './src/astrbot-yuno-plugin.js';
+import { adaptAstrBotMessage, createAstrBotYunoPlugin, extractYunoReplyPayload } from './src/astrbot-yuno-plugin.js';
 
 test('adaptAstrBotMessage converts AstrBot-style context into Yuno input', () => {
   const input = adaptAstrBotMessage({
@@ -46,4 +46,59 @@ test('createAstrBotYunoPlugin returns structured output from routed Yuno Core', 
   assert.equal(result.text, 'Yuno is here.');
   assert.equal(result.plugin, 'yuno-chat');
   assert.equal(result.analysis.reason, 'test');
+});
+
+test('createAstrBotYunoPlugin bypasses AstrBot command handlers', async () => {
+  let routeCalled = false;
+  const plugin = createAstrBotYunoPlugin({
+    router: {
+      route: async () => {
+        routeCalled = true;
+        return {
+          plugin: 'yuno-chat',
+          suppressed: false,
+          response: { text: 'should not run' },
+        };
+      },
+    },
+  });
+
+  const result = await plugin.onMessage({
+    platform: 'qq',
+    scene: 'private',
+    userId: '100',
+    username: 'Alice',
+    message: '/表情管理 开启管理后台',
+    activatedHandlers: [
+      {
+        pluginName: 'meme_manager',
+        handlerName: 'start_webui',
+        eventFilters: [{ type: 'CommandFilter' }],
+      },
+    ],
+  });
+
+  assert.equal(result, null);
+  assert.equal(routeCalled, false);
+});
+
+test('extractYunoReplyPayload supports capture-mode outputs without legacy response text', () => {
+  const reply = extractYunoReplyPayload({
+    ok: true,
+    suppressed: false,
+    outputs: {
+      replies: [
+        {
+          type: 'text',
+          target: { platform: 'qq', chatType: 'private', chatId: '100' },
+          text: 'capture reply',
+        },
+      ],
+      voices: [],
+      outputs: [],
+    },
+  });
+
+  assert.equal(reply.text, 'capture reply');
+  assert.equal(reply.outputs[0].type, 'text');
 });

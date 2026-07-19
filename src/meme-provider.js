@@ -175,14 +175,28 @@ function pickFavoriteSource(item) {
   const candidates = [
     item.file,
     item.url,
+    item.file_url,
+    item.fileUrl,
     item.path,
     item.uri,
-    item.id,
-    item.file_id,
-    item.fileId,
+    item.src,
+    item.source,
+    item.base64 ? `base64://${String(item.base64).replace(/^base64:\/\//i, '')}` : '',
     item.data?.file,
     item.data?.url,
+    item.data?.file_url,
+    item.data?.fileUrl,
     item.data?.path,
+    item.data?.uri,
+    item.data?.src,
+    item.data?.source,
+    item.data?.base64 ? `base64://${String(item.data.base64).replace(/^base64:\/\//i, '')}` : '',
+    item.file_id,
+    item.fileId,
+    item.id,
+    item.data?.file_id,
+    item.data?.fileId,
+    item.data?.id,
   ];
   return String(candidates.find((candidate) => String(candidate || '').trim()) || '').trim();
 }
@@ -236,7 +250,7 @@ function buildNapcatFavoritePayload(item, now = new Date()) {
 
   const tags = deriveTagsFromFavorite(item, source);
   const sourceForStorage = source.replace(/^file:\/\//i, '');
-  const isRemote = /^https?:\/\//i.test(sourceForStorage);
+  const isRemote = /^(?:https?:|base64:\/\/)/i.test(sourceForStorage);
   const caption = tags.includes('qq-favorite')
     ? 'QQ favorite meme'
     : `QQ favorite meme: ${tags.join(', ')}`;

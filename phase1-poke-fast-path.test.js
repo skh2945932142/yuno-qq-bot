@@ -96,7 +96,12 @@ test('webhook ignores non-target poke notices before enqueueing reply jobs', asy
   };
 
   setRuntimeServices({ queueManager });
-  const app = createApp();
+  const app = createApp({
+    config: {
+      onebotWebhookSecret: '',
+      webhookBodyLimit: '128kb',
+    },
+  });
   const server = createServer(app);
   server.listen(0);
   await once(server, 'listening');

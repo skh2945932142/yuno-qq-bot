@@ -99,10 +99,10 @@ function detectTonePreference(text) {
 
 function detectEmojiStyle(text) {
   const normalized = String(text || '');
-  if (/[😂🤣😆😭🥺😍❤♥✨🔥]/u.test(normalized)) {
+  if (/[😂🤣😆😭🥺😍❤♥✨🔥]/u.test(normalized) || /\p{Extended_Pictographic}/u.test(normalized)) {
     return 'emoji-heavy';
   }
-  if (/\([^\)]{1,6}\)|（[^）]{1,6}）|QAQ|www|2333|哈哈哈+/i.test(normalized)) {
+  if (/\([^\)]{1,6}\)|（[^）]{1,6}）|QAQ|QwQ|OvO|www|2333|哈哈哈+|xswl|xs/i.test(normalized)) {
     return 'expressive-text';
   }
   return '';
@@ -121,7 +121,9 @@ function detectResponsePreference(text) {
 
 function detectHumorStyle(text) {
   const normalized = String(text || '');
-  if (/(玩梗|整活|抽象|乐子|笑死|蚌埠住了|逆天)/i.test(normalized)) {
+  if (/(玩梗|整活|抽象|乐子|笑死|蚌埠住了|绷不住|没绷住|逆天|哈基米|典|急了|乐|xswl|xs)/i.test(normalized)
+    || /(^|[^\d])6{2,}($|[^\d])/.test(normalized)
+    || /草{1,}/.test(normalized)) {
     return 'meme-heavy';
   }
   if (/(阴阳|别太认真|吐槽)/i.test(normalized)) {
@@ -138,14 +140,28 @@ function extractFrequentPhrases(text) {
       phrases.push(String(match[1]).trim());
     }
   }
-  for (const token of normalized.match(/(?:QAQ|2333|www|笑死|蚌埠住了|无语了|真的会谢|别太离谱)/gi) || []) {
+  for (const token of normalized.match(/(?:QAQ|QwQ|OvO|2333|www|xswl|xs|笑死|蚌埠住了|绷不住|没绷住|草|哈基米|确实|啊这|我超|急了|典|寄|乐|破防|开摆|无语了|真的会谢|别太离谱|离谱|逆天)/gi) || []) {
+    phrases.push(String(token).trim());
+  }
+  for (const token of normalized.match(/(?:哈|啊|呜|艹){2,}|[wW]{2,}/g) || []) {
     phrases.push(String(token).trim());
   }
   return uniqueCompact(phrases, 6);
 }
 
+function countMatches(text, pattern) {
+  return (String(text || '').match(pattern) || []).length;
+}
+
+function isTrivialShortMessage(text) {
+  const compact = String(text || '').replace(/\s+/g, '').replace(/[。！？!?~～….,，、]/g, '');
+  return compact.length <= 2;
+}
+
 function buildSpeakingStyleSummary(text, update) {
   const traits = [];
+  const normalized = String(text || '').trim();
+  const compact = normalized.replace(/\s+/g, '');
   if (update.tonePreference) traits.push(`语气偏${update.tonePreference}`);
   if (update.responsePreference === 'detailed') traits.push('希望回复更展开');
   if (update.responsePreference === 'concise') traits.push('偏好短答直说');
@@ -155,14 +171,46 @@ function buildSpeakingStyleSummary(text, update) {
   if (update.emojiStyle === 'expressive-text') traits.push('常用颜文字或语气词');
   if (update.humorStyle === 'meme-heavy') traits.push('爱玩梗');
   if (update.humorStyle === 'sarcastic') traits.push('带一点吐槽感');
-  if (traits.length > 0) {
-    return traits.join('，');
+
+  if (!isTrivialShortMessage(normalized) && compact.length <= 18) {
+    traits.push('偏短句表达');
   }
 
-  const normalized = String(text || '').trim();
-  if (!normalized) return '';
-  if (normalized.length <= 24) return '偏短句表达';
-  return '';
+  if (/[？?！!]{2,}|[。\.]{3,}|…{2,}|[~～]{2,}/.test(normalized)) {
+    traits.push('标点情绪明显');
+  }
+
+  if (/[\u4e00-\u9fa5]/.test(normalized) && /[A-Za-z]{2,}/.test(normalized)) {
+    traits.push('会中英或缩写混写');
+  }
+
+  if (/(?:啊|呀|呢|吧|嘛|啦|捏|呐|哇|哦|呜)[。！？!?~～…]*$/u.test(normalized)
+    || countMatches(normalized, /(?:啊|呀|呢|吧|嘛|啦|捏|呐|哇|哦|呜)/gu) >= 2) {
+    traits.push('尾句常带语气词');
+  }
+
+  return uniqueCompact(traits, 6).join('，');
+}
+
+function hasStableStyleObservation(update) {
+  const summary = String(update.speakingStyleSummary || '').trim();
+  const summaryParts = summary.split(/[，,；;]/).map((item) => item.trim()).filter(Boolean);
+  const hasSpecificSummary = summaryParts.some((item) => item !== '偏短句表达');
+  return Boolean(
+    update.tonePreference
+    || update.responsePreference
+    || update.emojiStyle
+    || update.humorStyle
+    || update.frequentPhrases.length > 0
+    || hasSpecificSummary
+  );
+}
+
+function mergeSpeakingStyleSummary(incoming, current) {
+  return uniqueCompact([
+    ...String(incoming || '').split(/[，,；;]/),
+    ...String(current || '').split(/[，,；;]/),
+  ], 6).join('，');
 }
 
 function extractPreferredName(text) {
@@ -335,11 +383,7 @@ export function extractStableProfileUpdate(text, analysis = {}, specialUser = nu
     || update.relationshipPreference
     || update.bondMemories.length > 0
     || update.specialNicknames.length > 0
-    || update.speakingStyleSummary
-    || update.frequentPhrases.length > 0
-    || update.emojiStyle
-    || update.responsePreference
-    || update.humorStyle
+    || hasStableStyleObservation(update)
   );
 
   return {
@@ -398,7 +442,10 @@ export async function updateUserProfileMemory(profile, { text, analysis, userNam
     ], 4),
     relationshipPreference: extracted.update.relationshipPreference || profile.relationshipPreference || '',
     personaMode: extracted.update.personaMode || profile.personaMode || resolvedSpecialUser?.personaMode || '',
-    speakingStyleSummary: extracted.update.speakingStyleSummary || profile.speakingStyleSummary || '',
+    speakingStyleSummary: mergeSpeakingStyleSummary(
+      extracted.update.speakingStyleSummary,
+      profile.speakingStyleSummary || ''
+    ),
     frequentPhrases: uniqueCompact([
       ...extracted.update.frequentPhrases,
       ...(profile.frequentPhrases || []),
@@ -430,11 +477,7 @@ export async function updateUserProfileMemory(profile, { text, analysis, userNam
         ...nextProfile,
         profileSummary: buildProfileSummary(nextProfile),
         specialBondSummary,
-        styleLastUpdated: extracted.update.speakingStyleSummary
-          || extracted.update.frequentPhrases.length > 0
-          || extracted.update.emojiStyle
-          || extracted.update.responsePreference
-          || extracted.update.humorStyle
+        styleLastUpdated: hasStableStyleObservation(extracted.update)
           ? new Date()
           : profile.styleLastUpdated || null,
         lastUpdated: new Date(),

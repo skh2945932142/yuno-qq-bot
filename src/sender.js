@@ -37,7 +37,7 @@ async function invokePostNapcat(postNapcatFn, action, payload, label) {
   return postNapcatFn(payload, label);
 }
 
-function buildNapcatTargetPayload(target, message) {
+export function buildNapcatTargetPayload(target, message) {
   const normalizedTarget = buildReplyTarget(target);
   const idKey = normalizedTarget.chatType === 'private' ? 'user_id' : 'group_id';
 
@@ -51,7 +51,7 @@ function buildNapcatTargetPayload(target, message) {
   };
 }
 
-function normalizeImageMessage(image) {
+export function normalizeImageMessage(image) {
   if (!image) {
     return null;
   }
@@ -62,6 +62,10 @@ function normalizeImageMessage(image) {
 
   if (image.file) {
     return { type: 'image', data: { file: image.file } };
+  }
+
+  if (image.path) {
+    return { type: 'image', data: { file: image.path } };
   }
 
   if (image.url) {
@@ -80,7 +84,8 @@ export async function sendReply(target, text) {
   await invokePostNapcat(postNapcat, request.action, request.payload, `send ${request.target.chatType} text`);
 }
 
-export async function sendStructuredReply(target, outputs = []) {
+export async function sendStructuredReplyWithDeps(target, outputs = [], deps = {}) {
+  const postNapcatFn = deps.postNapcat || postNapcat;
   const message = [];
 
   for (const output of outputs) {
@@ -106,8 +111,12 @@ export async function sendStructuredReply(target, outputs = []) {
   }
 
   const request = buildNapcatTargetPayload(target, message);
-  await invokePostNapcat(postNapcat, request.action, request.payload, `send ${request.target.chatType} structured`);
+  await invokePostNapcat(postNapcatFn, request.action, request.payload, `send ${request.target.chatType} structured`);
   return true;
+}
+
+export async function sendStructuredReply(target, outputs = []) {
+  return sendStructuredReplyWithDeps(target, outputs);
 }
 
 export async function sendImage(target, image) {

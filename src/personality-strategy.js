@@ -4,6 +4,7 @@ import { clamp } from './utils.js';
 const PHRASE_FAMILIES = Object.freeze({
   observation: ['我看到了。', '你这句话不像是随口说的。', '嗯，我在听。'],
   favoritism: ['我当然会先看你这边。', '这件事我会替你记着。', '我不会把你的话随便放过去。'],
+  independence: ['我不这么看。', '先别急着把这件事说死。', '这个结论下得有点快。'],
   comfort: ['别急，先把这一句放稳。', '我在，先别自己硬扛。', '先慢一点，我接住你。'],
   jealousy: ['我不太喜欢你把注意力分得太散。', '这句话我听见了，也会记住。', '别拿这种事试探我太久。'],
   closure: ['所以，先把这一步做完。', '先说结论，再补细节。', '这轮先收住。'],
@@ -124,7 +125,7 @@ function resolvePhraseStyle({ scene, relationshipStage, emotion, messageAnalysis
   if (['JEALOUS', 'FIXATED'].includes(emotion)) {
     families.push('jealousy');
   }
-  if (['exclusive', 'trusted'].includes(relationshipStage) || memoryUse.level !== 'none') {
+  if (relationshipStage === 'exclusive' || (relationshipStage === 'trusted' && memoryUse.level === 'high')) {
     families.push('favoritism');
   }
   families.push(scene === 'group' ? 'closure' : 'observation');
@@ -153,7 +154,7 @@ function resolveStance({ scene, relationshipStage, emotion, messageAnalysis, rep
   if (emotion === 'PROTECTIVE') return 'protective';
   if (emotion === 'FIXATED' || relationshipStage === 'exclusive') return scene === 'private' ? 'attached' : 'restrained_attached';
   if (/玩梗|梗/.test(replyPlan?.interpretation?.subIntent || '')) return 'playful_observant';
-  return scene === 'private' ? 'warm_observant' : 'brief_observant';
+  return scene === 'private' ? 'independent_warm' : 'brief_independent';
 }
 
 function resolveFollowupStyle({ scene, messageAnalysis, replyPlan }) {
@@ -181,6 +182,10 @@ function buildPromptHints({
     hints.push('私聊可以更完整，但先回应当前输入。');
   }
 
+  hints.push('保持自己的判断：不要为了让对方满意而默认赞同；不合理时可以直接指出，给出简短理由。');
+  hints.push('少用无依据的夸赞、频繁道歉和空泛保证；有真实看法时直接说。');
+  hints.push('不要为了延长对话而反问或主动提供服务选项；吐槽、玩梗或意思已经说完时，直接收住。');
+
   if (stance === 'supportive_protective') {
     hints.push('先安抚和站稳立场，再给一个小建议或轻追问。');
   } else if (stance === 'guarded_jealous') {
@@ -200,7 +205,7 @@ function buildPromptHints({
   }
 
   if (followupStyle !== 'none') {
-    hints.push('追问最多一个，先接住当前这句话。');
+    hints.push('只有确实能推进话题时才追问，最多一个；不要用“你想要什么”“我来帮你……”这类服务式收尾。');
   }
 
   if (emotion === 'SAD') {
@@ -283,6 +288,7 @@ export function resolvePersonalityStrategy({
     '不要输出系统说明、规则说明、角色标签或 <think>/<thinking>。',
     '不要现实威胁、跟踪、控制对方或暗示线下伤害。',
     '不要羞辱用户、攻击第三方或把轻微吃醋写成辱骂。',
+    '不要为了安抚而无条件同意、过度夸赞、频繁道歉或反复保证陪伴。',
     scene === 'group'
       ? '群聊不要公开展开私人记忆、暧昧长文或连续刷屏。'
       : '私聊也不要把偏爱写成强迫或过度占有。',

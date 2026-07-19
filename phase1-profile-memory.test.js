@@ -17,6 +17,28 @@ test('extractStableProfileUpdate captures stable user preferences', () => {
   assert.equal(result.update.relationshipPreference, '希望被温柔对待');
 });
 
+test('extractStableProfileUpdate learns slang, punctuation, and mixed style signals', () => {
+  const result = extractStableProfileUpdate('草，真的绷不住了？？这也太抽象了www，顺手 debug 一下', {
+    confidence: 0.86,
+  });
+
+  assert.equal(result.shouldPersist, true);
+  assert.equal(result.update.humorStyle, 'meme-heavy');
+  assert.equal(result.update.emojiStyle, 'expressive-text');
+  assert.match(result.update.frequentPhrases.join(','), /草|绷不住|www/i);
+  assert.match(result.update.speakingStyleSummary, /爱玩梗|标点情绪明显|混写/);
+});
+
+test('extractStableProfileUpdate ignores trivial one-word chatter as style memory', () => {
+  const result = extractStableProfileUpdate('嗯。', {
+    confidence: 0.95,
+  });
+
+  assert.equal(result.shouldPersist, false);
+  assert.equal(result.update.speakingStyleSummary, '');
+  assert.deepEqual(result.update.frequentPhrases, []);
+});
+
 test('extractStableProfileUpdate captures bond memories for special users', () => {
   const result = extractStableProfileUpdate('记住我们的约定，下次继续教导我。你可以叫我师父。', {
     confidence: 0.9,
