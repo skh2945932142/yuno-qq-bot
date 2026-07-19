@@ -100,14 +100,30 @@ export function resetFfmpegPathCache() {
   cachedFfmpegPath = undefined;
 }
 
+export function buildSpeechAudioFilter(options = {}) {
+  const requestedSpeed = Number(options.playbackSpeed ?? config.ttsSpeed ?? 1);
+  const speed = Number.isFinite(requestedSpeed)
+    ? Math.min(2, Math.max(0.5, requestedSpeed))
+    : 1;
+
+  if (Math.abs(speed - 1) < 0.001) {
+    return '';
+  }
+
+  const formattedSpeed = speed.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+  return `atempo=${formattedSpeed}`;
+}
+
 async function transcodeWithPipe(ffmpegPath, audioBuffer, options = {}) {
   const sampleRate = options.sampleRate ?? config.voiceSampleRate;
+  const audioFilter = buildSpeechAudioFilter(options);
   const child = spawn(ffmpegPath, [
     '-hide_banner',
     '-loglevel',
     'error',
     '-i',
     'pipe:0',
+    ...(audioFilter ? ['-filter:a', audioFilter] : []),
     '-ac',
     '1',
     '-ar',
@@ -127,6 +143,7 @@ async function transcodeWithPipe(ffmpegPath, audioBuffer, options = {}) {
 
 async function transcodeWithTempFiles(ffmpegPath, audioBuffer, options = {}) {
   const sampleRate = options.sampleRate ?? config.voiceSampleRate;
+  const audioFilter = buildSpeechAudioFilter(options);
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'yuno-voice-'));
   const inputPath = path.join(tempDir, 'input.mp3');
   const outputPath = path.join(tempDir, 'output.wav');
@@ -140,6 +157,7 @@ async function transcodeWithTempFiles(ffmpegPath, audioBuffer, options = {}) {
       '-y',
       '-i',
       inputPath,
+      ...(audioFilter ? ['-filter:a', audioFilter] : []),
       '-ac',
       '1',
       '-ar',

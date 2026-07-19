@@ -447,7 +447,7 @@ function buildMimoTtsRequest(text, voice, runtimeConfig) {
   const voiceDesignModel = isMimoVoiceDesignModel(runtimeConfig.ttsModel);
   const voiceInstruction = voiceDesignModel
     ? resolveTtsVoiceDesign(runtimeConfig)
-    : '用年轻女性、清亮偏柔且带一点细微气声的音色朗读。语气亲近、观察敏锐、情绪克制，普通话自然口语化，语速中等偏慢，不要额外补充内容。';
+    : '用年轻女性、清亮干净、略偏高但不尖的音色朗读。咬字清晰、气息稳定，避免气声、耳语、沙哑和明显呼吸噪声；语速自然，节奏利落，语气专注、敏锐、果断，不慵懒、不甜腻，不要额外补充内容。';
 
   return {
     url: runtimeConfig.ttsBaseUrl,

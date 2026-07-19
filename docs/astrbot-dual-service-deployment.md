@@ -78,7 +78,8 @@ ENABLE_VOICE=true
 TTS_PROVIDER=mimo
 TTS_API_KEY=sk-...
 TTS_MODEL=mimo-v2.5-tts-voicedesign
-TTS_VOICE_DESIGN=年轻女性，声线清亮偏柔，语速中等偏慢，亲近但不夸张，带一点细微气声。
+TTS_VOICE_DESIGN=十八岁左右的年轻女性声线，清亮、干净、略偏高但不尖，带一点紧张感与敏锐感；咬字清晰、气息稳定，避免气声、耳语、沙哑和明显呼吸噪声。语速自然，节奏利落，短句停顿干净；语气专注、果断，偶尔带一点轻微占有欲和俏皮，但不慵懒、不甜腻、不夹、不夸张动漫腔。面对在意的人时稍微柔和，但保持清醒和利落。
+TTS_SPEED=1.15
 ```
 
 ### API 端点

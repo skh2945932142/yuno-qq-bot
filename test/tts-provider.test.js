@@ -18,7 +18,7 @@ test('buildTtsRequest creates chat-completions payload for mimo provider', () =>
   assert.equal(request.url, 'https://api.example.com/v1/chat/completions');
   assert.equal(request.payload.model, 'mimo-v2.5-tts');
   assert.equal(request.payload.messages[0].role, 'user');
-  assert.match(request.payload.messages[0].content, /年轻女性|清亮偏柔|情绪克制/);
+  assert.match(request.payload.messages[0].content, /年轻女性|清亮干净|避免气声|不慵懒/);
   assert.deepEqual(request.payload.messages[1], {
     role: 'assistant',
     content: 'hello',

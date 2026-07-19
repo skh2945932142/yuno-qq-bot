@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildSpeechAudioFilter,
   encodeTencentSilk,
   resetFfmpegPathCache,
   resolveFfmpegPath,
@@ -44,6 +45,13 @@ test('transcodeMp3ToSpeechPcm throws when ffmpeg is unavailable', async () => {
     }),
     /ffmpeg is not available/
   );
+});
+
+test('buildSpeechAudioFilter applies bounded pitch-preserving playback speed', () => {
+  assert.equal(buildSpeechAudioFilter({ playbackSpeed: 1.15 }), 'atempo=1.15');
+  assert.equal(buildSpeechAudioFilter({ playbackSpeed: 1 }), '');
+  assert.equal(buildSpeechAudioFilter({ playbackSpeed: 3 }), 'atempo=2');
+  assert.equal(buildSpeechAudioFilter({ playbackSpeed: 0.2 }), 'atempo=0.5');
 });
 
 test('encodeTencentSilk enables tencent-compatible options', async () => {

@@ -13,7 +13,7 @@ const defaultTtsBaseUrl = resolvedTtsProvider === 'mimo'
 const defaultTtsModel = resolvedTtsProvider === 'mimo'
   ? 'mimo-v2.5-tts'
   : 'FunAudioLLM/CosyVoice2-0.5B';
-const defaultTtsVoiceDesign = '年轻女性，声线清亮偏柔，音色干净但带一点细微气声。说话亲近、观察敏锐、情绪克制，偶尔在在意的人面前变得直接；普通话自然口语化，语速中等偏慢，句尾收得干净，停顿短而有呼吸感。整体像深夜私聊，不是播音腔，也不是夸张的动漫腔。';
+const defaultTtsVoiceDesign = '十八岁左右的年轻女性声线，清亮、干净、略偏高但不尖，带一点紧张感与敏锐感；咬字清晰、气息稳定，避免气声、耳语、沙哑和明显呼吸噪声。语速自然，节奏利落，短句停顿干净；语气专注、果断，偶尔带一点轻微占有欲和俏皮，但不慵懒、不甜腻、不夹、不夸张动漫腔。面对在意的人时稍微柔和，但保持清醒和利落。';
 
 function readNumber(name, fallback) {
   const value = process.env[name];
@@ -101,6 +101,7 @@ export const config = Object.freeze({
   voiceReplyMaxChars: readNumber('VOICE_REPLY_MAX_CHARS', 90),
   voiceReplyOnUserRecord: readBoolean('VOICE_REPLY_ON_USER_RECORD', true),
   ffmpegPath: process.env.FFMPEG_PATH || '',
+  ttsSpeed: Math.min(2, Math.max(0.5, readNumber('TTS_SPEED', 1.15))),
   voiceSampleRate: readNumber('VOICE_SAMPLE_RATE', 24000),
   voiceBitrate: readNumber('VOICE_BITRATE', 24000),
   requestTimeoutMs: readNumber('REQUEST_TIMEOUT_MS', 60000),

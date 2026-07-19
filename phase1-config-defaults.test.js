@@ -57,11 +57,15 @@ test('config uses mimo defaults when TTS_PROVIDER is mimo', async () => {
     TTS_PROVIDER: 'mimo',
     TTS_BASE_URL: '',
     TTS_MODEL: '',
+    TTS_VOICE_DESIGN: '',
   });
 
   assert.equal(config.ttsProvider, 'mimo');
   assert.equal(config.ttsBaseUrl, 'https://api.xiaomimimo.com/v1/chat/completions');
   assert.equal(config.ttsModel, 'mimo-v2.5-tts');
+  assert.equal(config.ttsSpeed, 1.15);
+  assert.match(config.ttsVoiceDesign, /避免气声、耳语、沙哑和明显呼吸噪声/);
+  assert.match(config.ttsVoiceDesign, /不慵懒、不甜腻、不夹/);
 });
 
 test('config trims qdrant url and diagnoses missing protocol', async () => {
