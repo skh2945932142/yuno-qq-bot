@@ -13,6 +13,8 @@ phase1-*.test.js
 smoke.js
 doctor.js
 deploy
-data
+data/*
+!data/reply-style/
+!data/reply-style/examples.jsonl
 .circleci
 .github
