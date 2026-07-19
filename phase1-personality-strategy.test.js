@@ -122,6 +122,7 @@ test('signature move changes with the conversational intent instead of using one
 
   assert.equal(normal.signatureMove.key, 'pattern_notice');
   assert.equal(playful.signatureMove.key, 'dry_tease');
+  assert.match(playful.signatureMove.guidance, /不要反问/);
   assert.equal(factual.signatureMove.key, 'sharp_answer');
   assert.match(
     resolvePersonalityStrategy({
@@ -132,4 +133,16 @@ test('signature move changes with the conversational intent instead of using one
     }).signatureMove.guidance,
     /身体、事情、时间/
   );
+
+  const companionship = resolvePersonalityStrategy({
+    event: baseEvent(),
+    relation: { affection: 72 },
+    messageAnalysis: { intent: 'social', sentiment: 'negative', ruleSignals: [] },
+    replyPlan: {
+      type: 'empathic_followup',
+      questionNeeded: true,
+      interpretation: { subIntent: '亲近陪伴', needsEmpathy: true },
+    },
+  });
+  assert.equal(companionship.signatureMove.key, 'direct_attention');
 });

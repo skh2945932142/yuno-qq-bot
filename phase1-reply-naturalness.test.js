@@ -33,3 +33,23 @@ test('inspectReplyNaturalness flags structured long group chat replies', () => {
 
   assert.equal(result.flags.includes('group-structured-panel'), true);
 });
+
+test('polishReplyNaturalness replaces generic companionship templates for direct attention', () => {
+  const text = polishReplyNaturalness('嗯，我在这儿。先说哪件？', {
+    event: { chatType: 'private', rawText: '陪我聊会儿，今天有点累' },
+    route: { category: 'private_chat' },
+    personalityStrategy: { signatureMove: { key: 'direct_attention' } },
+  });
+
+  assert.equal(text, '行，这会儿先听你的。先挑今天最耗你的那一件说。');
+});
+
+test('polishReplyNaturalness leaves normal direct attention wording unchanged', () => {
+  const text = polishReplyNaturalness('行，这会儿我先听你的。你从最烦的那一件开始。', {
+    event: { chatType: 'private', rawText: '陪我聊会儿' },
+    route: { category: 'private_chat' },
+    personalityStrategy: { signatureMove: { key: 'direct_attention' } },
+  });
+
+  assert.equal(text, '行，这会儿我先听你的。你从最烦的那一件开始。');
+});

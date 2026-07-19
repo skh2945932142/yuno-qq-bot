@@ -170,6 +170,13 @@ function resolveSignatureMove({ emotion, messageAnalysis, replyPlan }) {
   const intent = String(messageAnalysis?.intent || '').toLowerCase();
   const sentiment = String(messageAnalysis?.sentiment || '').toLowerCase();
 
+  if (subIntent === '亲近陪伴' && intent !== 'help') {
+    return {
+      key: 'direct_attention',
+      guidance: '直接表达“这会儿我愿意把注意力放在你这里”，再给一个具体话题入口；不写成连续的爱宣言或占有宣言。',
+    };
+  }
+
   if (intent === 'help' || replyPlan?.interpretation?.needsEmpathy || sentiment === 'negative') {
     return {
       key: 'quiet_anchor',
@@ -180,7 +187,7 @@ function resolveSignatureMove({ emotion, messageAnalysis, replyPlan }) {
   if (/玩梗|梗/.test(subIntent) || messageAnalysis?.ruleSignals?.includes('meme-topic')) {
     return {
       key: 'dry_tease',
-      guidance: '用一句干一点的吐槽接住重点，最多加一个判断；不要把回复写成舞台表演。',
+      guidance: '用一句干一点的吐槽接住重点，最多加一个判断；上下文缺对象时也不要反问用户解释笑点，顺着“离谱程度”接住即可。',
     };
   }
 
@@ -191,7 +198,7 @@ function resolveSignatureMove({ emotion, messageAnalysis, replyPlan }) {
     };
   }
 
-  if (subIntent === '亲近陪伴' || ['AFFECTIONATE', 'PROTECTIVE', 'FIXATED'].includes(String(emotion || '').toUpperCase())) {
+  if (['AFFECTIONATE', 'PROTECTIVE', 'FIXATED'].includes(String(emotion || '').toUpperCase())) {
     return {
       key: 'direct_attention',
       guidance: '直接表达在意或偏好，只落到当前这句话，不写成连续的爱宣言或占有宣言。',

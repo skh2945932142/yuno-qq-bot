@@ -90,6 +90,23 @@ test('processIncomingMessage strips hidden reasoning before sending the reply', 
   assert.equal(sentReplies[0].includes('<think>'), false);
 });
 
+test('processIncomingMessage parses structured JSON after hidden reasoning from a fallback model', async () => {
+  const sentReplies = [];
+
+  const reply = await processIncomingMessage(createEvent(), createContext(), {
+    deps: createDeps(
+      async (_target, text) => {
+        sentReplies.push(text);
+      },
+      async () => '<think>先判断亲近陪伴场景。</think>\n{"text":"行，这会儿我先听你的。","sendVoice":false,"voiceText":""}'
+    ),
+  });
+
+  assert.equal(reply, '行，这会儿我先听你的。');
+  assert.equal(sentReplies[0], '行，这会儿我先听你的。');
+  assert.doesNotMatch(sentReplies[0], /think|sendVoice|voiceText/);
+});
+
 test('processIncomingMessage strips leading reasoning prose before sending the reply', async () => {
   const sentReplies = [];
 

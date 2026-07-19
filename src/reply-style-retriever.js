@@ -14,9 +14,11 @@ function normalizeScene(event = {}) {
 
 function normalizeIntent({ route, analysis, replyPlan } = {}) {
   const routeCategory = String(route?.category || '').trim();
+  const subIntent = String(replyPlan?.interpretation?.subIntent || '').trim();
   if (routeCategory === 'knowledge_qa') return 'knowledge_qa';
   if (routeCategory === 'follow_up') return 'follow_up';
   if (routeCategory === 'poke') return 'poke';
+  if (subIntent === '亲近陪伴') return 'social';
   if (replyPlan?.interpretation?.needsEmpathy) return 'help';
   return String(analysis?.intent || routeCategory || 'chat').trim() || 'chat';
 }
@@ -95,6 +97,7 @@ function buildQueryTags({ analysis, replyPlan, userTurn } = {}) {
   ];
   const subIntent = String(replyPlan?.interpretation?.subIntent || '');
   if (replyPlan?.interpretation?.needsEmpathy || analysis?.sentiment === 'negative') tags.push('comfort');
+  if (/亲近|陪伴/.test(`${subIntent} ${userTurn}`)) tags.push('direct-attention', 'warm');
   if (/梗|抽象|笑死|离谱/.test(`${subIntent} ${userTurn}`)) tags.push('meme');
   if (analysis?.intent === 'help') tags.push('help');
   if (analysis?.sentiment) tags.push(analysis.sentiment);

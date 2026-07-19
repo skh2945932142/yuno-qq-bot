@@ -69,3 +69,43 @@ test('retrieveReplyStyleExamples keeps fast prompts small and strips CQ codes', 
   assert.equal(selected[0].id, 'group-meme');
   assert.doesNotMatch(selected[0].userText, /\[CQ:/);
 });
+
+test('retrieveReplyStyleExamples prefers direct attention over generic comfort for companionship', async () => {
+  const selected = await retrieveReplyStyleExamples({
+    event: { chatType: 'private' },
+    route: { category: 'private_chat' },
+    analysis: { intent: 'social', sentiment: 'negative', ruleSignals: ['private-chat'] },
+    emotionResult: { emotion: 'AFFECTIONATE' },
+    replyPlan: {
+      type: 'empathic_followup',
+      interpretation: { needsEmpathy: true, subIntent: '亲近陪伴' },
+    },
+    userTurn: '陪我聊会儿，今天有点累',
+    replyLengthProfile: { promptProfile: 'standard' },
+  }, {
+    examples: [
+      {
+        id: 'generic-comfort',
+        scene: 'private',
+        intent: 'help',
+        emotion: 'SAD',
+        userText: '我有点累',
+        humanReply: '我在，你慢慢说。',
+        tags: ['comfort'],
+        quality: 0.96,
+      },
+      {
+        id: 'direct-attention',
+        scene: 'private',
+        intent: 'social',
+        emotion: 'AFFECTIONATE',
+        userText: '陪我聊会儿',
+        humanReply: '行，这会儿我先听你的。',
+        tags: ['direct-attention', 'warm'],
+        quality: 0.96,
+      },
+    ],
+  });
+
+  assert.equal(selected[0].id, 'direct-attention');
+});

@@ -501,9 +501,18 @@ export function resolveVoiceReplyDecision({
 function parseChatReplyDecision(rawReplyText, options = {}) {
   const raw = String(rawReplyText || '').trim();
   const fallbackText = normalizeVoiceReplyText(raw) || '刚才那句被我吞掉了，你再说一遍。';
-  const parsed = safeJsonParse(raw);
+  const withoutHidden = stripHiddenReasoning(raw);
+  const jsonCandidates = [raw, withoutHidden];
+  const objectStart = withoutHidden.indexOf('{');
+  const objectEnd = withoutHidden.lastIndexOf('}');
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    jsonCandidates.push(withoutHidden.slice(objectStart, objectEnd + 1));
+  }
+  const parsed = jsonCandidates
+    .map((candidate) => safeJsonParse(String(candidate || '').trim()))
+    .find((candidate) => candidate && !Array.isArray(candidate) && typeof candidate === 'object');
 
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+  if (!parsed) {
     return {
       text: fallbackText,
       sendVoice: Boolean(options.defaultSendVoice),
@@ -1637,6 +1646,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       event: normalizedEvent,
       route: task,
       replyLengthProfile,
+      personalityStrategy,
     });
     if (!naturalness.ok) {
       for (const flag of naturalness.flags) {
@@ -1651,12 +1661,14 @@ export async function processIncomingMessage(event, precomputed = null, options 
       event: normalizedEvent,
       route: task,
       replyLengthProfile,
+      personalityStrategy,
     });
     const shapedVoiceText = shapeChatReplyText(replyDecision.voiceText || replyText, emotionResult);
     const voiceText = deps.polishReplyNaturalness(shapedVoiceText, {
       event: normalizedEvent,
       route: task,
       replyLengthProfile,
+      personalityStrategy,
     });
     const replyTarget = {
       platform: normalizedEvent.platform,
