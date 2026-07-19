@@ -1678,6 +1678,21 @@ export async function processIncomingMessage(event, precomputed = null, options 
       userProfile: workflowContext.userProfile,
       settings: config,
     });
+    deps.logger.info('meme', 'Contextual meme decision', {
+      traceId: trace.traceId,
+      chatType: normalizedEvent.chatType,
+      route: task.category,
+      candidateCount: memeCandidates.length,
+      mode: memeDecision.mode || 'unknown',
+      suggested: Boolean(memeDecision.suggested),
+      shouldSend: Boolean(memeDecision.shouldSend),
+      reason: memeDecision.reason || 'unknown',
+      score: Number.isFinite(Number(memeDecision.score)) ? Number(memeDecision.score) : null,
+      minScore: config.memeAutoSendMinScore,
+      probability: config.memeAutoSendProbability,
+      cooldownMs: config.memeAutoSendCooldownMs,
+      maxPerHour: config.memeAutoSendMaxPerHour,
+    });
     if (memeDecision.suggested) {
       recordWorkflowMetric('yuno_meme_auto_suggested_total', 1, {
         chat_type: normalizedEvent.chatType,
