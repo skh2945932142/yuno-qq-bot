@@ -13,6 +13,7 @@ const defaultTtsBaseUrl = resolvedTtsProvider === 'mimo'
 const defaultTtsModel = resolvedTtsProvider === 'mimo'
   ? 'mimo-v2.5-tts'
   : 'FunAudioLLM/CosyVoice2-0.5B';
+const defaultTtsVoiceDesign = '年轻女性，声线清亮偏柔，音色干净但带一点细微气声。说话亲近、观察敏锐、情绪克制，偶尔在在意的人面前变得直接；普通话自然口语化，语速中等偏慢，句尾收得干净，停顿短而有呼吸感。整体像深夜私聊，不是播音腔，也不是夸张的动漫腔。';
 
 function readNumber(name, fallback) {
   const value = process.env[name];
@@ -93,6 +94,7 @@ export const config = Object.freeze({
   selfQq: process.env.SELF_QQ ? String(process.env.SELF_QQ) : '',
   yunoVoiceUri: process.env.YUNO_VOICE_URI || '',
   ttsVoice: process.env.TTS_VOICE || process.env.YUNO_VOICE_URI || '',
+  ttsVoiceDesign: process.env.TTS_VOICE_DESIGN || defaultTtsVoiceDesign,
   enableVoice: readBoolean('ENABLE_VOICE', false),
   voiceReplyMode: readTrimmed('VOICE_REPLY_MODE', 'auto').toLowerCase(),
   voiceReplyCooldownMs: readNumber('VOICE_REPLY_COOLDOWN_MS', 90000),

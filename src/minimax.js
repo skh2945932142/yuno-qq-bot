@@ -435,7 +435,20 @@ export function resolveTtsVoice(runtimeConfig = config) {
   return String(runtimeConfig.ttsVoice || runtimeConfig.yunoVoiceUri || '').trim();
 }
 
+export function resolveTtsVoiceDesign(runtimeConfig = config) {
+  return String(runtimeConfig.ttsVoiceDesign || '').trim();
+}
+
+export function isMimoVoiceDesignModel(model = '') {
+  return String(model || '').trim().toLowerCase() === 'mimo-v2.5-tts-voicedesign';
+}
+
 function buildMimoTtsRequest(text, voice, runtimeConfig) {
+  const voiceDesignModel = isMimoVoiceDesignModel(runtimeConfig.ttsModel);
+  const voiceInstruction = voiceDesignModel
+    ? resolveTtsVoiceDesign(runtimeConfig)
+    : '用年轻女性、清亮偏柔且带一点细微气声的音色朗读。语气亲近、观察敏锐、情绪克制，普通话自然口语化，语速中等偏慢，不要额外补充内容。';
+
   return {
     url: runtimeConfig.ttsBaseUrl,
     payload: {
@@ -443,17 +456,14 @@ function buildMimoTtsRequest(text, voice, runtimeConfig) {
       messages: [
         {
           role: 'user',
-          content: '用我妻由乃的音色朗读：年轻少女声线，温柔轻柔，语气温和甜美，略带一丝病娇感，声音清澈但有轻微气音，语速适中偏慢，不要额外补充内容。',
+          content: voiceInstruction,
         },
         {
           role: 'assistant',
           content: text,
         },
       ],
-      audio: {
-        format: 'wav',
-        voice,
-      },
+      audio: voiceDesignModel ? { format: 'wav' } : { format: 'wav', voice },
     },
     requestOptions: {
       headers: {
@@ -488,13 +498,19 @@ function buildOpenAiCompatibleTtsRequest(text, voice, runtimeConfig) {
 export function buildTtsRequest(text, options = {}, runtimeConfig = config) {
   const provider = String(runtimeConfig.ttsProvider || 'openai_compatible').trim().toLowerCase() || 'openai_compatible';
   const voice = resolveTtsVoice(runtimeConfig);
+  const voiceDesignModel = provider === 'mimo' && isMimoVoiceDesignModel(runtimeConfig.ttsModel);
+  const voiceDesign = resolveTtsVoiceDesign(runtimeConfig);
 
   if (!runtimeConfig.enableVoice) {
     return { ok: false, reason: 'voice_disabled', provider };
   }
 
-  if (!voice) {
+  if (!voiceDesignModel && !voice) {
     return { ok: false, reason: 'missing_voice_uri', provider };
+  }
+
+  if (voiceDesignModel && !voiceDesign) {
+    return { ok: false, reason: 'missing_voice_design', provider };
   }
 
   if (!runtimeConfig.ttsBaseUrl) {

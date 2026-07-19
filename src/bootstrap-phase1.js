@@ -197,7 +197,13 @@ async function probeVoiceReadiness() {
     };
   }
 
-  if (!(config.ttsVoice || config.yunoVoiceUri) || !config.ttsBaseUrl || !config.ttsApiKey) {
+  const usesVoiceDesign = config.ttsProvider === 'mimo'
+    && config.ttsModel === 'mimo-v2.5-tts-voicedesign';
+  const hasVoiceConfig = usesVoiceDesign
+    ? Boolean(config.ttsVoiceDesign)
+    : Boolean(config.ttsVoice || config.yunoVoiceUri);
+
+  if (!hasVoiceConfig || !config.ttsBaseUrl || !config.ttsApiKey) {
     return {
       enabled: true,
       ready: false,
@@ -436,7 +442,7 @@ export async function startApplication() {
   if (readiness.voice.enabled && !readiness.voice.ready) {
     logger.warn('bootstrap', 'Voice is degraded; text reply will continue', {
       reason: readiness.voice.reason,
-      hint: 'Check ENABLE_VOICE, FFMPEG_PATH, TTS_PROVIDER, TTS_VOICE/YUNO_VOICE_URI, TTS_BASE_URL, TTS_MODEL, and TTS_API_KEY.',
+      hint: 'Check ENABLE_VOICE, FFMPEG_PATH, TTS_PROVIDER, TTS_VOICE_DESIGN or TTS_VOICE/YUNO_VOICE_URI, TTS_BASE_URL, TTS_MODEL, and TTS_API_KEY.',
     });
   }
 

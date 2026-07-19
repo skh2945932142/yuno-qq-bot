@@ -18,7 +18,7 @@ test('buildTtsRequest creates chat-completions payload for mimo provider', () =>
   assert.equal(request.url, 'https://api.example.com/v1/chat/completions');
   assert.equal(request.payload.model, 'mimo-v2.5-tts');
   assert.equal(request.payload.messages[0].role, 'user');
-  assert.match(request.payload.messages[0].content, /我妻由乃|温柔|甜美/);
+  assert.match(request.payload.messages[0].content, /年轻女性|清亮偏柔|情绪克制/);
   assert.deepEqual(request.payload.messages[1], {
     role: 'assistant',
     content: 'hello',
@@ -45,6 +45,44 @@ test('buildTtsRequest reports missing voice configuration', () => {
 
   assert.equal(request.ok, false);
   assert.equal(request.reason, 'missing_voice_uri');
+});
+
+test('buildTtsRequest supports MiMo voice design without a preset voice id', () => {
+  const request = buildTtsRequest('hello', {}, {
+    enableVoice: true,
+    ttsProvider: 'mimo',
+    ttsBaseUrl: 'https://api.example.com/v1/chat/completions',
+    ttsApiKey: 'secret',
+    ttsModel: 'mimo-v2.5-tts-voicedesign',
+    ttsVoice: '',
+    ttsVoiceDesign: '年轻女性，清亮偏柔，语速中等偏慢。',
+    yunoVoiceUri: '',
+    requestTimeoutMs: 12000,
+  });
+
+  assert.equal(request.ok, true);
+  assert.equal(request.payload.model, 'mimo-v2.5-tts-voicedesign');
+  assert.equal(request.payload.messages[0].content, '年轻女性，清亮偏柔，语速中等偏慢。');
+  assert.deepEqual(request.payload.messages[1], { role: 'assistant', content: 'hello' });
+  assert.deepEqual(request.payload.audio, { format: 'wav' });
+  assert.equal('voice' in request.payload.audio, false);
+});
+
+test('buildTtsRequest reports missing voice design prompt for the voice design model', () => {
+  const request = buildTtsRequest('hello', {}, {
+    enableVoice: true,
+    ttsProvider: 'mimo',
+    ttsBaseUrl: 'https://api.example.com/v1/chat/completions',
+    ttsApiKey: 'secret',
+    ttsModel: 'mimo-v2.5-tts-voicedesign',
+    ttsVoice: '',
+    ttsVoiceDesign: '',
+    yunoVoiceUri: '',
+    requestTimeoutMs: 12000,
+  });
+
+  assert.equal(request.ok, false);
+  assert.equal(request.reason, 'missing_voice_design');
 });
 
 test('extractTtsAudioBuffer decodes mimo base64 audio payload', () => {

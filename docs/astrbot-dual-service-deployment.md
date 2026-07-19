@@ -77,6 +77,8 @@ QDRANT_COLLECTION=qq_bot_knowledge
 ENABLE_VOICE=true
 TTS_PROVIDER=mimo
 TTS_API_KEY=sk-...
+TTS_MODEL=mimo-v2.5-tts-voicedesign
+TTS_VOICE_DESIGN=年轻女性，声线清亮偏柔，语速中等偏慢，亲近但不夸张，带一点细微气声。
 ```
 
 ### API 端点
