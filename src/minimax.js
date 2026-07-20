@@ -14,14 +14,19 @@ import {
 export function buildOpenAiClientConfig(kind = 'chat', source = config) {
   const useEmbeddingProvider = kind === 'embedding';
   const useReplyProvider = kind === 'reply';
+  const useReplyFallbackProvider = kind === 'reply-fallback';
   return {
     apiKey: useEmbeddingProvider
       ? source.embeddingApiKey
+      : useReplyFallbackProvider
+        ? (source.replyLlmFallbackApiKey || source.replyLlmApiKey || source.llmApiKey)
       : useReplyProvider
         ? (source.replyLlmApiKey || source.llmApiKey)
         : source.llmApiKey,
     baseURL: useEmbeddingProvider
       ? source.embeddingBaseUrl
+      : useReplyFallbackProvider
+        ? (source.replyLlmFallbackBaseUrl || source.replyLlmBaseUrl || source.llmBaseUrl)
       : useReplyProvider
         ? (source.replyLlmBaseUrl || source.llmBaseUrl)
         : source.llmBaseUrl,
@@ -31,6 +36,7 @@ export function buildOpenAiClientConfig(kind = 'chat', source = config) {
 
 const client = new OpenAI(buildOpenAiClientConfig('chat'));
 const replyClient = new OpenAI(buildOpenAiClientConfig('reply'));
+const replyFallbackClient = new OpenAI(buildOpenAiClientConfig('reply-fallback'));
 const embeddingClient = new OpenAI(buildOpenAiClientConfig('embedding'));
 
 function isGeminiProvider(model, baseUrl) {
@@ -63,8 +69,14 @@ export function buildReplyResponseFormat(options = {}) {
     return options.responseFormat || { type: 'json_object' };
   }
 
-  const model = options.model || config.replyLlmChatModel;
-  if (isGeminiProvider(model, config.replyLlmBaseUrl)) {
+  const useFallbackProvider = options.providerKind === 'reply-fallback';
+  const model = options.model || (useFallbackProvider
+    ? config.replyLlmFallbackChatModel
+    : config.replyLlmChatModel);
+  const baseUrl = useFallbackProvider
+    ? config.replyLlmFallbackBaseUrl
+    : config.replyLlmBaseUrl;
+  if (isGeminiProvider(model, baseUrl)) {
     return buildStructuredReplyResponseFormat();
   }
 
@@ -72,18 +84,38 @@ export function buildReplyResponseFormat(options = {}) {
 }
 
 function resolveChatRuntime(options = {}) {
-  const useReplyProvider = options.providerKind === 'reply';
-  const source = useReplyProvider ? config.replyLlmChatModel : config.llmChatModel;
-  const baseUrl = useReplyProvider ? config.replyLlmBaseUrl : config.llmBaseUrl;
+  const useReplyFallbackProvider = options.providerKind === 'reply-fallback';
+  const useReplyProvider = options.providerKind === 'reply' || useReplyFallbackProvider;
+  const source = useReplyFallbackProvider
+    ? config.replyLlmFallbackChatModel
+    : useReplyProvider
+      ? config.replyLlmChatModel
+      : config.llmChatModel;
+  const baseUrl = useReplyFallbackProvider
+    ? config.replyLlmFallbackBaseUrl
+    : useReplyProvider
+      ? config.replyLlmBaseUrl
+      : config.llmBaseUrl;
   return {
-    client: useReplyProvider ? replyClient : client,
+    client: useReplyFallbackProvider
+      ? replyFallbackClient
+      : useReplyProvider
+        ? replyClient
+        : client,
     model: options.model || source,
     baseUrl,
     useReplyProvider,
+    providerKind: useReplyFallbackProvider ? 'reply-fallback' : useReplyProvider ? 'reply' : 'chat',
   };
 }
 
 const breakerStates = new Map();
+
+export function buildModelCircuitKey(providerKind = 'chat', model = '') {
+  const provider = String(providerKind || 'chat').trim() || 'chat';
+  const normalizedModel = String(model || '').trim() || 'default';
+  return `${provider}:${normalizedModel}`;
+}
 
 function getBreakerState(providerKind = 'chat') {
   const key = String(providerKind || 'chat');
@@ -201,7 +233,10 @@ async function createChatCompletion(messages, options = {}) {
   const startedAt = Date.now();
   const operation = options.operation || 'chat';
   const runtime = resolveChatRuntime(options);
-  const breakerKey = runtime.useReplyProvider ? 'reply' : 'chat';
+  const breakerKey = buildModelCircuitKey(
+    runtime.providerKind,
+    payload.model
+  );
   const payload = buildChatCompletionPayload(messages, options);
 
   if (!payload.model) {
@@ -282,16 +317,18 @@ export async function createEmbeddings(input, options = {}) {
   const startedAt = Date.now();
   const normalizedInput = Array.isArray(input) ? input : [input];
   const operation = options.operation || 'embedding';
+  const model = options.model || config.embeddingModel;
+  const breakerKey = buildModelCircuitKey('embedding', model);
 
-  if (isCircuitOpen('embedding')) {
-    throw raiseCircuitOpenError(operation, 'embedding');
+  if (isCircuitOpen(breakerKey)) {
+    throw raiseCircuitOpenError(operation, breakerKey);
   }
 
   try {
     const response = await withRetry(
       () => withTimeout(
         () => embeddingClient.embeddings.create({
-          model: options.model || config.embeddingModel,
+          model,
           input: normalizedInput,
         }),
         options.timeoutMs || config.requestTimeoutMs,
@@ -306,18 +343,18 @@ export async function createEmbeddings(input, options = {}) {
       }
     );
 
-    markModelSuccess('embedding');
+    markModelSuccess(breakerKey);
     logger.info('model', 'Embeddings finished', {
       traceId: options.traceContext?.traceId,
       operation,
-      model: options.model || config.embeddingModel,
+      model,
       elapsedMs: Date.now() - startedAt,
       inputCount: normalizedInput.length,
     });
 
     return response.data || [];
   } catch (error) {
-    markModelFailure(error, operation, options.traceContext, 'embedding');
+    markModelFailure(error, operation, options.traceContext, breakerKey);
     throw error;
   }
 }

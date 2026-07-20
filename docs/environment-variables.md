@@ -12,6 +12,7 @@
 | MongoDB | `MONGODB_URI` | 会话、关系、状态、记忆和任务持久化 |
 | 上游模型 | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `LLM_CHAT_MODEL` | 触发分析、摘要和其他上游模型任务 |
 | 最终回复模型 | `REPLY_LLM_API_KEY`, `REPLY_LLM_BASE_URL`, `REPLY_LLM_CHAT_MODEL` | 生成最终发给 QQ 用户的回复 |
+| 回复容错 | `REPLY_LLM_FALLBACK_API_KEY`, `REPLY_LLM_FALLBACK_BASE_URL`, `REPLY_LLM_FALLBACK_CHAT_MODEL` | 主回复模型 429、超时或 5xx 时使用的独立备用 provider |
 | Gemini 回复控制 | `REPLY_LLM_REASONING_EFFORT`, `REPLY_LLM_KNOWLEDGE_REASONING_EFFORT`, `REPLY_LLM_STRUCTURED_OUTPUT` | Gemini 推理强度和结构化输出 |
 | Embedding | `EMBEDDING_API_KEY`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL` | Qdrant 知识和长期记忆向量化 |
 | Qdrant | `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION` | 知识库、长期记忆和表情包语义检索 |
@@ -37,6 +38,8 @@ LLM_CHAT_MODEL -> provider default
 当前 Zeabur 部署使用 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 和 `LLM_CHAT_MODEL`。因此不需要再重复配置 `LLM_API_KEY` 或 `LLM_BASE_URL`。
 
 最终回复使用独立的 `REPLY_LLM_*`。即使当前上游和最终回复使用同一把 Google AI Studio key，也保留两组变量，以免未来调整上游模型时意外改变最终回复模型。
+
+生产环境使用 `gemini-3.5-flash` 作为主回复模型，并通过 SiliconFlow 的 `Qwen/Qwen3-8B` 作为备用模型。主模型出现 429、超时或 5xx 时，工作流会切换到独立的备用 key 和 base URL；断路器按 provider 与模型隔离，不会因为 Google 主模型限流而一起阻断备用模型。
 
 Embedding 使用独立的 `EMBEDDING_*`，不会依赖当前 Gemini 回复接口。
 

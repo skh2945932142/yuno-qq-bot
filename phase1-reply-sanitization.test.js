@@ -313,6 +313,50 @@ test('processIncomingMessage degrades gracefully when model times out', async ()
   assert.equal(sentReplies.length, 1);
 });
 
+test('processIncomingMessage uses the configured fallback model after a 429', async () => {
+  const sentReplies = [];
+  const modelCalls = [];
+
+  const reply = await processIncomingMessage(createEvent(), createContext(), {
+    replyLlmFallbackChatModel: 'gemini-2.5-flash-lite',
+    deps: createDeps(
+      async (_target, text) => {
+        sentReplies.push(text);
+      },
+      async (_messages, _systemPrompt, _userTurn, options = {}) => {
+        modelCalls.push(`${options.providerKind || 'reply'}:${options.model || 'primary'}`);
+        if (!options.model) {
+          const error = new Error('429 status code (no body)');
+          error.status = 429;
+          throw error;
+        }
+        return '{"text":"我接着呢，刚才那句没有丢。","sendVoice":false,"voiceText":""}';
+      }
+    ),
+  });
+
+  assert.deepEqual(modelCalls, ['reply:primary', 'reply-fallback:gemini-2.5-flash-lite']);
+  assert.equal(reply, '我接着呢，刚才那句没有丢。');
+  assert.equal(sentReplies[0], reply);
+});
+
+test('429 canned fallback does not ask the user to repeat the message', async () => {
+  const reply = await processIncomingMessage(createEvent(), createContext(), {
+    replyLlmFallbackChatModel: '',
+    deps: createDeps(
+      async () => null,
+      async () => {
+        const error = new Error('429 status code (no body)');
+        error.status = 429;
+        throw error;
+      }
+    ),
+  });
+
+  assert.match(reply, /不用重发|记着这句/);
+  assert.doesNotMatch(reply, /再发一次/);
+});
+
 test('personality strategy explicitly forbids unsafe possessive escalation', async () => {
   const { resolvePersonalityStrategy } = await import('./src/personality-strategy.js');
   const strategy = resolvePersonalityStrategy({

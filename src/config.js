@@ -30,6 +30,12 @@ const resolvedReplyLlmBaseUrl = normalizeBaseUrl(process.env.REPLY_LLM_BASE_URL
     : resolvedLlmBaseUrl));
 const resolvedReplyLlmChatModel = process.env.REPLY_LLM_CHAT_MODEL
   || (process.env.GEMINI_API_KEY ? 'gemini-3.5-flash' : configuredReplyLlmChatModel);
+const resolvedReplyLlmFallbackApiKey = process.env.REPLY_LLM_FALLBACK_API_KEY
+  || process.env.EMBEDDING_API_KEY
+  || resolvedReplyLlmApiKey;
+const resolvedReplyLlmFallbackBaseUrl = normalizeBaseUrl(process.env.REPLY_LLM_FALLBACK_BASE_URL
+  || process.env.EMBEDDING_BASE_URL
+  || resolvedReplyLlmBaseUrl);
 const defaultTtsBaseUrl = resolvedTtsProvider === 'mimo'
   ? 'https://api.xiaomimimo.com/v1/chat/completions'
   : (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1/audio/speech' : '');
@@ -112,6 +118,8 @@ export const config = Object.freeze({
   replyLlmApiKey: resolvedReplyLlmApiKey,
   replyLlmBaseUrl: resolvedReplyLlmBaseUrl,
   replyLlmChatModel: resolvedReplyLlmChatModel,
+  replyLlmFallbackApiKey: resolvedReplyLlmFallbackApiKey,
+  replyLlmFallbackBaseUrl: resolvedReplyLlmFallbackBaseUrl,
   replyLlmFallbackChatModel: process.env.REPLY_LLM_FALLBACK_CHAT_MODEL
     || (hasDedicatedReplyLlm ? '' : (process.env.MODEL_FALLBACK_CHAT_MODEL || '')),
   replyLlmReasoningEffort: readEnum('REPLY_LLM_REASONING_EFFORT', ['minimal', 'low', 'medium', 'high'], 'low'),

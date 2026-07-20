@@ -3,10 +3,26 @@ import assert from 'node:assert/strict';
 import {
   buildChatCompletionPayload,
   buildChatSystemInstructions,
+  buildModelCircuitKey,
   buildOpenAiClientConfig,
   buildReplyResponseFormat,
   buildStructuredReplyResponseFormat,
 } from './src/minimax.js';
+
+test('model circuit keys isolate primary and fallback reply models', () => {
+  assert.equal(
+    buildModelCircuitKey('reply', 'gemini-3.5-flash'),
+    'reply:gemini-3.5-flash'
+  );
+  assert.notEqual(
+    buildModelCircuitKey('reply', 'gemini-3.5-flash'),
+    buildModelCircuitKey('reply', 'gemini-2.5-flash-lite')
+  );
+  assert.notEqual(
+    buildModelCircuitKey('reply', 'gemini-3.5-flash'),
+    buildModelCircuitKey('chat', 'gemini-3.5-flash')
+  );
+});
 
 async function loadConfigModule(overrides = {}) {
   const keys = Object.keys(overrides);
@@ -185,6 +201,31 @@ test('reply OpenAI client config stays independent from analysis and embedding p
   assert.equal(clientConfig.apiKey, 'gemini-key');
   assert.equal(clientConfig.baseURL, 'https://generativelanguage.googleapis.com/v1beta/openai');
   assert.equal(clientConfig.timeout, 15000);
+});
+
+test('fallback reply client can use an independent provider', () => {
+  const clientConfig = buildOpenAiClientConfig('reply-fallback', {
+    llmApiKey: 'analysis-key',
+    llmBaseUrl: 'https://analysis.example/v1',
+    replyLlmApiKey: 'gemini-key',
+    replyLlmBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    replyLlmFallbackApiKey: 'siliconflow-key',
+    replyLlmFallbackBaseUrl: 'https://api.siliconflow.cn/v1',
+    requestTimeoutMs: 15000,
+  });
+
+  assert.equal(clientConfig.apiKey, 'siliconflow-key');
+  assert.equal(clientConfig.baseURL, 'https://api.siliconflow.cn/v1');
+  assert.equal(clientConfig.timeout, 15000);
+});
+
+test('non-Gemini fallback provider uses JSON object response mode', () => {
+  const responseFormat = buildReplyResponseFormat({
+    providerKind: 'reply-fallback',
+    model: 'Qwen/Qwen3-8B',
+  });
+
+  assert.deepEqual(responseFormat, { type: 'json_object' });
 });
 
 test('Gemini final-reply payload uses strict JSON schema and explicit reasoning effort', () => {

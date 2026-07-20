@@ -191,6 +191,7 @@ async function runReplyWithBudget(task, timeoutMs) {
 function buildModelFallbackReply(event, task, error) {
   const route = task?.category || 'chat';
   const reason = String(error?.code || '').toUpperCase();
+  const status = Number(error?.status || error?.response?.status || 0);
   const isPrivate = event?.chatType === 'private';
 
   if (route === 'knowledge_qa') {
@@ -209,6 +210,12 @@ function buildModelFallbackReply(event, task, error) {
     return isPrivate
       ? '我刚才卡了一下，还在听你。把刚刚那句再发我一次，我马上接。'
       : '我这边刚卡了一下，你再说一次，我马上接。';
+  }
+
+  if (status === 429) {
+    return isPrivate
+      ? '刚刚消息一下挤住了。你不用重发，我记着这句，缓一下就接着说。'
+      : '刚刚消息挤住了，不用重复发，我缓一下就接上。';
   }
 
   return isPrivate
@@ -1591,7 +1598,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
                   traceContext: trace,
                   promptVersion: 'reply-context/v6',
                   operation: 'reply-fallback-model',
-                  providerKind: 'reply',
+                  providerKind: 'reply-fallback',
                   expectStructuredReply: true,
                   reasoningEffort: replyLengthProfile.reasoningEffort,
                   model: fallbackModel,
@@ -1645,7 +1652,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
           route: task.category,
           code: error.code,
           status: error.status || error.response?.status,
-          message: error.message,
+          errorMessage: error.message,
         });
         visibleReplyText = buildModelFallbackReply(normalizedEvent, task, error);
       }
