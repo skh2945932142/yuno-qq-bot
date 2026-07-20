@@ -82,6 +82,26 @@ TTS_VOICE_DESIGN=十八岁左右的年轻女性声线，清亮、干净、略偏
 TTS_SPEED=1.15
 ```
 
+### 每日心境与 AstrBot 插件边界
+
+每日心境由 `yuno-qq-bot` 统一计算。默认以 `Asia/Shanghai` 的自然日和固定种子进行确定性抽签，同一天内重启或扩容不会改变心境，跨日才重新选择。
+
+```env
+BOT_DAILY_MOOD_ENABLED=true
+BOT_DAILY_MOOD_SEED=yuno-daily-mood-v1
+BOT_DAILY_MOOD_TIMEZONE=Asia/Shanghai
+# 仅调试时使用：STEADY、BRIGHT、IRRITABLE、GLOOMY、DISTANT、JEALOUS、PROTECTIVE
+BOT_DAILY_MOOD_OVERRIDE=
+```
+
+AstrBot 插件管理应保持 Yuno 为唯一回复人格源：
+
+- `yuno_qq_bot`：保持启用。正常回复由该插件调用 Yuno Core，并在生成消息链后停止后续默认回复。
+- `astrbot_plugin_portrayal`：关闭“给提示词注入画像” (`inject_prompt=false`)；画像查询命令可以继续使用。
+- `astrbot_plugin_self_learning`：保留消息采集、实时学习、用语风格学习；关闭独立每日心情、启动随机心情、社交上下文注入、自动应用人格更新和 Persona Manager 更新。`Runtime_Internal_Settings.enable_llm_hooks` 保持 `false`。
+- `astrbot_plugin_livingmemory`：可以保留被动采集；其 `on_llm_request` 召回不会进入 Yuno Core 的 HTTP 模型调用。若以后恢复 AstrBot 原生 LLM 作为回复路径，应避免同时启用该插件召回和 Yuno Qdrant 召回。
+- `meme_manager`：保持 `enable_mixed_message=true`、`mixed_message_probability=100`；它只负责表情标签和消息链，不承担人格心境。
+
 ### API 端点
 
 yuno-qq-bot 提供以下端点：

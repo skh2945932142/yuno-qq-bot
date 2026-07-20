@@ -43,6 +43,20 @@ test('config uses openai-compatible tts provider by default and prefers TTS_VOIC
   assert.equal(config.ttsVoice, 'mimo_voice');
 });
 
+test('config enables deterministic daily mood in Asia Shanghai by default', async () => {
+  const { config } = await loadConfigModule({
+    BOT_DAILY_MOOD_ENABLED: '',
+    BOT_DAILY_MOOD_SEED: '',
+    BOT_DAILY_MOOD_TIMEZONE: '',
+    BOT_DAILY_MOOD_OVERRIDE: '',
+  });
+
+  assert.equal(config.dailyMoodEnabled, true);
+  assert.equal(config.dailyMoodSeed, 'yuno-daily-mood-v1');
+  assert.equal(config.dailyMoodTimezone, 'Asia/Shanghai');
+  assert.equal(config.dailyMoodOverride, '');
+});
+
 test('config falls back to YUNO_VOICE_URI when TTS_VOICE is missing', async () => {
   const { config } = await loadConfigModule({
     TTS_VOICE: '',

@@ -40,6 +40,7 @@ export function resolveEmotion({
   messageAnalysis,
   isAdmin = false,
   specialUser = null,
+  dailyMood = null,
 }) {
   const affection = relation?.affection || 30;
   const base = baselineEmotion(affection, specialUser);
@@ -89,20 +90,28 @@ export function resolveEmotion({
     emotion = emotion === 'AFFECTIONATE' ? 'FIXATED' : emotion;
   }
 
+  if (dailyMood?.emotionOverride) {
+    emotion = dailyMood.emotionOverride;
+    reason = `daily-mood:${String(dailyMood.key || '').toLowerCase()}`;
+    intensity = clamp(intensity + Number(dailyMood.intensityBoost || 0), 0.35, 1);
+  }
+
   if (userState?.decayAt && new Date(userState.decayAt) > new Date() && userState.currentEmotion === emotion) {
     intensity = clamp(intensity + 0.05, 0.25, 0.95);
   }
 
   const emojiRule = EMOJI_RULES[emotion] || EMOJI_RULES.CALM;
+  const dailyToneHints = Array.isArray(dailyMood?.toneHints) ? dailyMood.toneHints : [];
 
   return {
     emotion,
     intensity,
     reason,
-    promptStyle: EMOTION_STYLES[emotion],
+    promptStyle: [EMOTION_STYLES[emotion], dailyMood?.promptStyle].filter(Boolean).join(' '),
     emojiBudget: emojiRule.budget,
     emojiStyle: emojiRule.style,
-    toneHints: emojiRule.toneHints,
+    toneHints: [...new Set([...emojiRule.toneHints, ...dailyToneHints])],
+    dailyMood,
   };
 }
 

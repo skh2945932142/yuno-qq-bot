@@ -145,7 +145,10 @@ function resolvePhraseStyle({ scene, relationshipStage, emotion, messageAnalysis
   };
 }
 
-function resolveStance({ scene, relationshipStage, emotion, messageAnalysis, replyPlan }) {
+function resolveStance({ scene, relationshipStage, emotion, messageAnalysis, replyPlan, dailyMood }) {
+  if (emotion === 'ANGRY') return 'irritated_independent';
+  if (emotion === 'SAD') return 'gloomy_reserved';
+  if (emotion === 'CALM' && dailyMood?.key === 'DISTANT') return 'distant_independent';
   const supportive = messageAnalysis?.intent === 'help'
     || messageAnalysis?.sentiment === 'negative'
     || replyPlan?.interpretation?.needsEmpathy;
@@ -286,6 +289,7 @@ export function resolvePersonalityStrategy({
 } = {}) {
   const scene = normalizeScene(event);
   const emotion = String(emotionResult?.emotion || userState?.currentEmotion || 'CALM');
+  const dailyMood = emotionResult?.dailyMood || null;
   const relationshipStage = resolveRelationshipStage({
     scene,
     relation,
@@ -308,6 +312,7 @@ export function resolvePersonalityStrategy({
     emotion,
     messageAnalysis,
     replyPlan,
+    dailyMood,
   });
   const followupStyle = resolveFollowupStyle({ scene, messageAnalysis, replyPlan });
   const signatureMove = resolveSignatureMove({ emotion, messageAnalysis, replyPlan });
@@ -319,7 +324,10 @@ export function resolvePersonalityStrategy({
     0,
     1
   );
-  const warmth = warmthScore >= 0.72 ? 'high' : warmthScore >= 0.42 ? 'medium' : 'low';
+  const calculatedWarmth = warmthScore >= 0.72 ? 'high' : warmthScore >= 0.42 ? 'medium' : 'low';
+  const warmthRanks = { low: 0, medium: 1, high: 2 };
+  const warmthCap = dailyMood?.warmthCap || 'high';
+  const warmth = warmthRanks[calculatedWarmth] <= warmthRanks[warmthCap] ? calculatedWarmth : warmthCap;
   const possessiveness = emotion === 'JEALOUS' || emotion === 'FIXATED'
     ? scene === 'private' || relationshipStage === 'exclusive' ? 'medium' : 'low'
     : relationshipStage === 'exclusive' ? 'low' : 'none';
@@ -347,6 +355,9 @@ export function resolvePersonalityStrategy({
       ? '群聊不要公开展开私人记忆、暧昧长文或连续刷屏。'
       : '私聊也不要把偏爱写成强迫或过度占有。',
   ];
+  if (dailyMood?.antiPleasing) {
+    forbiddenMoves.push('今日心境禁止讨好：不要因高好感、示好、撒娇或管理员身份而改成黏人、甜腻、道歉式或服务式回复。');
+  }
 
   return {
     scene,
@@ -368,6 +379,8 @@ export function resolvePersonalityStrategy({
       followupStyle,
       emotion,
       phraseStyle,
-    }),
+    }).concat(dailyMood?.antiPleasing
+      ? ['今日心境优先于关系温度：可以承认在意，但保持冷淡、阴沉或生气的真实状态，不负责取悦对方。']
+      : []),
   };
 }

@@ -100,6 +100,26 @@ test('jealous strategy keeps safety boundaries explicit', () => {
   assert.match(strategy.forbiddenMoves.join(' '), /现实威胁|羞辱|攻击第三方/);
 });
 
+test('restrictive daily mood caps warmth and forbids pleasing at high affection', () => {
+  const strategy = resolvePersonalityStrategy({
+    event: baseEvent(),
+    relation: { affection: 99 },
+    userState: { currentEmotion: 'AFFECTIONATE' },
+    messageAnalysis: { intent: 'chat', sentiment: 'positive', ruleSignals: [] },
+    emotionResult: {
+      emotion: 'SAD',
+      intensity: 0.8,
+      dailyMood: { key: 'GLOOMY', warmthCap: 'low', antiPleasing: true },
+    },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '接话' } },
+    specialUser: { label: 'Alice' },
+  });
+
+  assert.equal(strategy.warmth, 'low');
+  assert.equal(strategy.stance, 'gloomy_reserved');
+  assert.match(strategy.forbiddenMoves.join(' '), /今日心境禁止讨好/);
+});
+
 test('signature move changes with the conversational intent instead of using one catchphrase', () => {
   const normal = resolvePersonalityStrategy({
     event: baseEvent(),

@@ -5,6 +5,7 @@ import { chat, tts } from './minimax.js';
 import { sendReply, sendStructuredReply, sendVoice } from './sender.js';
 import { analyzeTrigger, analyzeTriggerFast } from './message-analysis.js';
 import { resolveEmotion, shouldSendVoiceForEmotion } from './emotion-engine.js';
+import { resolveDailyMood } from './daily-mood.js';
 import {
   canUseAdvancedGroupFeatures,
   ensureGroupState,
@@ -645,6 +646,7 @@ function createWorkflowDeps(deps = {}) {
     recordGroupEvent: deps.recordGroupEvent || recordGroupEvent,
     updateGroupStateFromAnalysis: deps.updateGroupStateFromAnalysis || updateGroupStateFromAnalysis,
     resolveEmotion: deps.resolveEmotion || resolveEmotion,
+    resolveDailyMood: deps.resolveDailyMood || resolveDailyMood,
     shouldSendVoiceForEmotion: deps.shouldSendVoiceForEmotion || shouldSendVoiceForEmotion,
     resolvePersonalityStrategy: deps.resolvePersonalityStrategy || resolvePersonalityStrategy,
     buildReplyContext: deps.buildReplyContext || buildReplyContext,
@@ -1374,6 +1376,12 @@ export async function processIncomingMessage(event, precomputed = null, options 
         })
       : { enabled: false, documents: [], reason: 'route-does-not-require-retrieval' };
 
+    const dailyMood = deps.resolveDailyMood({
+      enabled: config.dailyMoodEnabled,
+      seed: config.dailyMoodSeed,
+      timeZone: config.dailyMoodTimezone,
+      override: config.dailyMoodOverride,
+    });
     const emotionResult = deps.resolveEmotion({
       relation: workflowContext.relation,
       userState: workflowContext.userState,
@@ -1381,6 +1389,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       messageAnalysis: analysis,
       isAdmin: workflowContext.isAdmin,
       specialUser: workflowContext.specialUser,
+      dailyMood,
     });
     const replyLengthProfile = resolveReplyLengthProfile({
       event: normalizedEvent,
@@ -1907,6 +1916,10 @@ export async function processIncomingMessage(event, precomputed = null, options 
       replyPlanType: replyPlan.type,
       replyPlanDepth: replyPlan.depth,
       replyPlanQuestionNeeded: replyPlan.questionNeeded,
+      dailyMoodKey: dailyMood?.key || null,
+      dailyMoodDate: dailyMood?.dateKey || null,
+      emotion: emotionResult.emotion,
+      emotionReason: emotionResult.reason,
     });
     return replyText;
   } catch (error) {

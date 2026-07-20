@@ -195,8 +195,15 @@ function buildStateSection({
   const lines = [
     '状态',
     `- 对方=${event.userName} 管理员=${isAdmin ? '是' : '否'} 好感=${relation?.affection ?? 0}/100`,
-    `- 情绪=${userState?.currentEmotion || 'CALM'} 强度=${Number(emotionResult?.intensity || 0).toFixed(2)} 语气提示=${formatList(emotionResult?.toneHints)}`,
+    `- 本轮情绪=${emotionResult?.emotion || userState?.currentEmotion || 'CALM'} 强度=${Number(emotionResult?.intensity || 0).toFixed(2)} 语气提示=${formatList(emotionResult?.toneHints)}`,
   ];
+
+  if (emotionResult?.dailyMood) {
+    lines.push(`- 今日心境=${emotionResult.dailyMood.label} 日期=${emotionResult.dailyMood.dateKey}。${emotionResult.dailyMood.promptStyle}`);
+    if (emotionResult.dailyMood.antiPleasing) {
+      lines.push('- 今日硬约束=不要因好感度高、对方示好或管理员身份而软化成立即讨好；可以在意，但不哄、不迎合、不无条件赞同。');
+    }
+  }
 
   if (relation?.memorySummary) {
     lines.push(`- 关系备注=${compactText(relation.memorySummary, promptProfile === 'fast' ? 42 : 72)}`);
