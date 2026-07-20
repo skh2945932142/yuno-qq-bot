@@ -1506,7 +1506,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
           traceContext: trace,
           promptVersion: 'reply-context/v6',
           operation: 'reply',
+          providerKind: 'reply',
           expectStructuredReply: true,
+          reasoningEffort: replyLengthProfile.reasoningEffort,
           maxTokens: replyLengthProfile.maxTokens,
           historyLimit: replyLengthProfile.historyLimit,
           temperature: replyLengthProfile.temperature,
@@ -1560,8 +1562,11 @@ export async function processIncomingMessage(event, precomputed = null, options 
         });
         visibleReplyText = buildReplyBudgetFallbackReply(normalizedEvent, task);
       } else if (isModelUnavailableError(error)) {
-        const fallbackModel = String(options.modelFallbackChatModel || config.modelFallbackChatModel || '').trim();
-        if (fallbackModel && fallbackModel !== config.llmChatModel) {
+        const fallbackModel = String(options.replyLlmFallbackChatModel
+          || options.modelFallbackChatModel
+          || config.replyLlmFallbackChatModel
+          || '').trim();
+        if (fallbackModel && fallbackModel !== config.replyLlmChatModel) {
           try {
             const fallbackRemainingBudgetMs = getRemainingReplyBudgetMs();
             if (
@@ -1586,7 +1591,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
                   traceContext: trace,
                   promptVersion: 'reply-context/v6',
                   operation: 'reply-fallback-model',
+                  providerKind: 'reply',
                   expectStructuredReply: true,
+                  reasoningEffort: replyLengthProfile.reasoningEffort,
                   model: fallbackModel,
                   maxTokens: Math.min(replyLengthProfile.maxTokens, normalizedEvent.chatType === 'group' ? 140 : 220),
                   historyLimit: Math.min(replyLengthProfile.historyLimit, normalizedEvent.chatType === 'group' ? 2 : 3),

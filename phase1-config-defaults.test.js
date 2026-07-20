@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildOpenAiClientConfig } from './src/minimax.js';
+import {
+  buildChatCompletionPayload,
+  buildChatSystemInstructions,
+  buildOpenAiClientConfig,
+  buildReplyResponseFormat,
+  buildStructuredReplyResponseFormat,
+} from './src/minimax.js';
 
 async function loadConfigModule(overrides = {}) {
   const keys = Object.keys(overrides);
@@ -121,6 +127,103 @@ test('embedding OpenAI client config uses embedding provider instead of chat pro
   assert.equal(clientConfig.timeout, 15000);
 });
 
+test('GEMINI_API_KEY alone selects the official Gemini 3.5 Flash OpenAI-compatible defaults', async () => {
+  const { config } = await loadConfigModule({
+    LLM_API_KEY: '',
+    OPENAI_API_KEY: '',
+    SILICONFLOW_API_KEY: '',
+    LLM_BASE_URL: '',
+    OPENAI_BASE_URL: '',
+    LLM_CHAT_MODEL: '',
+    REPLY_LLM_API_KEY: '',
+    REPLY_LLM_BASE_URL: '',
+    REPLY_LLM_CHAT_MODEL: '',
+    GEMINI_API_KEY: 'gemini-key',
+  });
+
+  assert.equal(config.llmApiKey, 'gemini-key');
+  assert.equal(config.llmBaseUrl, 'https://generativelanguage.googleapis.com/v1beta/openai');
+  assert.equal(config.llmChatModel, 'gemini-3.5-flash');
+  assert.equal(config.replyLlmApiKey, 'gemini-key');
+  assert.equal(config.replyLlmBaseUrl, 'https://generativelanguage.googleapis.com/v1beta/openai');
+  assert.equal(config.replyLlmChatModel, 'gemini-3.5-flash');
+});
+test('config exposes an independent Gemini final-reply provider', async () => {
+  const { config } = await loadConfigModule({
+    LLM_API_KEY: 'analysis-key',
+    LLM_BASE_URL: 'https://analysis.example/v1',
+    LLM_CHAT_MODEL: 'analysis-model',
+    REPLY_LLM_API_KEY: 'gemini-key',
+    REPLY_LLM_BASE_URL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    REPLY_LLM_CHAT_MODEL: 'gemini-3.5-flash',
+    REPLY_LLM_REASONING_EFFORT: 'minimal',
+    REPLY_LLM_KNOWLEDGE_REASONING_EFFORT: 'low',
+    REPLY_LLM_STRUCTURED_OUTPUT: 'true',
+    MODEL_FALLBACK_CHAT_MODEL: 'upstream-only-fallback',
+    REPLY_LLM_FALLBACK_CHAT_MODEL: '',
+  });
+
+  assert.equal(config.llmChatModel, 'analysis-model');
+  assert.equal(config.replyLlmApiKey, 'gemini-key');
+  assert.equal(config.replyLlmBaseUrl, 'https://generativelanguage.googleapis.com/v1beta/openai');
+  assert.equal(config.replyLlmChatModel, 'gemini-3.5-flash');
+  assert.equal(config.replyLlmReasoningEffort, 'minimal');
+  assert.equal(config.replyLlmKnowledgeReasoningEffort, 'low');
+  assert.equal(config.replyLlmStructuredOutput, true);
+  assert.equal(config.replyLlmFallbackChatModel, '');
+});
+
+test('reply OpenAI client config stays independent from analysis and embedding providers', () => {
+  const clientConfig = buildOpenAiClientConfig('reply', {
+    llmApiKey: 'analysis-key',
+    llmBaseUrl: 'https://analysis.example/v1',
+    replyLlmApiKey: 'gemini-key',
+    replyLlmBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    requestTimeoutMs: 15000,
+  });
+
+  assert.equal(clientConfig.apiKey, 'gemini-key');
+  assert.equal(clientConfig.baseURL, 'https://generativelanguage.googleapis.com/v1beta/openai');
+  assert.equal(clientConfig.timeout, 15000);
+});
+
+test('Gemini final-reply payload uses strict JSON schema and explicit reasoning effort', () => {
+  const responseFormat = buildStructuredReplyResponseFormat();
+  const payload = buildChatCompletionPayload([
+    { role: 'user', content: '测试' },
+  ], {
+    providerKind: 'reply',
+    model: 'gemini-3.5-flash',
+    reasoningEffort: 'minimal',
+    responseFormat,
+    maxTokens: 240,
+  });
+
+  assert.equal(payload.model, 'gemini-3.5-flash');
+  assert.equal(payload.reasoning_effort, 'minimal');
+  assert.equal(payload.max_tokens, 240);
+  assert.equal(payload.response_format.type, 'json_schema');
+  assert.equal(payload.response_format.json_schema.strict, true);
+  assert.deepEqual(payload.response_format.json_schema.schema.required, ['text', 'sendVoice', 'voiceText']);
+  assert.equal(payload.response_format.json_schema.schema.additionalProperties, false);
+});
+
+test('non-Gemini reply providers keep the legacy JSON object response mode', () => {
+  const responseFormat = buildReplyResponseFormat({
+    model: 'MiniMax-M2.7',
+  });
+
+  assert.deepEqual(responseFormat, { type: 'json_object' });
+});
+test('Gemini final prompt places upstream data before the final generation task', () => {
+  const prompt = buildChatSystemInstructions('上游分析数据\n- intent=chat', {
+    expectStructuredReply: true,
+  });
+
+  assert.ok(prompt.indexOf('# 上游上下文') < prompt.indexOf('# 最终任务'));
+  assert.match(prompt, /不要复述内部字段名或上游分析过程/);
+  assert.match(prompt, /只输出一个有效 JSON 对象/);
+});
 test('config exposes companion experience and external enhancement knobs', async () => {
   const { config } = await loadConfigModule({
     BOT_EXPERIENCE_MODE: '',

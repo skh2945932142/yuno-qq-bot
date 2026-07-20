@@ -95,6 +95,9 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
   assert.match(prompt, /本轮辨识度动作/);
   assert.match(prompt, /接话规划/);
   assert.match(prompt, /当前理解/);
+  assert.match(prompt, /上游数据使用规则/);
+  assert.match(prompt, /当前用户输入 > 可信工具\/RAG结果/);
+  assert.match(prompt, /不要复述 JSON、字段名、分数、模型名/);
 });
 
 test('buildReplyContext uses current daily mood instead of stale stored emotion', () => {

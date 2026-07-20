@@ -156,6 +156,8 @@ test('processIncomingMessage passes route-specific generation profile to chat', 
           maxTokens: options.maxTokens,
           historyLimit: options.historyLimit,
           temperature: options.temperature,
+          providerKind: options.providerKind,
+          reasoningEffort: options.reasoningEffort,
         });
         return '先把重点说出来，再留一点余地。';
       },
@@ -170,4 +172,6 @@ test('processIncomingMessage passes route-specific generation profile to chat', 
   assert.equal(captured[0].maxTokens, config.groupChatMaxTokens);
   assert.equal(captured[0].historyLimit, 4);
   assert.equal(captured[0].temperature, 0.52);
+  assert.equal(captured[0].providerKind, 'reply');
+  assert.equal(captured[0].reasoningEffort, config.replyLlmReasoningEffort);
 });

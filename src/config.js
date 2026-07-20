@@ -3,10 +3,33 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const resolvedTtsProvider = (process.env.TTS_PROVIDER || 'openai_compatible').trim().toLowerCase() || 'openai_compatible';
-const resolvedLlmApiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY || '';
+const resolvedLlmApiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY || process.env.GEMINI_API_KEY || '';
 const resolvedLlmBaseUrl = normalizeBaseUrl(process.env.LLM_BASE_URL
   || process.env.OPENAI_BASE_URL
-  || (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1' : 'https://api.openai.com/v1'));
+  || (process.env.GEMINI_API_KEY
+    ? 'https://generativelanguage.googleapis.com/v1beta/openai'
+    : (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1' : 'https://api.openai.com/v1')));
+const resolvedLlmChatModel = process.env.LLM_CHAT_MODEL
+  || (process.env.GEMINI_API_KEY
+    ? 'gemini-3.5-flash'
+    : (process.env.SILICONFLOW_API_KEY ? 'Pro/MiniMaxAI/MiniMax-M2.5' : ''));
+const configuredReplyLlmChatModel = process.env.REPLY_LLM_CHAT_MODEL || resolvedLlmChatModel;
+const hasDedicatedReplyLlm = Boolean(process.env.REPLY_LLM_API_KEY
+  || process.env.REPLY_LLM_BASE_URL
+  || process.env.REPLY_LLM_CHAT_MODEL
+  || process.env.GEMINI_API_KEY);
+const shouldUseGeminiReplyDefaults = Boolean(process.env.GEMINI_API_KEY)
+  || /gemini/i.test(configuredReplyLlmChatModel)
+  || /generativelanguage\.googleapis\.com/i.test(process.env.LLM_BASE_URL || '');
+const resolvedReplyLlmApiKey = process.env.REPLY_LLM_API_KEY
+  || process.env.GEMINI_API_KEY
+  || resolvedLlmApiKey;
+const resolvedReplyLlmBaseUrl = normalizeBaseUrl(process.env.REPLY_LLM_BASE_URL
+  || (shouldUseGeminiReplyDefaults
+    ? 'https://generativelanguage.googleapis.com/v1beta/openai'
+    : resolvedLlmBaseUrl));
+const resolvedReplyLlmChatModel = process.env.REPLY_LLM_CHAT_MODEL
+  || (process.env.GEMINI_API_KEY ? 'gemini-3.5-flash' : configuredReplyLlmChatModel);
 const defaultTtsBaseUrl = resolvedTtsProvider === 'mimo'
   ? 'https://api.xiaomimimo.com/v1/chat/completions'
   : (process.env.SILICONFLOW_API_KEY ? 'https://api.siliconflow.cn/v1/audio/speech' : '');
@@ -57,6 +80,11 @@ function readTrimmed(name, fallback = '') {
   return normalized || fallback;
 }
 
+function readEnum(name, allowed, fallback) {
+  const value = readTrimmed(name, fallback).toLowerCase();
+  return allowed.includes(value) ? value : fallback;
+}
+
 function normalizeBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '');
 }
@@ -80,7 +108,15 @@ export const config = Object.freeze({
   mongoMaxPoolSize: readNumber('MONGO_MAX_POOL_SIZE', 10),
   llmApiKey: resolvedLlmApiKey,
   llmBaseUrl: resolvedLlmBaseUrl,
-  llmChatModel: process.env.LLM_CHAT_MODEL || (process.env.SILICONFLOW_API_KEY ? 'Pro/MiniMaxAI/MiniMax-M2.5' : ''),
+  llmChatModel: resolvedLlmChatModel,
+  replyLlmApiKey: resolvedReplyLlmApiKey,
+  replyLlmBaseUrl: resolvedReplyLlmBaseUrl,
+  replyLlmChatModel: resolvedReplyLlmChatModel,
+  replyLlmFallbackChatModel: process.env.REPLY_LLM_FALLBACK_CHAT_MODEL
+    || (hasDedicatedReplyLlm ? '' : (process.env.MODEL_FALLBACK_CHAT_MODEL || '')),
+  replyLlmReasoningEffort: readEnum('REPLY_LLM_REASONING_EFFORT', ['minimal', 'low', 'medium', 'high'], 'low'),
+  replyLlmKnowledgeReasoningEffort: readEnum('REPLY_LLM_KNOWLEDGE_REASONING_EFFORT', ['minimal', 'low', 'medium', 'high'], 'low'),
+  replyLlmStructuredOutput: readBoolean('REPLY_LLM_STRUCTURED_OUTPUT', true),
   embeddingApiKey: process.env.EMBEDDING_API_KEY || process.env.OPENAI_API_KEY || resolvedLlmApiKey,
   embeddingBaseUrl: normalizeBaseUrl(process.env.EMBEDDING_BASE_URL || process.env.OPENAI_BASE_URL || resolvedLlmBaseUrl),
   embeddingModel: process.env.EMBEDDING_MODEL || 'text-embedding-3-small',
@@ -205,8 +241,10 @@ export function describeHttpBaseUrlProblem(value) {
 export function validateRuntimeConfig() {
   const required = [
     ['MONGODB_URI', config.mongodbUri],
-    ['LLM_API_KEY/OPENAI_API_KEY/SILICONFLOW_API_KEY', config.llmApiKey],
+    ['LLM_API_KEY/OPENAI_API_KEY/SILICONFLOW_API_KEY/GEMINI_API_KEY', config.llmApiKey],
     ['LLM_CHAT_MODEL', config.llmChatModel],
+    ['REPLY_LLM_API_KEY/GEMINI_API_KEY/LLM_API_KEY', config.replyLlmApiKey],
+    ['REPLY_LLM_CHAT_MODEL/LLM_CHAT_MODEL', config.replyLlmChatModel],
     ['NAPCAT_API', config.napcatApi],
   ];
 

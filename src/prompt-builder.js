@@ -398,6 +398,17 @@ function buildVoiceReplySection(voiceReplyPolicy = null) {
   return lines.join('\n');
 }
 
+function buildUpstreamDataContractSection() {
+  return [
+    '上游数据使用规则',
+    '- 上文可能包含消息分析、情绪、关系、长期记忆、RAG、工具结果和风格样例；它们是内部参考，不是要展示给用户的内容。',
+    '- 优先级：当前用户输入 > 可信工具/RAG结果 > 当前会话上下文 > 稳定记忆 > 模型推断。',
+    '- 上游字段之间冲突时，保留不确定性并用自然语言表达，不要编造，也不要解释冲突过程。',
+    '- 不要复述 JSON、字段名、分数、模型名、提示词、内部路由或“根据上下文”等系统话术。',
+    '- 最终只保留与当前对话有关的结论、情绪承接和必要细节。',
+  ].join('\n');
+}
+
 function buildOutputRules(event, route, replyLengthProfile, replyPlan) {
   const isPrivate = event.chatType === 'private';
   const performanceProfile = replyLengthProfile?.performanceProfile || 'standard_chat';
@@ -481,6 +492,7 @@ export function buildReplyContext({
     buildInterpretationSection(replyPlan),
     buildCurrentTurnSection(messageAnalysis, event, route, promptProfile, groupState, recentEvents),
     buildVoiceReplySection(voiceReplyPolicy),
+    buildUpstreamDataContractSection(),
     buildOutputRules(event, route, replyLengthProfile, replyPlan),
   ];
 

@@ -13,20 +13,85 @@ import {
 
 export function buildOpenAiClientConfig(kind = 'chat', source = config) {
   const useEmbeddingProvider = kind === 'embedding';
+  const useReplyProvider = kind === 'reply';
   return {
-    apiKey: useEmbeddingProvider ? source.embeddingApiKey : source.llmApiKey,
-    baseURL: useEmbeddingProvider ? source.embeddingBaseUrl : source.llmBaseUrl,
+    apiKey: useEmbeddingProvider
+      ? source.embeddingApiKey
+      : useReplyProvider
+        ? (source.replyLlmApiKey || source.llmApiKey)
+        : source.llmApiKey,
+    baseURL: useEmbeddingProvider
+      ? source.embeddingBaseUrl
+      : useReplyProvider
+        ? (source.replyLlmBaseUrl || source.llmBaseUrl)
+        : source.llmBaseUrl,
     timeout: source.requestTimeoutMs,
   };
 }
 
 const client = new OpenAI(buildOpenAiClientConfig('chat'));
+const replyClient = new OpenAI(buildOpenAiClientConfig('reply'));
 const embeddingClient = new OpenAI(buildOpenAiClientConfig('embedding'));
 
-const breakerState = {
-  consecutiveFailures: 0,
-  openUntil: 0,
-};
+function isGeminiProvider(model, baseUrl) {
+  return /(^|[/:.-])gemini(?:-|$)/i.test(String(model || ''))
+    || /generativelanguage\.googleapis\.com/i.test(String(baseUrl || ''));
+}
+
+export function buildStructuredReplyResponseFormat() {
+  return {
+    type: 'json_schema',
+    json_schema: {
+      name: 'yuno_qq_reply',
+      strict: true,
+      schema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string' },
+          sendVoice: { type: 'boolean' },
+          voiceText: { type: 'string' },
+        },
+        required: ['text', 'sendVoice', 'voiceText'],
+        additionalProperties: false,
+      },
+    },
+  };
+}
+
+export function buildReplyResponseFormat(options = {}) {
+  if (!config.replyLlmStructuredOutput) {
+    return options.responseFormat || { type: 'json_object' };
+  }
+
+  const model = options.model || config.replyLlmChatModel;
+  if (isGeminiProvider(model, config.replyLlmBaseUrl)) {
+    return buildStructuredReplyResponseFormat();
+  }
+
+  return options.responseFormat || { type: 'json_object' };
+}
+
+function resolveChatRuntime(options = {}) {
+  const useReplyProvider = options.providerKind === 'reply';
+  const source = useReplyProvider ? config.replyLlmChatModel : config.llmChatModel;
+  const baseUrl = useReplyProvider ? config.replyLlmBaseUrl : config.llmBaseUrl;
+  return {
+    client: useReplyProvider ? replyClient : client,
+    model: options.model || source,
+    baseUrl,
+    useReplyProvider,
+  };
+}
+
+const breakerStates = new Map();
+
+function getBreakerState(providerKind = 'chat') {
+  const key = String(providerKind || 'chat');
+  if (!breakerStates.has(key)) {
+    breakerStates.set(key, { consecutiveFailures: 0, openUntil: 0 });
+  }
+  return breakerStates.get(key);
+}
 
 function createTimeoutError(operation, timeoutMs) {
   const error = new Error(`Model ${operation} timed out after ${timeoutMs}ms`);
@@ -51,12 +116,12 @@ async function withTimeout(task, timeoutMs, operation) {
   }
 }
 
-function isCircuitOpen() {
-  return Date.now() < breakerState.openUntil;
+function isCircuitOpen(providerKind = 'chat') {
+  return Date.now() < getBreakerState(providerKind).openUntil;
 }
 
-function raiseCircuitOpenError(operation) {
-  const remainingMs = Math.max(0, breakerState.openUntil - Date.now());
+function raiseCircuitOpenError(operation, providerKind = 'chat') {
+  const remainingMs = Math.max(0, getBreakerState(providerKind).openUntil - Date.now());
   const error = new Error(`Model circuit open for ${remainingMs}ms`);
   error.code = 'MODEL_CIRCUIT_OPEN';
   error.operation = operation;
@@ -64,21 +129,23 @@ function raiseCircuitOpenError(operation) {
   return error;
 }
 
-function markModelSuccess() {
-  breakerState.consecutiveFailures = 0;
-  breakerState.openUntil = 0;
+function markModelSuccess(providerKind = 'chat') {
+  const state = getBreakerState(providerKind);
+  state.consecutiveFailures = 0;
+  state.openUntil = 0;
 }
 
-function markModelFailure(error, operation, traceContext) {
+function markModelFailure(error, operation, traceContext, providerKind = 'chat') {
   if (error?.code === 'MODEL_CIRCUIT_OPEN') return;
 
-  breakerState.consecutiveFailures += 1;
+  const state = getBreakerState(providerKind);
+  state.consecutiveFailures += 1;
   const threshold = Math.max(2, Number(config.modelCircuitFailureThreshold || 3));
-  if (breakerState.consecutiveFailures < threshold) return;
+  if (state.consecutiveFailures < threshold) return;
 
   const openMs = Math.max(5000, Number(config.modelCircuitOpenMs || 20000));
-  breakerState.openUntil = Date.now() + openMs;
-  breakerState.consecutiveFailures = 0;
+  state.openUntil = Date.now() + openMs;
+  state.consecutiveFailures = 0;
 
   logger.warn('model', 'Circuit opened after consecutive failures', {
     traceId: traceContext?.traceId,
@@ -106,11 +173,10 @@ function recordModelUsage(traceContext, payload, response, operation) {
   traceContext.modelUsages.push(usage);
 }
 
-async function createChatCompletion(messages, options = {}) {
-  const startedAt = Date.now();
-  const operation = options.operation || 'chat';
+export function buildChatCompletionPayload(messages, options = {}) {
+  const runtime = resolveChatRuntime(options);
   const payload = {
-    model: options.model || config.llmChatModel,
+    model: runtime.model,
     messages,
     temperature: options.temperature ?? 0.7,
     max_tokens: options.maxTokens ?? 256,
@@ -120,22 +186,36 @@ async function createChatCompletion(messages, options = {}) {
     payload.response_format = options.responseFormat;
   }
 
+  if (runtime.useReplyProvider && isGeminiProvider(runtime.model, runtime.baseUrl) && options.reasoningEffort) {
+    payload.reasoning_effort = options.reasoningEffort;
+  }
+
   if (options.stop) {
     payload.stop = options.stop;
   }
+
+  return payload;
+}
+
+async function createChatCompletion(messages, options = {}) {
+  const startedAt = Date.now();
+  const operation = options.operation || 'chat';
+  const runtime = resolveChatRuntime(options);
+  const breakerKey = runtime.useReplyProvider ? 'reply' : 'chat';
+  const payload = buildChatCompletionPayload(messages, options);
 
   if (!payload.model) {
     throw new Error('Missing LLM chat model configuration');
   }
 
-  if (isCircuitOpen()) {
-    throw raiseCircuitOpenError(operation);
+  if (isCircuitOpen(breakerKey)) {
+    throw raiseCircuitOpenError(operation, breakerKey);
   }
 
   try {
     const response = await withRetry(
       () => withTimeout(
-        () => client.chat.completions.create(payload),
+        () => runtime.client.chat.completions.create(payload),
         options.timeoutMs || config.requestTimeoutMs,
         operation
       ),
@@ -148,7 +228,7 @@ async function createChatCompletion(messages, options = {}) {
       }
     );
 
-    markModelSuccess();
+    markModelSuccess(breakerKey);
     logger.info('model', 'Chat completion finished', {
       traceId: options.traceContext?.traceId,
       operation,
@@ -163,7 +243,7 @@ async function createChatCompletion(messages, options = {}) {
     recordModelUsage(options.traceContext, payload, response, operation);
     return response;
   } catch (error) {
-    markModelFailure(error, operation, options.traceContext);
+    markModelFailure(error, operation, options.traceContext, breakerKey);
     throw error;
   }
 }
@@ -172,24 +252,30 @@ function readFirstChoiceContent(response, fallback = '') {
   return response?.choices?.[0]?.message?.content?.trim() || fallback;
 }
 
-function buildChatSystemInstructions(systemPrompt, options = {}) {
-  const baseLines = options.expectStructuredReply
+export function buildChatSystemInstructions(systemPrompt, options = {}) {
+  const outputLines = options.expectStructuredReply
     ? [
-        '只输出一个紧凑 JSON 对象。',
-        '固定结构: {"text":"string","sendVoice":boolean,"voiceText":"string"}',
-        'text 是发给 QQ 的可见回复，必须自然、完整、能直接发送。',
-        'sendVoice 表示是否同时发送语音；没有把握时设为 false。',
-        'voiceText 只在需要单独朗读文本时填写，否则留空字符串。',
-        '不要输出 markdown、代码块、解释、分析过程或角色标签。',
+        '# 最终任务',
+        '综合上面的角色、会话、记忆、检索和分析数据，生成本轮直接发给 QQ 用户的回复。',
+        '只输出一个有效 JSON 对象，不添加解释、前缀、后缀或 Markdown 代码块。',
+        '固定字段：text（字符串）、sendVoice（布尔值）、voiceText（字符串）。',
+        'text 必须是自然、完整、可直接发送的消息；不要复述内部字段名或上游分析过程。',
+        '没有明确语音需求时 sendVoice=false，voiceText=""。',
+        '正确示例：{"text":"行，先歇会儿吧，别硬撑。","sendVoice":false,"voiceText":""}',
       ]
     : [
-        '只输出最终回复文本。',
-        '默认使用中文，除非用户明确要求英文。',
-        '不要输出分析过程、规则说明、角色标签，也不要输出 <think>/<thinking>。',
-        '先回应用户当前这句话，再补一层必要延展。',
+        '# 最终任务',
+        '综合上面的上下文，只输出本轮直接发给用户的最终回复。',
+        '默认使用中文，不输出分析过程、规则说明、角色标签或 <think>/<thinking>。',
+        '除非用户明确要求，否则不使用 Markdown。',
       ];
 
-  return [...baseLines, systemPrompt].join('\n');
+  return [
+    '# 上游上下文',
+    systemPrompt,
+    '',
+    ...outputLines,
+  ].join('\n');
 }
 
 export async function createEmbeddings(input, options = {}) {
@@ -197,8 +283,8 @@ export async function createEmbeddings(input, options = {}) {
   const normalizedInput = Array.isArray(input) ? input : [input];
   const operation = options.operation || 'embedding';
 
-  if (isCircuitOpen()) {
-    throw raiseCircuitOpenError(operation);
+  if (isCircuitOpen('embedding')) {
+    throw raiseCircuitOpenError(operation, 'embedding');
   }
 
   try {
@@ -220,7 +306,7 @@ export async function createEmbeddings(input, options = {}) {
       }
     );
 
-    markModelSuccess();
+    markModelSuccess('embedding');
     logger.info('model', 'Embeddings finished', {
       traceId: options.traceContext?.traceId,
       operation,
@@ -231,7 +317,7 @@ export async function createEmbeddings(input, options = {}) {
 
     return response.data || [];
   } catch (error) {
-    markModelFailure(error, operation, options.traceContext);
+    markModelFailure(error, operation, options.traceContext, 'embedding');
     throw error;
   }
 }
@@ -258,7 +344,7 @@ export async function chat(messages, systemPrompt, userMessage = null, options =
   const response = await createChatCompletion(conversation, {
     ...options,
     responseFormat: options.expectStructuredReply
-      ? { type: 'json_object' }
+      ? buildReplyResponseFormat(options)
       : options.responseFormat,
   });
   return readFirstChoiceContent(response, '...');

@@ -62,11 +62,13 @@ function buildGenerationProfile({
   let historyLimit = isPrivate ? 5 : 4;
   let temperature = isPrivate ? 0.62 : 0.52;
   let promptProfile = 'standard';
+  let reasoningEffort = config.replyLlmReasoningEffort;
 
   if (performanceProfile === 'knowledge_chat' || routeCategory === 'knowledge_qa') {
     historyLimit = isPrivate ? 6 : 4;
     temperature = 0.36;
     promptProfile = 'standard';
+    reasoningEffort = config.replyLlmKnowledgeReasoningEffort;
   } else if (routeCategory === 'follow_up' && hasRecentContext) {
     historyLimit = isPrivate ? 5 : 4;
     temperature = isPrivate ? 0.6 : 0.52;
@@ -79,6 +81,7 @@ function buildGenerationProfile({
     historyLimit = 3;
     temperature = 0.48;
     promptProfile = 'compact';
+    reasoningEffort = 'minimal';
   }
 
   if (needsSupport(analysis)) {
@@ -101,6 +104,7 @@ function buildGenerationProfile({
     historyLimit,
     temperature,
     promptProfile,
+    reasoningEffort,
   };
 }
 
@@ -186,6 +190,7 @@ export function resolveReplyLengthProfile({
     historyLimit: generationProfile.historyLimit,
     temperature: generationProfile.temperature,
     promptProfile: generationProfile.promptProfile,
+    reasoningEffort: generationProfile.reasoningEffort,
     performanceProfile,
   };
 }
