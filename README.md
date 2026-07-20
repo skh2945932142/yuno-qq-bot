@@ -81,11 +81,16 @@ MEME_NAPCAT_FAVORITES_SYNC_TTL_MS=3600000
 
 ## 关键环境变量
 
+完整的变量分类、优先级、默认值和 Zeabur 清理记录见 [docs/environment-variables.md](./docs/environment-variables.md)。生产环境不要把所有可选变量全部复制进去，只配置必需项和确实需要覆盖的默认值。
+
 必填：
 
 - `MONGODB_URI`
 - `LLM_API_KEY` 或 `OPENAI_API_KEY`
 - `LLM_CHAT_MODEL`
+- `REPLY_LLM_API_KEY`
+- `REPLY_LLM_BASE_URL`
+- `REPLY_LLM_CHAT_MODEL`
 - `NAPCAT_API`
 
 常用可选项：
@@ -123,7 +128,8 @@ MEME_NAPCAT_FAVORITES_SYNC_TTL_MS=3600000
 - `TTS_API_KEY`
 - `TTS_BASE_URL`
 - `TTS_MODEL`
-- `YUNO_VOICE_URI`
+- `TTS_VOICE_DESIGN`：`mimo-v2.5-tts-voicedesign` 使用
+- `TTS_VOICE` 或 `YUNO_VOICE_URI`：仅预设 voice 模型使用
 - `VOICE_REPLY_MODE`
 - `VOICE_REPLY_COOLDOWN_MS`
 - `VOICE_REPLY_MAX_CHARS`
