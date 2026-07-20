@@ -62,6 +62,7 @@ const MARKDOWN_DECORATION_REGEX = /[*_~>#]+/g;
 const VOICE_REQUEST_REGEX = /(语音|声音|念给我|读给我|说给我听|用嘴说|开麦|voice|tts)/i;
 const VOICE_TEXT_HARD_MAX_CHARS = 220;
 const REPLY_BUDGET_MIN_GENERATION_MS = 350;
+const FALLBACK_REPLY_MIN_MAX_TOKENS = 384;
 const lastVoiceSentAtByChat = new Map();
 
 function summarizeIncomingMessage(username, text) {
@@ -157,10 +158,18 @@ function isModelUnavailableError(error) {
   const status = Number(error?.status || error?.response?.status || 0);
   return code === 'MODEL_TIMEOUT'
     || code === 'MODEL_CIRCUIT_OPEN'
+    || code === 'MODEL_INVALID_REPLY'
     || code === 'ECONNRESET'
     || code === 'ETIMEDOUT'
     || status === 429
     || status >= 500;
+}
+
+function createInvalidModelReplyError(rawReplyText) {
+  const error = new Error('Model returned incomplete structured reply boilerplate');
+  error.code = 'MODEL_INVALID_REPLY';
+  error.replyPreview = String(rawReplyText || '').trim().slice(0, 80);
+  return error;
 }
 
 function createReplyBudgetExceededError(timeoutMs) {
@@ -210,6 +219,12 @@ function buildModelFallbackReply(event, task, error) {
     return isPrivate
       ? '我刚才卡了一下，还在听你。把刚刚那句再发我一次，我马上接。'
       : '我这边刚卡了一下，你再说一次，我马上接。';
+  }
+
+  if (reason === 'MODEL_INVALID_REPLY') {
+    return isPrivate
+      ? '我在。刚才那句没生成完整，但你的消息我记住了。'
+      : '刚才那句没生成完整，我已经接住你的消息了。';
   }
 
   if (status === 429) {
@@ -506,10 +521,26 @@ export function resolveVoiceReplyDecision({
   };
 }
 
+function isIncompleteStructuredReplyBoilerplate(value) {
+  const normalized = stripHiddenReasoning(String(value || ''))
+    .replace(/```(?:json)?/gi, ' ')
+    .replace(/^[\s"'`]+|[\s"'`.,!?:：，。！？]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  if (!normalized) return true;
+
+  return /^(?:sure[,，]?\s*)?here(?:'s| is)(?: the)?(?: requested)?(?: json(?: requested)?| response| result)?$/i.test(normalized)
+    || /^(?:以下是|这是)(?:请求的)?\s*json(?:结果|响应)?$/i.test(normalized);
+}
+
 function parseChatReplyDecision(rawReplyText, options = {}) {
   const raw = String(rawReplyText || '').trim();
-  const fallbackText = normalizeVoiceReplyText(raw) || '刚才那句被我吞掉了，你再说一遍。';
   const withoutHidden = stripHiddenReasoning(raw);
+  const unusable = isIncompleteStructuredReplyBoilerplate(withoutHidden);
+  const fallbackText = unusable
+    ? ''
+    : (normalizeVoiceReplyText(raw) || '刚才那句被我吞掉了，你再说一遍。');
   const jsonCandidates = [raw, withoutHidden];
   const objectStart = withoutHidden.indexOf('{');
   const objectEnd = withoutHidden.lastIndexOf('}');
@@ -526,6 +557,7 @@ function parseChatReplyDecision(rawReplyText, options = {}) {
       sendVoice: Boolean(options.defaultSendVoice),
       voiceText: fallbackText,
       structured: false,
+      unusable,
     };
   }
 
@@ -540,6 +572,7 @@ function parseChatReplyDecision(rawReplyText, options = {}) {
     sendVoice,
     voiceText,
     structured: true,
+    unusable: false,
   };
 }
 
@@ -1540,6 +1573,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
       replyDecision = parseChatReplyDecision(rawReplyText, {
         defaultSendVoice: voiceReplyPolicy.suggestedByEmotion,
       });
+      if (replyDecision.unusable) {
+        throw createInvalidModelReplyError(rawReplyText);
+      }
       visibleReplyText = replyDecision.text;
       const strippedReplyText = stripHiddenReasoning(rawReplyText);
       if (!replyDecision.structured && visibleReplyText !== String(strippedReplyText || '').trim()) {
@@ -1600,6 +1636,8 @@ export async function processIncomingMessage(event, precomputed = null, options 
                   operation: 'reply-fallback-model',
                   providerKind: 'reply-fallback',
                   model: fallbackModel,
+                  reasoningEffort: 'minimal',
+                  maxTokens: Math.max(primaryReplyOptions.maxTokens, FALLBACK_REPLY_MIN_MAX_TOKENS),
                   timeoutMs: fallbackTimeoutMs || undefined,
                 }
               ),
@@ -1613,6 +1651,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
             replyDecision = parseChatReplyDecision(fallbackReply, {
               defaultSendVoice: voiceReplyPolicy.suggestedByEmotion,
             });
+            if (replyDecision.unusable) {
+              throw createInvalidModelReplyError(fallbackReply);
+            }
             visibleReplyText = replyDecision.text || buildReplyBudgetFallbackReply(normalizedEvent, task);
           } catch (fallbackError) {
             if (String(fallbackError?.code || '').toUpperCase() === 'REPLY_BUDGET_EXCEEDED') {

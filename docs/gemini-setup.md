@@ -29,7 +29,7 @@ REPLY_LLM_KNOWLEDGE_REASONING_EFFORT=low
 REPLY_LLM_STRUCTURED_OUTPUT=true
 ```
 
-When the primary model returns HTTP 429, times out, or returns a 5xx response, Yuno forwards the same conversation history, system prompt, user turn, and generation constraints to `gemini-3.1-flash-lite`. It does not send an intermediate error message to the QQ user before the fallback completes.
+When the primary model returns HTTP 429, times out, returns a 5xx response, or emits incomplete JSON boilerplate, Yuno forwards the same conversation history, system prompt, and user turn to `gemini-3.1-flash-lite`. The fallback uses `minimal` reasoning and at least 384 output tokens so internal reasoning cannot consume the visible reply budget. Boilerplate-only responses such as `Here is the JSON` are rejected instead of being sent to QQ.
 
 Keep the existing `LLM_*` and `EMBEDDING_*` variables if other models should continue handling analysis or vector generation.
 
