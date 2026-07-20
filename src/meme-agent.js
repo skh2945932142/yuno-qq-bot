@@ -1,4 +1,5 @@
 import { parseMemeTrigger } from './meme-trigger.js';
+import { selectMemeByWeight } from './meme-selector.js';
 
 export function decideMemeAction({
   event,
@@ -6,6 +7,7 @@ export function decideMemeAction({
   candidates = [],
   safety = { allowed: true, safetyFlags: [] },
   autoSend = false,
+  emotion = null,
 } = {}) {
   const trigger = parseMemeTrigger(event?.rawText || event?.text || '');
   const hasImageAttachment = Array.isArray(event?.attachments) && event.attachments.some((item) => item.type === 'image');
@@ -27,10 +29,12 @@ export function decideMemeAction({
   }
 
   if (trigger.explicit && candidates.length > 0) {
+    // 显式触发：使用权重随机选择
+    const selected = selectMemeByWeight(candidates, { emotion });
     return {
       action: 'send-existing',
       reason: 'explicit-retrieve',
-      candidate: candidates[0],
+      candidate: selected,
       trigger,
     };
   }
@@ -44,10 +48,12 @@ export function decideMemeAction({
   }
 
   if (autoSend && trigger.semiAuto && candidates.length > 0 && analysis.shouldRespond) {
+    // 半自动触发：使用权重随机选择
+    const selected = selectMemeByWeight(candidates, { emotion });
     return {
       action: 'send-existing',
       reason: 'semi-auto',
-      candidate: candidates[0],
+      candidate: selected,
       trigger,
     };
   }

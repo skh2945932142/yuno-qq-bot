@@ -1,3 +1,4 @@
+import { selectScoredMemeByWeight } from './meme-selector.js';
 import { config } from './config.js';
 
 const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -218,7 +219,7 @@ export function planContextualMemeReply({
     return { shouldSend: false, suggested: false, reason: 'no-candidate', mode };
   }
 
-  const best = candidates[0];
+  const best = selectScoredMemeByWeight(candidates);
   const minScore = Number(settings.memeAutoSendMinScore || DEFAULT_MIN_SCORE);
   if (best.score < minScore) {
     return {
@@ -303,3 +304,4 @@ export function planContextualMemeReply({
     }),
   };
 }
+
