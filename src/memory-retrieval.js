@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createEmbeddings } from './minimax.js';
 import { config } from './config.js';
 import { UserMemoryEvent, MemeAsset } from './models.js';
@@ -8,7 +9,21 @@ import { getQdrantStatus, searchKnowledge, upsertKnowledgePoints } from './qdran
 import { isDbReady } from './db.js';
 
 function buildPointId(prefix, value) {
-  return `${prefix}:${String(value || '').trim()}`;
+  const source = `${prefix}:${String(value || '').trim()}`;
+  const hash = createHash('sha256').update(source).digest('hex');
+  const variantByte = ((Number.parseInt(hash.slice(16, 18), 16) & 0x3f) | 0x80)
+    .toString(16)
+    .padStart(2, '0');
+
+  // Qdrant accepts UUID or unsigned integer point IDs. Keep the ID stable so
+  // repeated indexing updates the same memory instead of creating duplicates.
+  return [
+    hash.slice(0, 8),
+    hash.slice(8, 12),
+    `5${hash.slice(13, 16)}`,
+    `${variantByte}${hash.slice(18, 20)}`,
+    hash.slice(20, 32),
+  ].join('-');
 }
 
 function normalizeEmbeddingRows(rows) {

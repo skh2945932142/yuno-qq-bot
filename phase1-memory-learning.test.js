@@ -4,7 +4,7 @@ import { buildProfileSummary, extractStableProfileUpdate } from './src/profile-m
 import { buildReplyContext } from './src/prompt-builder.js';
 import { analyzeMemeAssetSemantics, collectMemeAssetForEvent } from './src/meme-collector.js';
 import { extractUserMemoryEvents, persistUserMemoryEvents } from './src/user-memory-events.js';
-import { retrieveMemoryContext } from './src/memory-retrieval.js';
+import { indexUserMemoryEvents, retrieveMemoryContext } from './src/memory-retrieval.js';
 
 test('extractStableProfileUpdate captures speaking style and response preference', () => {
   const result = extractStableProfileUpdate('你回复直接一点，详细一点，我平时爱说笑死和QAQ。', {
@@ -76,6 +76,32 @@ test('persistUserMemoryEvents writes expiresAt and embeddingSourceText', async (
   assert.equal(result.length, 1);
   assert.ok(created[0].expiresAt instanceof Date);
   assert.match(created[0].embeddingSourceText, /答辩/);
+});
+
+test('indexUserMemoryEvents uses stable UUID point IDs accepted by Qdrant', async () => {
+  const batches = [];
+  const deps = {
+    createEmbeddings: async () => [{ embedding: [0.1, 0.2, 0.3] }],
+    upsertPoints: async (points) => {
+      batches.push(points);
+    },
+  };
+  const event = {
+    memoryId: 'memory-123',
+    userId: 'u1',
+    chatId: 'c1',
+    eventType: 'preference',
+    summary: '喜欢短句回复',
+    embeddingSourceText: '用户喜欢短句回复',
+  };
+
+  await indexUserMemoryEvents([event], deps);
+  await indexUserMemoryEvents([event], deps);
+
+  assert.equal(batches.length, 2);
+  assert.match(batches[0][0].id, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.equal(batches[0][0].id, batches[1][0].id);
+  assert.notEqual(batches[0][0].id, 'memory_event:memory-123');
 });
 
 test('collectMemeAssetForEvent stores semantic meme fields', async () => {
