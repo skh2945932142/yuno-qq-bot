@@ -7,6 +7,7 @@ import {
   buildOpenAiClientConfig,
   buildReplyResponseFormat,
   buildStructuredReplyResponseFormat,
+  chat,
 } from './src/minimax.js';
 
 test('model circuit keys isolate primary and fallback reply models', () => {
@@ -217,6 +218,38 @@ test('fallback reply client can use an independent provider', () => {
   assert.equal(clientConfig.apiKey, 'siliconflow-key');
   assert.equal(clientConfig.baseURL, 'https://api.siliconflow.cn/v1');
   assert.equal(clientConfig.timeout, 15000);
+});
+
+test('fallback chat builds its payload before deriving the circuit key', async () => {
+  let capturedPayload = null;
+  const output = await chat([], 'Return JSON only.', '确认备用模型可用。', {
+    providerKind: 'reply-fallback',
+    model: 'gemini-3.1-flash-lite',
+    expectStructuredReply: true,
+    maxTokens: 80,
+    temperature: 0,
+    client: {
+      chat: {
+        completions: {
+          create: async (payload) => {
+            capturedPayload = payload;
+            return {
+              choices: [{
+                message: {
+                  content: '{"text":"备用模型可用。","sendVoice":false,"voiceText":""}',
+                },
+              }],
+              usage: {},
+            };
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(capturedPayload.model, 'gemini-3.1-flash-lite');
+  assert.equal(capturedPayload.max_tokens, 80);
+  assert.equal(output, '{"text":"备用模型可用。","sendVoice":false,"voiceText":""}');
 });
 
 test('non-Gemini fallback provider uses JSON object response mode', () => {

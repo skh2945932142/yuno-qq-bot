@@ -97,11 +97,11 @@ function resolveChatRuntime(options = {}) {
       ? config.replyLlmBaseUrl
       : config.llmBaseUrl;
   return {
-    client: useReplyFallbackProvider
+    client: options.client || (useReplyFallbackProvider
       ? replyFallbackClient
       : useReplyProvider
         ? replyClient
-        : client,
+        : client),
     model: options.model || source,
     baseUrl,
     useReplyProvider,
@@ -233,11 +233,11 @@ async function createChatCompletion(messages, options = {}) {
   const startedAt = Date.now();
   const operation = options.operation || 'chat';
   const runtime = resolveChatRuntime(options);
+  const payload = buildChatCompletionPayload(messages, options);
   const breakerKey = buildModelCircuitKey(
     runtime.providerKind,
     payload.model
   );
-  const payload = buildChatCompletionPayload(messages, options);
 
   if (!payload.model) {
     throw new Error('Missing LLM chat model configuration');
