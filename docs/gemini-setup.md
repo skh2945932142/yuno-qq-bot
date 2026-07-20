@@ -21,13 +21,15 @@ Create an API key in Google AI Studio, then configure these variables in Zeabur:
 REPLY_LLM_API_KEY=replace-with-your-google-ai-studio-key
 REPLY_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 REPLY_LLM_CHAT_MODEL=gemini-3.5-flash
-REPLY_LLM_FALLBACK_API_KEY=replace-with-your-fallback-provider-key
-REPLY_LLM_FALLBACK_BASE_URL=https://api.siliconflow.cn/v1
-REPLY_LLM_FALLBACK_CHAT_MODEL=Qwen/Qwen3-8B
+REPLY_LLM_FALLBACK_API_KEY=replace-with-your-google-ai-studio-key
+REPLY_LLM_FALLBACK_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+REPLY_LLM_FALLBACK_CHAT_MODEL=gemini-3.1-flash-lite
 REPLY_LLM_REASONING_EFFORT=low
 REPLY_LLM_KNOWLEDGE_REASONING_EFFORT=low
 REPLY_LLM_STRUCTURED_OUTPUT=true
 ```
+
+When the primary model returns HTTP 429, times out, or returns a 5xx response, Yuno forwards the same conversation history, system prompt, user turn, and generation constraints to `gemini-3.1-flash-lite`. It does not send an intermediate error message to the QQ user before the fallback completes.
 
 Keep the existing `LLM_*` and `EMBEDDING_*` variables if other models should continue handling analysis or vector generation.
 
@@ -43,9 +45,9 @@ LLM_CHAT_MODEL=your-analysis-model
 REPLY_LLM_API_KEY=replace-with-your-google-ai-studio-key
 REPLY_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 REPLY_LLM_CHAT_MODEL=gemini-3.5-flash
-REPLY_LLM_FALLBACK_API_KEY=replace-with-your-fallback-provider-key
-REPLY_LLM_FALLBACK_BASE_URL=https://api.siliconflow.cn/v1
-REPLY_LLM_FALLBACK_CHAT_MODEL=Qwen/Qwen3-8B
+REPLY_LLM_FALLBACK_API_KEY=replace-with-your-google-ai-studio-key
+REPLY_LLM_FALLBACK_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+REPLY_LLM_FALLBACK_CHAT_MODEL=gemini-3.1-flash-lite
 REPLY_LLM_REASONING_EFFORT=low
 REPLY_LLM_KNOWLEDGE_REASONING_EFFORT=low
 REPLY_LLM_STRUCTURED_OUTPUT=true

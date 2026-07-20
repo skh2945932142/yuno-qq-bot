@@ -1490,6 +1490,21 @@ export async function processIncomingMessage(event, precomputed = null, options 
 
     let visibleReplyText = '';
     let replyDecision = null;
+    const replyMessages = (workflowContext.conversationState.messages || []).map((item) => ({
+      role: item.role,
+      content: item.content,
+    }));
+    const primaryReplyOptions = {
+      traceContext: trace,
+      promptVersion: 'reply-context/v6',
+      operation: 'reply',
+      providerKind: 'reply',
+      expectStructuredReply: true,
+      reasoningEffort: replyLengthProfile.reasoningEffort,
+      maxTokens: replyLengthProfile.maxTokens,
+      historyLimit: replyLengthProfile.historyLimit,
+      temperature: replyLengthProfile.temperature,
+    };
     try {
       const remainingReplyBudgetMs = getRemainingReplyBudgetMs();
       if (
@@ -1503,22 +1518,11 @@ export async function processIncomingMessage(event, precomputed = null, options 
         ? null
         : Math.max(REPLY_BUDGET_MIN_GENERATION_MS, remainingReplyBudgetMs);
       const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => runReplyWithBudget(() => deps.chat(
-        (workflowContext.conversationState.messages || []).map((item) => ({
-          role: item.role,
-          content: item.content,
-        })),
+        replyMessages,
         systemPrompt,
         userTurn,
         {
-          traceContext: trace,
-          promptVersion: 'reply-context/v6',
-          operation: 'reply',
-          providerKind: 'reply',
-          expectStructuredReply: true,
-          reasoningEffort: replyLengthProfile.reasoningEffort,
-          maxTokens: replyLengthProfile.maxTokens,
-          historyLimit: replyLengthProfile.historyLimit,
-          temperature: replyLengthProfile.temperature,
+          ...primaryReplyOptions,
           timeoutMs: modelTimeoutMs || undefined,
         }
       ), modelTimeoutMs), {
@@ -1588,23 +1592,14 @@ export async function processIncomingMessage(event, precomputed = null, options 
               : Math.max(REPLY_BUDGET_MIN_GENERATION_MS, fallbackRemainingBudgetMs);
             const fallbackReply = await withTraceSpan(trace, 'generate-reply-fallback-model', () => runReplyWithBudget(
               () => deps.chat(
-                (workflowContext.conversationState.messages || []).map((item) => ({
-                  role: item.role,
-                  content: item.content,
-                })),
+                replyMessages,
                 systemPrompt,
                 userTurn,
                 {
-                  traceContext: trace,
-                  promptVersion: 'reply-context/v6',
+                  ...primaryReplyOptions,
                   operation: 'reply-fallback-model',
                   providerKind: 'reply-fallback',
-                  expectStructuredReply: true,
-                  reasoningEffort: replyLengthProfile.reasoningEffort,
                   model: fallbackModel,
-                  maxTokens: Math.min(replyLengthProfile.maxTokens, normalizedEvent.chatType === 'group' ? 140 : 220),
-                  historyLimit: Math.min(replyLengthProfile.historyLimit, normalizedEvent.chatType === 'group' ? 2 : 3),
-                  temperature: Math.min(replyLengthProfile.temperature, 0.55),
                   timeoutMs: fallbackTimeoutMs || undefined,
                 }
               ),

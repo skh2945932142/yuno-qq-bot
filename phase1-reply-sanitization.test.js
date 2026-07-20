@@ -313,12 +313,12 @@ test('processIncomingMessage degrades gracefully when model times out', async ()
   assert.equal(sentReplies.length, 1);
 });
 
-test('processIncomingMessage uses the configured fallback model after a 429', async () => {
+test('processIncomingMessage uses the configured fallback model after a 500', async () => {
   const sentReplies = [];
   const modelCalls = [];
 
   const reply = await processIncomingMessage(createEvent(), createContext(), {
-    replyLlmFallbackChatModel: 'gemini-2.5-flash-lite',
+    replyLlmFallbackChatModel: 'gemini-3.1-flash-lite',
     deps: createDeps(
       async (_target, text) => {
         sentReplies.push(text);
@@ -326,8 +326,8 @@ test('processIncomingMessage uses the configured fallback model after a 429', as
       async (_messages, _systemPrompt, _userTurn, options = {}) => {
         modelCalls.push(`${options.providerKind || 'reply'}:${options.model || 'primary'}`);
         if (!options.model) {
-          const error = new Error('429 status code (no body)');
-          error.status = 429;
+          const error = new Error('500 status code (no body)');
+          error.status = 500;
           throw error;
         }
         return '{"text":"我接着呢，刚才那句没有丢。","sendVoice":false,"voiceText":""}';
@@ -335,26 +335,48 @@ test('processIncomingMessage uses the configured fallback model after a 429', as
     ),
   });
 
-  assert.deepEqual(modelCalls, ['reply:primary', 'reply-fallback:gemini-2.5-flash-lite']);
+  assert.deepEqual(modelCalls, ['reply:primary', 'reply-fallback:gemini-3.1-flash-lite']);
   assert.equal(reply, '我接着呢，刚才那句没有丢。');
   assert.equal(sentReplies[0], reply);
 });
 
-test('429 canned fallback does not ask the user to repeat the message', async () => {
+test('429 forwards the same reply input to Gemini 3.1 Flash Lite without an intermediate message', async () => {
+  const sentReplies = [];
+  const modelCalls = [];
   const reply = await processIncomingMessage(createEvent(), createContext(), {
-    replyLlmFallbackChatModel: '',
+    replyLlmFallbackChatModel: 'gemini-3.1-flash-lite',
     deps: createDeps(
-      async () => null,
-      async () => {
-        const error = new Error('429 status code (no body)');
-        error.status = 429;
-        throw error;
+      async (_target, text) => {
+        sentReplies.push(text);
+      },
+      async (messages, systemPrompt, userTurn, options = {}) => {
+        modelCalls.push({ messages, systemPrompt, userTurn, options });
+        if (options.providerKind !== 'reply-fallback') {
+          const error = new Error('429 status code (no body)');
+          error.status = 429;
+          throw error;
+        }
+        return '{"text":"限流而已，我没把你刚才的话弄丢。","sendVoice":false,"voiceText":""}';
       }
     ),
   });
 
-  assert.match(reply, /不用重发|记着这句/);
-  assert.doesNotMatch(reply, /再发一次/);
+  assert.equal(reply, '限流而已，我没把你刚才的话弄丢。');
+  assert.deepEqual(
+    modelCalls.map(({ options }) => `${options.providerKind}:${options.model || 'primary'}`),
+    ['reply:primary', 'reply-fallback:gemini-3.1-flash-lite']
+  );
+  assert.strictEqual(modelCalls[1].messages, modelCalls[0].messages);
+  assert.strictEqual(modelCalls[1].systemPrompt, modelCalls[0].systemPrompt);
+  assert.strictEqual(modelCalls[1].userTurn, modelCalls[0].userTurn);
+  assert.equal(modelCalls[1].options.promptVersion, modelCalls[0].options.promptVersion);
+  assert.equal(modelCalls[1].options.expectStructuredReply, modelCalls[0].options.expectStructuredReply);
+  assert.equal(modelCalls[1].options.reasoningEffort, modelCalls[0].options.reasoningEffort);
+  assert.equal(modelCalls[1].options.maxTokens, modelCalls[0].options.maxTokens);
+  assert.equal(modelCalls[1].options.historyLimit, modelCalls[0].options.historyLimit);
+  assert.equal(modelCalls[1].options.temperature, modelCalls[0].options.temperature);
+  assert.equal(sentReplies.length, 1);
+  assert.doesNotMatch(sentReplies[0], /Yuno大脑过载了呢/);
 });
 
 test('personality strategy explicitly forbids unsafe possessive escalation', async () => {

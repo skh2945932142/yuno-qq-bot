@@ -16,7 +16,7 @@ test('model circuit keys isolate primary and fallback reply models', () => {
   );
   assert.notEqual(
     buildModelCircuitKey('reply', 'gemini-3.5-flash'),
-    buildModelCircuitKey('reply', 'gemini-2.5-flash-lite')
+    buildModelCircuitKey('reply', 'gemini-3.1-flash-lite')
   );
   assert.notEqual(
     buildModelCircuitKey('reply', 'gemini-3.5-flash'),

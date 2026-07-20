@@ -39,7 +39,7 @@ LLM_CHAT_MODEL -> provider default
 
 最终回复使用独立的 `REPLY_LLM_*`。即使当前上游和最终回复使用同一把 Google AI Studio key，也保留两组变量，以免未来调整上游模型时意外改变最终回复模型。
 
-生产环境使用 `gemini-3.5-flash` 作为主回复模型，并通过 SiliconFlow 的 `Qwen/Qwen3-8B` 作为备用模型。主模型出现 429、超时或 5xx 时，工作流会切换到独立的备用 key 和 base URL；断路器按 provider 与模型隔离，不会因为 Google 主模型限流而一起阻断备用模型。
+生产环境使用 `gemini-3.5-flash` 作为主回复模型，并使用 Google AI Studio 的 `gemini-3.1-flash-lite` 作为备用模型。主模型返回 429、超时或 5xx 时，工作流会把同一份会话历史、系统提示、用户消息和生成约束交给备用模型继续处理，不会先向用户发送中间错误提示；断路器按 provider 与模型隔离。
 
 Embedding 使用独立的 `EMBEDDING_*`，不会依赖当前 Gemini 回复接口。
 
