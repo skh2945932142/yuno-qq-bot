@@ -224,7 +224,7 @@ export async function runYunoConversation(input, options = {}) {
   };
 
   if (pluginRoute) {
-    mergedDeps.planIncomingTask = async () => pluginRoute;
+    mergedDeps.planIncomingTask = () => pluginRoute;
   }
 
   const decision = await (options.engine?.shouldRespondToEvent || shouldRespondToEvent)(event, {

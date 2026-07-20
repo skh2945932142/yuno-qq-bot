@@ -58,6 +58,44 @@ test('runYunoConversation captures output without using platform sender', async 
   assert.equal(result.outputs.replies[0].text, 'test reply');
 });
 
+test('runYunoConversation exposes plugin routes synchronously to the workflow', async () => {
+  let capturedRoute = null;
+  const result = await runYunoConversation({
+    platform: 'qq',
+    scene: 'private',
+    userId: '10001',
+    username: 'Alice',
+    rawMessage: 'tell me about the knowledge base',
+  }, {
+    pluginRoute: 'knowledge_qa',
+    engine: {
+      shouldRespondToEvent: async (event) => ({
+        event,
+        analysis: {
+          shouldRespond: true,
+          confidence: 0.9,
+          intent: 'query',
+          sentiment: 'neutral',
+          relevance: 0.9,
+          reason: 'test',
+          topics: [],
+          ruleSignals: ['private-chat'],
+          replyStyle: 'calm',
+        },
+      }),
+      processIncomingMessage: async (_event, _decision, runtimeOptions) => {
+        capturedRoute = runtimeOptions.deps.planIncomingTask();
+        return 'routed reply';
+      },
+    },
+  });
+
+  assert.equal(result.response.text, 'routed reply');
+  assert.equal(capturedRoute.category, 'knowledge_qa');
+  assert.equal(capturedRoute.requiresRetrieval, true);
+  assert.equal(capturedRoute.requiresModel, true);
+});
+
 test('runYunoConversation formats tool results into unified outputs', async () => {
   const result = await runYunoConversation({
     platform: 'qq',
