@@ -129,11 +129,11 @@ export function resolveReplyLengthProfile({
     reason = 'knowledge-route';
   } else if (routeCategory === 'follow_up' && hasRecentContext) {
     tier = 'expanded';
-    maxTokens = isPrivate ? Math.min(config.privateChatMaxTokens, 420) : Math.max(config.groupChatMaxTokens, 360);
+    maxTokens = isPrivate ? Math.min(config.privateChatMaxTokens, 240) : Math.max(config.groupChatMaxTokens, 200);
     reason = 'follow-up-route';
   } else if (routeCategory === 'cold_start') {
     tier = isPrivate ? 'balanced' : 'balanced';
-    maxTokens = isPrivate ? Math.min(config.privateChatMaxTokens, 380) : config.groupChatMaxTokens;
+    maxTokens = isPrivate ? Math.min(config.privateChatMaxTokens, 220) : config.groupChatMaxTokens;
     reason = 'cold-start-route';
   } else if (routeCategory === 'poke') {
     tier = 'concise';
@@ -143,7 +143,7 @@ export function resolveReplyLengthProfile({
 
   if (analysis?.intent === 'help') {
     tier = 'expanded';
-    maxTokens = Math.max(maxTokens, isPrivate ? 420 : 360);
+    maxTokens = Math.max(maxTokens, isPrivate ? 240 : 200);
     reason = 'supportive-intent';
   } else if (
     analysis?.intent === 'social'
@@ -151,16 +151,16 @@ export function resolveReplyLengthProfile({
     && routeCategory !== 'knowledge_qa'
   ) {
     tier = isPrivate ? 'balanced' : 'balanced';
-    maxTokens = Math.max(maxTokens, isPrivate ? 360 : config.groupChatMaxTokens);
+    maxTokens = Math.max(maxTokens, isPrivate ? 200 : config.groupChatMaxTokens);
     reason = 'positive-social-intent';
   } else if ((analysis?.relevance || 0) >= 0.85 && routeCategory === 'group_chat') {
     tier = 'balanced';
-    maxTokens = Math.max(maxTokens, 360);
+    maxTokens = Math.max(maxTokens, config.groupChatMaxTokens);
     reason = 'high-relevance-group';
   }
 
   if (isStrongEmotion(emotionResult)) {
-    maxTokens = Math.max(maxTokens, isPrivate ? 360 : config.groupChatMaxTokens);
+    maxTokens = Math.max(maxTokens, isPrivate ? 200 : config.groupChatMaxTokens);
     if (tier === 'concise') tier = 'balanced';
   }
 
@@ -189,3 +189,5 @@ export function resolveReplyLengthProfile({
     performanceProfile,
   };
 }
+
+
