@@ -67,7 +67,7 @@ const VOICE_REQUEST_REGEX = /(语音|声音|念给我|读给我|说给我听|用
 const VOICE_TEXT_HARD_MAX_CHARS = 220;
 const REPLY_BUDGET_MIN_GENERATION_MS = 350;
 const REPLY_STYLE_REWRITE_MIN_BUDGET_MS = 900;
-const REPLY_STYLE_REWRITE_TIMEOUT_MS = 3500;
+const REPLY_STYLE_REWRITE_TIMEOUT_MS = 5000;
 const FALLBACK_REPLY_MIN_MAX_TOKENS = 384;
 const lastVoiceSentAtByChat = new Map();
 
@@ -1939,6 +1939,11 @@ export async function processIncomingMessage(event, precomputed = null, options 
         : `${replyStyleRewriteOutcome}-deescalated`;
       finalNaturalness = deps.inspectReplyNaturalness(replyText, naturalnessOptions);
       finalVoiceNaturalness = deps.inspectReplyNaturalness(voiceText, naturalnessOptions);
+    }
+    if (finalNaturalness.rewriteRecommended) {
+      replyText = deps.deescalateReplyNaturalness('', naturalnessOptions);
+      finalNaturalness = deps.inspectReplyNaturalness(replyText, naturalnessOptions);
+      replyStyleRewriteOutcome = `${replyStyleRewriteOutcome}-safe-fallback`;
     }
     if (finalVoiceNaturalness.rewriteRecommended) {
       voiceText = replyText;

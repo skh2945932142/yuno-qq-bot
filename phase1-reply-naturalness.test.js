@@ -125,6 +125,27 @@ test('deescalateReplyNaturalness never returns unsupported motive attribution', 
   assert.doesNotMatch(text, /你每次|被讲中|责任/);
 });
 
+test('deescalateReplyNaturalness removes soft accusations and keeps at most one useful question', () => {
+  const text = deescalateReplyNaturalness('会吗？刚才明明还说是因为我。具体是哪里奇怪了？', {
+    event: { chatType: 'private' },
+    route: { category: 'private_chat' },
+    messageAnalysis: { intent: 'social', sentiment: 'neutral' },
+    replyPlan: { questionNeeded: true },
+  });
+  const inspection = inspectReplyNaturalness(text, {
+    event: { chatType: 'private' },
+    route: { category: 'private_chat' },
+    messageAnalysis: { intent: 'social', sentiment: 'neutral' },
+    replyPlan: { questionNeeded: true },
+    personalityStrategy: { signatureMove: { key: 'concrete_curiosity' } },
+    conversationState: { messages: [] },
+  });
+
+  assert.equal(text, '具体是哪里奇怪了？');
+  assert.equal(inspection.rewriteRecommended, false);
+  assert.equal((text.match(/[？?]/g) || []).length, 1);
+});
+
 test('polishReplyNaturalness removes repeated emoji when the style policy suppresses it', () => {
   const text = polishReplyNaturalness('好吧，那就听你的✨', {
     event: { chatType: 'private' },

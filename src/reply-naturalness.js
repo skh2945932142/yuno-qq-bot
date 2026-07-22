@@ -251,10 +251,27 @@ function removeAggressiveClauses(text) {
     .filter(Boolean);
   const safe = clauses.filter((clause) => !(
     MOTIVE_ATTRIBUTION_REGEX.test(clause)
+    || ACCUSATORY_FRAME_REGEX.test(clause)
+    || ADVERSARIAL_CONTRAST_REGEX.test(clause)
     || POSSESSIVE_CONTROL_REGEX.test(clause)
     || PERSONAL_ATTACK_REGEX.test(clause)
   ));
   return safe.join('').trim();
+}
+
+function limitQuestions(text, options = {}) {
+  const allowed = options.replyPlan?.questionNeeded ? 1 : 0;
+  const sentences = String(text || '').match(/[^。！？!?]+[。！？!?]?/g) || [];
+  const questionIndexes = sentences
+    .map((sentence, index) => /[？?]/.test(sentence) ? index : -1)
+    .filter((index) => index >= 0);
+  const keepQuestionIndex = allowed > 0 ? questionIndexes.at(-1) : -1;
+
+  return sentences
+    .filter((sentence, index) => !/[？?]/.test(sentence) || index === keepQuestionIndex)
+    .map((sentence) => sentence.replace(/[？?]+$/, '？'))
+    .join('')
+    .trim();
 }
 
 function shortenPrivateReply(text, options = {}) {
@@ -285,7 +302,7 @@ export function buildDeescalatedReplyFallback(options = {}) {
 export function deescalateReplyNaturalness(text, options = {}) {
   const original = String(text || '').trim();
   if (!original) return buildDeescalatedReplyFallback(options);
-  const output = shortenPrivateReply(removeAggressiveClauses(original), options)
+  const output = shortenPrivateReply(limitQuestions(removeAggressiveClauses(original), options), options)
     .replace(/\s*([，。！？!?、；;：:])\s*/g, '$1')
     .trim();
   if (output.length >= 4 && !MOTIVE_ATTRIBUTION_REGEX.test(output) && !POSSESSIVE_CONTROL_REGEX.test(output)) {
