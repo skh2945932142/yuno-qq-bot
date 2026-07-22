@@ -121,7 +121,7 @@ test('deescalateReplyNaturalness never returns unsupported motive attribution', 
     messageAnalysis: { intent: 'social', sentiment: 'positive' },
   });
 
-  assert.equal(text, '嗯，这句我收下了。别得意。');
+  assert.equal(text, '嗯，听你这么说，我有点高兴。只是没打算表现得太明显。');
   assert.doesNotMatch(text, /你每次|被讲中|责任/);
 });
 
@@ -155,4 +155,31 @@ test('polishReplyNaturalness removes repeated emoji when the style policy suppre
   });
 
   assert.equal(text, '好吧，那就听你的');
+});
+
+test('robotic acknowledgement phrases are rewritten without raising attack score', () => {
+  const options = {
+    event: { chatType: 'private' },
+    route: { category: 'private_chat' },
+    messageAnalysis: { intent: 'social', sentiment: 'neutral' },
+    replyPlan: { questionNeeded: false },
+    personalityStrategy: { signatureMove: { key: 'observation' } },
+    conversationState: { messages: [] },
+  };
+
+  for (const reply of [
+    '我记下了。',
+    '这句我收下了。',
+    '我听到了。',
+    '我知道了。',
+    '收到。',
+    '嗯，这句我收下了。别得意。',
+  ]) {
+    const result = inspectReplyNaturalness(reply, options);
+    assert.equal(result.flags.includes('robotic-acknowledgement'), true, reply);
+    assert.equal(result.rewriteRecommended, true, reply);
+    assert.equal(result.edgeScore, 0, reply);
+    const softened = deescalateReplyNaturalness(reply, options);
+    assert.doesNotMatch(softened, /记下|记住|收下|听到|知道了|收到/);
+  }
 });

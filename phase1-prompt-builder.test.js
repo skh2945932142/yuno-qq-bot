@@ -72,7 +72,7 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
         guidance: '直接表达在意或偏好，只落到当前这句话。',
       },
       phraseStyle: {
-        candidates: ['我当然会先看你这边。', '这件事我会替你记着。'],
+        candidates: ['我当然会先看你这边。', '你的事，我会多上点心。'],
         guidance: '可借用句式方向，但不要连续复用同一句开场、口癖或收尾。',
         repeatGuard: true,
       },
@@ -294,7 +294,7 @@ test('buildReplyContext keeps special-user memory restrained in group strategy',
       },
       followupStyle: 'none',
       phraseStyle: {
-        candidates: ['这件事我会替你记着。'],
+        candidates: ['你的事，我会多上点心。'],
         guidance: '可借用句式方向，但不要连续复用同一句开场、口癖或收尾。',
         repeatGuard: true,
       },

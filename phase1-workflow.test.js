@@ -627,14 +627,14 @@ test('processIncomingMessage sends voice when user sends record in private chat'
         return Buffer.from(`audio:${text}`);
       },
       chat: async () => JSON.stringify({
-        text: '听到了，我先陪你把这句接住。',
+        text: '嗯，你继续说。我在听。',
         sendVoice: false,
       }),
     }),
   });
 
-  assert.deepEqual(ttsInputs, ['听到了，我先陪你把这句接住。']);
-  assert.deepEqual(sentVoices, ['audio:听到了，我先陪你把这句接住。']);
+  assert.deepEqual(ttsInputs, ['嗯，你继续说。我在听。']);
+  assert.deepEqual(sentVoices, ['audio:嗯，你继续说。我在听。']);
 });
 
 test('processIncomingMessage skips voice when generated voice text is too long', async () => {

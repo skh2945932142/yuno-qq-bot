@@ -25,6 +25,29 @@ function hasEmptyPayload(toolResult) {
   if (Array.isArray(payload.documents) && payload.documents.length === 0) return true;
   return false;
 }
+const ROBOTIC_TOOL_ACKNOWLEDGEMENT_REGEX = /(?:我(?:(?:已经|会|先|都|也|替你)\s*)*(?:记下|记住|记着|收下|接住)(?:了|啦|这句|这件事|你(?:这句|说的(?:话|内容)))?|这(?:句|句话|件事|条(?:偏好|订阅|提醒)?)(?:我)?(?:(?:已经|会|先|都|也|替你)\s*)*(?:记下|记住|记着|收下|接住)(?:了|啦)?|我(?:听见|听到|知道|明白|了解)(?:了|啦)|提醒已经记下(?:了)?|(?:(?:已经|都|这就)\s*)?(?:记下|记住|收下|接住)(?:了|啦)|(?:已经|已)?收到(?:了|啦)?)/;
+
+function sanitizeToolAcknowledgement(text, toolResult = {}) {
+  const value = String(text || '').trim();
+  if (!value || !ROBOTIC_TOOL_ACKNOWLEDGEMENT_REGEX.test(value)) return value;
+
+  const detail = value.includes('：') ? value.split('：').slice(1).join('：').trim() : '';
+  const tool = String(toolResult?.tool || '');
+  if (tool.startsWith('reminder_') || tool === 'schedule_note') {
+    return detail ? `好。${detail}` : '好，到时间我会叫你。';
+  }
+  if (tool.startsWith('subscription_')) {
+    return detail ? `订阅开始了：${detail}` : '好，之后我会按这个频率看。';
+  }
+  if (tool.startsWith('meme_')) {
+    return detail ? `表情包这边会按这个来：${detail}` : '之后会按这个表情包偏好来。';
+  }
+  if (tool.startsWith('memory_') || tool.startsWith('style_')) {
+    return detail ? `之后会按这个偏好来：${detail}` : '之后会按这个偏好来。';
+  }
+  return detail ? `好，之后按这个来：${detail}` : '好，之后按这个来。';
+}
+
 
 function renderExceptionalToolReply(toolResult, policy = {}) {
   const payload = toolResult?.payload || {};
@@ -99,7 +122,7 @@ function renderStatusReply(toolResult, policy) {
     case 'get_group_state':
       return `${prefix}群里的气氛偏 ${payload.mood || 'CALM'}，活跃度 ${Math.round(Number(payload.activityLevel || 0))}，最近常提的话题是 ${formatList(payload.recentTopics)}。`;
     case 'get_profile':
-      return `${prefix}${payload.memorySummary || '稳定画像还不够多，我还在慢慢记。'}`;
+      return `${prefix}${payload.memorySummary || '稳定画像还不够多，还得再聊一阵。'}`;
     case 'get_memory':
       return `${prefix}${toolResult.summary || '我现在还没攒到足够稳定的记忆。'}`;
     case 'get_style':
@@ -107,7 +130,7 @@ function renderStatusReply(toolResult, policy) {
     case 'get_help':
       return `${prefix}现在能直接叫我的命令有：${formatList(payload.commands)}。`;
     default:
-      return toolResult.summary || '这件事我先替你记下了。';
+      return toolResult.summary || '这部分暂时没有可展示的内容。';
   }
 }
 
@@ -164,9 +187,9 @@ function renderWatchReply(toolResult) {
       : '现在还没有挂着的关键词盯梢。';
   }
   if (toolResult.tool === 'automation_keyword_alert') {
-    return `${payload.username || '有人'}刚刚提到了“${payload.keyword}”。我顺手记下的内容是：${payload.summary || '暂无'}。`;
+    return `${payload.username || '有人'}刚刚提到了“${payload.keyword}”。相关内容是：${payload.summary || '暂无'}。`;
   }
-  return toolResult.summary || '盯梢规则我已经替你收好了。';
+  return toolResult.summary || '盯梢规则已经生效。';
 }
 
 function renderReminderReply(toolResult, policy) {
@@ -191,7 +214,7 @@ function renderReminderReply(toolResult, policy) {
       : `我没找到编号为 ${payload.taskId} 的提醒。`;
   }
   if (toolResult.tool === 'reminder_due') {
-    return `到时间了。${payload.text || payload.summary || '你要我记着的事，我没有忘。'}`;
+    return `到时间了。${payload.text || payload.summary || '你交代的事，我没忘。'}`;
   }
   return toolResult.summary || '提醒这件事我已经替你理好了。';
 }
@@ -199,7 +222,7 @@ function renderReminderReply(toolResult, policy) {
 function renderSubscriptionReply(toolResult) {
   const payload = toolResult.payload || {};
   if (toolResult.tool === 'subscription_created') {
-    return `这条订阅我记下了：${payload.payload?.sourceType || payload.sourceType} / ${payload.payload?.target || payload.target}，每 ${payload.repeatIntervalMinutes || payload.intervalMinutes} 分钟看一遍。`;
+    return `订阅开始了：${payload.payload?.sourceType || payload.sourceType} / ${payload.payload?.target || payload.target}，每 ${payload.repeatIntervalMinutes || payload.intervalMinutes} 分钟看一遍。`;
   }
   if (toolResult.tool === 'subscription_list') {
     const tasks = payload.tasks || [];
@@ -229,13 +252,13 @@ function renderMemeReply(toolResult, policy) {
   }
 
   if (toolResult.tool === 'meme_optout') {
-    return toolResult.summary || '这个表情包偏好我记下了。';
+    return toolResult.summary || '之后会按这个表情包偏好来。';
   }
 
   if (action === 'collect') {
     return policy.specialUser
       ? '这张梗图素材我替你单独留着了。'
-      : '这张梗图素材我先收进库里了。';
+      : '这张梗图素材之后可以直接用。';
   }
 
   if (action === 'send-existing') {
@@ -272,8 +295,8 @@ function renderKnowledgeReply(toolResult, policy) {
 function renderScheduleReply(toolResult, policy) {
   const reminderText = toolResult.payload?.text || '那件事';
   return policy.specialUser
-    ? `${reminderText}我已经记住了，会替你一直放在心上。`
-    : `${reminderText}我已经记住了。`;
+    ? `${reminderText}。到时候我会提醒你，不会让它悄悄过去。`
+    : `${reminderText}。到时候我会提醒你。`;
 }
 
 function renderWelcomeReply(toolResult) {
@@ -284,9 +307,9 @@ function renderWelcomeReply(toolResult) {
   return `欢迎你，${toolResult.payload?.username || '新成员'}。先慢慢熟悉这里，气氛这边我会替你看着。`;
 }
 
-export function formatToolResultAsYuno(toolResult, policy = {}) {
+function formatToolResultAsYunoRaw(toolResult, policy = {}) {
   if (!toolResult) {
-    return '这件事我先替你记下了。';
+    return '好，之后按这个来。';
   }
 
   const exceptionalReply = renderExceptionalToolReply(toolResult, policy);
@@ -323,7 +346,7 @@ export function formatToolResultAsYuno(toolResult, policy = {}) {
   }
 
   if (toolResult.tool?.startsWith('memory_') || toolResult.tool?.startsWith('style_')) {
-    return toolResult.summary || '这条偏好我记下了。';
+    return toolResult.summary || '之后会按这条偏好来。';
   }
 
   if (toolResult.tool === 'debug_why') {
@@ -338,7 +361,11 @@ export function formatToolResultAsYuno(toolResult, policy = {}) {
     return renderScheduleReply(toolResult, policy);
   }
 
-  return toolResult.summary || '这件事我先替你记下了。';
+  return toolResult.summary || '好，之后按这个来。';
+}
+
+export function formatToolResultAsYuno(toolResult, policy = {}) {
+  return sanitizeToolAcknowledgement(formatToolResultAsYunoRaw(toolResult, policy), toolResult);
 }
 
 export function normalizeFormatterOutputs(toolResult, text) {
@@ -373,7 +400,7 @@ export function summarizeToolPayload(toolResult) {
   const payload = toolResult?.payload || {};
 
   if (toolResult?.tool === 'meme_collect') {
-    return `已收下一张梗图素材，标签：${formatList(payload.tags, '未标记')}`;
+    return `梗图素材可用，标签：${formatList(payload.tags, '未标记')}`;
   }
 
   if (toolResult?.tool === 'meme_retrieve') {

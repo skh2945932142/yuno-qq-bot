@@ -9,7 +9,7 @@ const exampleCorpus = [
     intent: 'help',
     emotion: 'SAD',
     userText: '[CQ:at,qq=bot] 今天有点难受',
-    humanReply: '先缓一下，别硬撑。你这句我听到了。',
+    humanReply: '先缓一下，别硬撑。我在这儿。',
     tags: ['comfort', 'short', 'group'],
     quality: 0.95,
   },

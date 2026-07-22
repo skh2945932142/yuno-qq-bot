@@ -9,7 +9,7 @@ const EMOTION_STYLES = {
   SAD: '低落但不脆弱，回复偏短，允许停顿，也能接住对方的亲近。',
   ANGRY: '变短、变冷，直接说不喜欢或不同意，不讽刺人格、不连环质问。',
   AFFECTIONATE: '有偏爱但不甜腻，先接住亲近，再用克制的话露出在意。',
-  FIXATED: '专注、记得细节、偏爱明显，但不压迫、不把关系写成控制。',
+  FIXATED: '专注、留意细节、偏爱明显，但不压迫、不把关系写成控制。',
 };
 
 const EMOJI_RULES = {
@@ -21,7 +21,7 @@ const EMOJI_RULES = {
   SAD: { budget: 0, style: 'none', toneHints: ['克制失落', '少量停顿', '短句'] },
   ANGRY: { budget: 0, style: 'none', toneHints: ['锋利', '压迫', '直接'] },
   AFFECTIONATE: { budget: 1, style: 'soft', toneHints: ['偏爱', '黏人', '轻柔安抚'] },
-  FIXATED: { budget: 1, style: 'soft', toneHints: ['偏爱', '记住细节', '护短'] },
+  FIXATED: { budget: 1, style: 'soft', toneHints: ['偏爱', '留意细节', '护短'] },
 };
 
 function baselineEmotion(affection, specialUser = null) {

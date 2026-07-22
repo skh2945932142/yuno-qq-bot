@@ -235,7 +235,7 @@ async function forgetUserMemory(args, context) {
       : `我没找到和“${query}”匹配的长期记忆。`,
     visibility: 'default',
     priority: 'normal',
-    followUpHint: '你也可以用 /memory 看看我现在还记着什么。',
+    followUpHint: '你也可以用 /memory 看看我们以前聊过什么。',
     safetyFlags: [],
   });
 }
@@ -351,7 +351,7 @@ async function updateStylePreference(args, context) {
       patch,
       profileSummary: updated?.profileSummary || profileSummary,
     },
-    summary: `这条偏好我记下了：${Object.entries(patch).map(([key, value]) => `${key}=${value}`).join('，')}。`,
+    summary: `之后会按这条偏好来：${Object.entries(patch).map(([key, value]) => `${key}=${value}`).join('，')}。`,
     visibility: 'default',
     priority: 'normal',
     followUpHint: '之后我会按这个方向调整回复。',
@@ -427,8 +427,8 @@ async function setMemeOptOut(args, context) {
     tool: 'meme_optout',
     payload: { optOut },
     summary: optOut
-      ? '我记下了，之后不会自动收集你发的表情包素材。'
-      : '我记下了，之后可以继续自动收集你发的表情包素材。',
+      ? '好，之后不会自动收集你发的表情包素材。'
+      : '好，之后可以继续自动收集你发的表情包素材。',
     visibility: 'default',
     priority: 'normal',
     followUpHint: '',
@@ -592,7 +592,7 @@ async function addReminder(args, context) {
   return buildStructuredToolResult({
     tool: 'reminder_created',
     payload: task,
-    summary: `提醒已经记下了，${args.delayMinutes} 分钟后我会叫你。`,
+    summary: `行，${args.delayMinutes} 分钟后我会叫你。`,
     visibility: 'default',
     priority: 'normal',
     followUpHint: '想看还挂着哪些提醒，可以用 /remind list。',

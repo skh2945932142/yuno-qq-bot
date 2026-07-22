@@ -34,3 +34,14 @@ test('formatter renders reminder creation in a concise utility style', () => {
   assert.match(text, /15/);
   assert.match(text, /提醒/);
 });
+
+test('formatter removes legacy robotic acknowledgement summaries', () => {
+  const text = formatToolResultAsYuno({
+    tool: 'memory_update',
+    payload: {},
+    summary: '这条偏好我记下了：语气=短。',
+  }, { specialUser: null });
+
+  assert.equal(text, '之后会按这个偏好来：语气=短。');
+  assert.doesNotMatch(text, /记下|记住|收下|收到/);
+});

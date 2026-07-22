@@ -13,6 +13,7 @@ const ACCUSATORY_FRAME_REGEX = /(?:你(?:又|居然|怎么还)|明明[^。！？
 const ADVERSARIAL_CONTRAST_REGEX = /(?:倒是[^。！？!?]{0,24}(?:就|还|一点)|明明[^。！？!?]{0,24}(?:却|还)|嫌[^。！？!?]{0,24}还)/;
 const POSSESSIVE_CONTROL_REGEX = /(不许|不准|只能|你只能|别(?:走|离开|消失|不理我)|不可以[^。！？!?]{0,12}(?:跟|和)[^。！？!?]{0,12}(?:别人|他人))/;
 const PERSONAL_ATTACK_REGEX = /(?:你(?:很|太)?(?:自私|虚伪|恶心|可笑|烦人|麻烦|没救)|废物|蠢货|闭嘴)/;
+const ROBOTIC_ACKNOWLEDGEMENT_REGEX = /(?:我(?:(?:已经|会|先|都|也|替你)\s*)*(?:记下|记住|记着|收下|接住)(?:了|啦|这句|这件事|你(?:这句|说的(?:话|内容)))?|这(?:句|句话|件事|条(?:偏好|订阅|提醒)?|个(?:要求|约定)?)(?:我)?(?:(?:已经|会|先|都|也|替你)\s*)*(?:记下|记住|记着|收下|接住)(?:了|啦)?|我(?:听见|听到|知道|明白|了解)(?:了|啦)|(?:(?:已经|都|这就)\s*)?(?:记下|记住|收下|接住)(?:了|啦)|(?:已经|已)?收到(?:了|啦)?)/;
 const EMOJI_DETECT_REGEX = /\p{Extended_Pictographic}/u;
 const EMOJI_REPLACE_REGEX = /\p{Extended_Pictographic}/gu;
 const KAOMOJI_REGEX = /(?:\((?=[^)\r\n]{2,16}\))(?=[^)\r\n]*[｡・ωへ｀´▽ﾉ￣^><≧≦つっヾ；;])[^)\r\n]+\)|[=;:][\-^']?[)(DP]|[｡・ωへ｀´▽ﾉ￣]{3,})/gu;
@@ -114,6 +115,7 @@ export function inspectReplyNaturalness(text, options = {}) {
   if (AI_DISCLAIMER_REGEX.test(value)) flags.push('ai-disclaimer');
   if (CANNED_EMPATHY_REGEX.test(value)) flags.push('canned-empathy');
   if (SUMMARY_PREFACE_REGEX.test(value)) flags.push('summary-preface');
+  if (ROBOTIC_ACKNOWLEDGEMENT_REGEX.test(value)) flags.push('robotic-acknowledgement');
 
   const hasMotiveAttribution = MOTIVE_ATTRIBUTION_REGEX.test(value);
   const hasAccusatoryFrame = ACCUSATORY_FRAME_REGEX.test(value);
@@ -184,7 +186,9 @@ export function inspectReplyNaturalness(text, options = {}) {
     'repeated-edge',
   ];
   const hard = unique.some((flag) => hardFlags.includes(flag));
-  const rewriteRecommended = unique.includes('private-too-long') || shouldRewriteForEdge({
+  const rewriteRecommended = unique.includes('private-too-long')
+    || unique.includes('robotic-acknowledgement')
+    || shouldRewriteForEdge({
     edgeScore,
     hard,
     previousEdgeScore,
@@ -258,6 +262,17 @@ function removeAggressiveClauses(text) {
   ));
   return safe.join('').trim();
 }
+function removeRoboticAcknowledgementClauses(text) {
+  const clauses = String(text || '')
+    .split(/(?<=[，,。！？!?；;])/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return clauses
+    .filter((clause) => !ROBOTIC_ACKNOWLEDGEMENT_REGEX.test(clause))
+    .join('')
+    .trim();
+}
+
 
 function limitQuestions(text, options = {}) {
   const allowed = options.replyPlan?.questionNeeded ? 1 : 0;
@@ -293,19 +308,24 @@ function shortenPrivateReply(text, options = {}) {
 export function buildDeescalatedReplyFallback(options = {}) {
   const intent = String(options.messageAnalysis?.intent || options.analysis?.intent || '').toLowerCase();
   const sentiment = String(options.messageAnalysis?.sentiment || options.analysis?.sentiment || '').toLowerCase();
-  if (intent === 'help' || sentiment === 'negative') return '先别硬撑。我听着。';
+  if (intent === 'help' || sentiment === 'negative') return '先别硬撑。今天可以慢一点。';
   if (intent === 'challenge') return '我不同意。先把重点说清楚。';
-  if (sentiment === 'positive') return '嗯，这句我收下了。别得意。';
-  return '我听见了。先接这句。';
+  if (sentiment === 'positive') return '嗯，听你这么说，我有点高兴。只是没打算表现得太明显。';
+  return '嗯，你继续说。我想听后面。';
 }
 
 export function deescalateReplyNaturalness(text, options = {}) {
   const original = String(text || '').trim();
   if (!original) return buildDeescalatedReplyFallback(options);
-  const output = shortenPrivateReply(limitQuestions(removeAggressiveClauses(original), options), options)
+  const hadRoboticAcknowledgement = ROBOTIC_ACKNOWLEDGEMENT_REGEX.test(original);
+  const safeClauses = removeRoboticAcknowledgementClauses(removeAggressiveClauses(original));
+  const output = shortenPrivateReply(limitQuestions(safeClauses, options), options)
     .replace(/\s*([，。！？!?、；;：:])\s*/g, '$1')
     .trim();
-  if (output.length >= 4 && !MOTIVE_ATTRIBUTION_REGEX.test(output) && !POSSESSIVE_CONTROL_REGEX.test(output)) {
+  const residualTooThin = hadRoboticAcknowledgement
+    && (normalizeWhitespace(output).length < 10 || /^(?:嗯[，,]?)?(?:别得意|好吧|行吧|知道啦)[。！？!?]?$/.test(output));
+
+  if (!residualTooThin && output.length >= 4 && !MOTIVE_ATTRIBUTION_REGEX.test(output) && !POSSESSIVE_CONTROL_REGEX.test(output)) {
     return output;
   }
   return buildDeescalatedReplyFallback(options);

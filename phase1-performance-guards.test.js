@@ -71,7 +71,7 @@ test('processIncomingMessage uses short fallback when reply budget is exceeded',
     },
   });
 
-  assert.match(reply, /我先接住|先接一句/);
+  assert.equal(reply, '先说眼前这句。你继续，我下一条补完整一点。');
   assert.equal(sentReplies.length, 1);
 });
 
