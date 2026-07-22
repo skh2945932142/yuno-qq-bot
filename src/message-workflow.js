@@ -44,7 +44,11 @@ import { markMemeUsed } from './meme-library.js';
 import { planContextualMemeReply } from './meme-reply-planner.js';
 import { getMemeCandidates, mergeMemeCandidates } from './meme-provider.js';
 import { retrieveReplyStyleExamples } from './reply-style-retriever.js';
-import { inspectReplyNaturalness, polishReplyNaturalness } from './reply-naturalness.js';
+import {
+  deescalateReplyNaturalness,
+  inspectReplyNaturalness,
+  polishReplyNaturalness,
+} from './reply-naturalness.js';
 
 registerQueryTools(toolRegistry);
 
@@ -62,6 +66,8 @@ const MARKDOWN_DECORATION_REGEX = /[*_~>#]+/g;
 const VOICE_REQUEST_REGEX = /(语音|声音|念给我|读给我|说给我听|用嘴说|开麦|voice|tts)/i;
 const VOICE_TEXT_HARD_MAX_CHARS = 220;
 const REPLY_BUDGET_MIN_GENERATION_MS = 350;
+const REPLY_STYLE_REWRITE_MIN_BUDGET_MS = 900;
+const REPLY_STYLE_REWRITE_TIMEOUT_MS = 3500;
 const FALLBACK_REPLY_MIN_MAX_TOKENS = 384;
 const lastVoiceSentAtByChat = new Map();
 
@@ -576,6 +582,136 @@ function parseChatReplyDecision(rawReplyText, options = {}) {
   };
 }
 
+function buildStyleRewriteSystemPrompt(event) {
+  const isPrivate = event?.chatType === 'private';
+  return [
+    '你是由乃QQ聊天回复的最终风格编辑。只返回严格JSON对象，字段为text、sendVoice、voiceText。',
+    '保留原回复的事实、结论、关系状态和当日表达强度，不增加新事实。',
+    '删除无依据的动机揣测、第二人称指责、审问式反问、人格讽刺和控制式占有。',
+    '安静偏冷要写成短、克制和停顿，不要写成敌意。用户示好时先接住，再允许克制反转。',
+    '最多保留一句指向当前说法的轻刺；如果上一轮已有轻刺，本轮完全去掉。',
+    '不要道歉式讨好、客服套话、系统说明，也不要复述修改规则。',
+    isPrivate
+      ? '普通私聊保持1-2句、约15-55个汉字；安慰或必要解释最多3句。'
+      : '群聊保持1句，必要时2句，不刷屏。',
+    '除非输入明确允许追问，否则不要添加问句。每条最多一个emoji或颜文字。',
+  ].join('\n');
+}
+
+function buildStyleRewriteUserTurn({
+  event,
+  originalDecision,
+  naturalness,
+  voiceNaturalness,
+  personalityStrategy,
+  emotionResult,
+  relation,
+  conversationState,
+  replyPlan,
+}) {
+  const recentAssistant = (conversationState?.messages || [])
+    .filter((item) => item?.role === 'assistant')
+    .slice(-2)
+    .map((item) => ({ content: item.content, styleMove: item.styleMove, edgeScore: item.edgeScore }));
+  return JSON.stringify({
+    currentUserText: String(event?.rawText || event?.text || '').slice(0, 240),
+    original: {
+      text: originalDecision.text,
+      sendVoice: Boolean(originalDecision.sendVoice),
+      voiceText: originalDecision.voiceText || '',
+    },
+    qualityFlags: [...new Set([...(naturalness?.flags || []), ...(voiceNaturalness?.flags || [])])],
+    edgeScore: Math.max(Number(naturalness?.edgeScore || 0), Number(voiceNaturalness?.edgeScore || 0)),
+    relationshipStage: personalityStrategy?.relationshipStage || 'familiar',
+    signatureMove: personalityStrategy?.signatureMove?.key || 'observation',
+    allowMildEdge: personalityStrategy?.signatureMove?.key === 'mild_edge',
+    questionAllowed: Boolean(replyPlan?.questionNeeded),
+    emotion: emotionResult?.emotion || 'CALM',
+    dailyMood: emotionResult?.dailyMood?.key || 'STEADY',
+    affection: Number(relation?.affection || 0),
+    recentAssistant,
+  });
+}
+
+async function rewriteReplyStyle({
+  event,
+  decision,
+  naturalness,
+  voiceNaturalness,
+  personalityStrategy,
+  emotionResult,
+  relation,
+  conversationState,
+  replyPlan,
+  replyProviderKind,
+  replyProviderModel,
+  getRemainingReplyBudgetMs,
+  trace,
+  deps,
+}) {
+  const remainingBudgetMs = getRemainingReplyBudgetMs();
+  if (remainingBudgetMs !== null && remainingBudgetMs < REPLY_STYLE_REWRITE_MIN_BUDGET_MS) {
+    return { outcome: 'skipped-budget', decision: null };
+  }
+
+  const timeoutMs = remainingBudgetMs === null
+    ? REPLY_STYLE_REWRITE_TIMEOUT_MS
+    : Math.max(
+        REPLY_BUDGET_MIN_GENERATION_MS,
+        Math.min(REPLY_STYLE_REWRITE_TIMEOUT_MS, remainingBudgetMs - 150)
+      );
+  const systemPrompt = buildStyleRewriteSystemPrompt(event);
+  const userTurn = buildStyleRewriteUserTurn({
+    event,
+    originalDecision: decision,
+    naturalness,
+    voiceNaturalness,
+    personalityStrategy,
+    emotionResult,
+    relation,
+    conversationState,
+    replyPlan,
+  });
+  const raw = await withTraceSpan(trace, 'rewrite-reply-style', () => runReplyWithBudget(() => deps.chat(
+    [],
+    systemPrompt,
+    userTurn,
+    {
+      traceContext: trace,
+      promptVersion: 'reply-style-rewrite/v1',
+      operation: 'reply-style-rewrite',
+      providerKind: replyProviderKind,
+      ...(replyProviderModel ? { model: replyProviderModel } : {}),
+      expectStructuredReply: true,
+      reasoningEffort: 'minimal',
+      maxTokens: event?.chatType === 'private' ? 160 : 100,
+      historyLimit: 0,
+      temperature: 0.35,
+      timeoutMs,
+    }
+  ), timeoutMs), {
+    providerKind: replyProviderKind,
+    flags: naturalness?.flags || [],
+    edgeScore: naturalness?.edgeScore || 0,
+  });
+
+  const rewritten = parseChatReplyDecision(raw, {
+    defaultSendVoice: Boolean(decision.sendVoice),
+  });
+  if (rewritten.unusable || !rewritten.text) {
+    throw createInvalidModelReplyError(raw);
+  }
+
+  return {
+    outcome: 'success',
+    decision: {
+      ...rewritten,
+      sendVoice: Boolean(decision.sendVoice),
+      voiceText: rewritten.voiceText || rewritten.text,
+    },
+  };
+}
+
 function resolveVoiceRuntimeConfig() {
   return {
     enableVoice: Boolean(config.enableVoice),
@@ -703,6 +839,7 @@ function createWorkflowDeps(deps = {}) {
     retrieveReplyStyleExamples: deps.retrieveReplyStyleExamples || retrieveReplyStyleExamples,
     inspectReplyNaturalness: deps.inspectReplyNaturalness || inspectReplyNaturalness,
     polishReplyNaturalness: deps.polishReplyNaturalness || polishReplyNaturalness,
+    deescalateReplyNaturalness: deps.deescalateReplyNaturalness || deescalateReplyNaturalness,
     resolveVoiceRuntimeConfig: deps.resolveVoiceRuntimeConfig || resolveVoiceRuntimeConfig,
     toolRegistry: deps.toolRegistry || toolRegistry,
     enqueuePersistJob: deps.enqueuePersistJob || runtimeServices.queueManager?.enqueuePersist || null,
@@ -1523,13 +1660,15 @@ export async function processIncomingMessage(event, precomputed = null, options 
 
     let visibleReplyText = '';
     let replyDecision = null;
+    let replyProviderKind = null;
+    let replyProviderModel = '';
     const replyMessages = (workflowContext.conversationState.messages || []).map((item) => ({
       role: item.role,
       content: item.content,
     }));
     const primaryReplyOptions = {
       traceContext: trace,
-      promptVersion: 'reply-context/v6',
+      promptVersion: 'reply-context/v7',
       operation: 'reply',
       providerKind: 'reply',
       expectStructuredReply: true,
@@ -1577,6 +1716,8 @@ export async function processIncomingMessage(event, precomputed = null, options 
         throw createInvalidModelReplyError(rawReplyText);
       }
       visibleReplyText = replyDecision.text;
+      replyProviderKind = 'reply';
+      replyProviderModel = config.replyLlmChatModel;
       const strippedReplyText = stripHiddenReasoning(rawReplyText);
       if (!replyDecision.structured && visibleReplyText !== String(strippedReplyText || '').trim()) {
         recordWorkflowMetric('yuno_hidden_reasoning_stripped_total', 1, {
@@ -1655,6 +1796,8 @@ export async function processIncomingMessage(event, precomputed = null, options 
               throw createInvalidModelReplyError(fallbackReply);
             }
             visibleReplyText = replyDecision.text || buildReplyBudgetFallbackReply(normalizedEvent, task);
+            replyProviderKind = 'reply-fallback';
+            replyProviderModel = fallbackModel;
           } catch (fallbackError) {
             if (String(fallbackError?.code || '').toUpperCase() === 'REPLY_BUDGET_EXCEEDED') {
               recordWorkflowMetric('yuno_reply_latency_budget_exceeded_total', 1, {
@@ -1700,34 +1843,132 @@ export async function processIncomingMessage(event, precomputed = null, options 
       });
     }
 
-    const shapedReplyText = shapeChatReplyText(visibleReplyText, emotionResult);
-    const naturalness = deps.inspectReplyNaturalness(shapedReplyText, {
+    const replyPresentationStyle = {
+      ...emotionResult,
+      emojiBudget: personalityStrategy.emojiBudget,
+      emojiStyle: personalityStrategy.emojiStyle,
+    };
+    const naturalnessOptions = {
       event: normalizedEvent,
       route: task,
       replyLengthProfile,
+      replyPlan,
       personalityStrategy,
-    });
-    if (!naturalness.ok) {
-      for (const flag of naturalness.flags) {
-        recordWorkflowMetric('yuno_reply_naturalness_flags_total', 1, {
-          chat_type: normalizedEvent.chatType,
-          route: task.category,
-          flag,
-        });
+      messageAnalysis: analysis,
+      conversationState: workflowContext.conversationState,
+    };
+    const originalVoiceMaxChars = Number(deps.resolveVoiceRuntimeConfig()?.maxChars || config.voiceReplyMaxChars || 0);
+    const originalVoiceText = normalizeVoiceTtsTextBase(replyDecision.voiceText || replyDecision.text || visibleReplyText);
+    const originalVoiceExceededLimit = originalVoiceMaxChars > 0
+      && originalVoiceText.length > originalVoiceMaxChars;
+    let shapedReplyText = shapeChatReplyText(replyDecision.text || visibleReplyText, replyPresentationStyle);
+    let shapedVoiceText = shapeChatReplyText(replyDecision.voiceText || shapedReplyText, replyPresentationStyle);
+    let naturalness = deps.inspectReplyNaturalness(shapedReplyText, naturalnessOptions);
+    let voiceNaturalness = deps.inspectReplyNaturalness(shapedVoiceText, naturalnessOptions);
+    const initialEdgeScore = Math.max(
+      Number(naturalness.edgeScore || 0),
+      Number(voiceNaturalness.edgeScore || 0)
+    );
+    const initialQualityFlags = [...new Set([
+      ...naturalness.flags,
+      ...voiceNaturalness.flags,
+    ])];
+    for (const flag of initialQualityFlags) {
+      recordWorkflowMetric('yuno_reply_naturalness_flags_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        route: task.category,
+        flag,
+      });
+    }
+
+    let replyStyleRewriteOutcome = 'not-needed';
+    if (naturalness.rewriteRecommended || voiceNaturalness.rewriteRecommended) {
+      if (replyProviderKind) {
+        try {
+          const rewriteResult = await rewriteReplyStyle({
+            event: normalizedEvent,
+            decision: replyDecision,
+            naturalness,
+            voiceNaturalness,
+            personalityStrategy,
+            emotionResult,
+            relation: workflowContext.relation,
+            conversationState: workflowContext.conversationState,
+            replyPlan,
+            replyProviderKind,
+            replyProviderModel,
+            getRemainingReplyBudgetMs,
+            trace,
+            deps,
+          });
+          replyStyleRewriteOutcome = rewriteResult.outcome;
+          if (rewriteResult.decision) {
+            replyDecision = rewriteResult.decision;
+            shapedReplyText = shapeChatReplyText(replyDecision.text, replyPresentationStyle);
+            shapedVoiceText = shapeChatReplyText(replyDecision.voiceText || shapedReplyText, replyPresentationStyle);
+            naturalness = deps.inspectReplyNaturalness(shapedReplyText, naturalnessOptions);
+            voiceNaturalness = deps.inspectReplyNaturalness(shapedVoiceText, naturalnessOptions);
+          }
+        } catch (error) {
+          replyStyleRewriteOutcome = 'failed';
+          deps.logger.warn('model', 'Reply style rewrite failed; using deterministic de-escalation', {
+            traceId: trace.traceId,
+            chatType: normalizedEvent.chatType,
+            chatId: normalizedEvent.chatId,
+            userId: normalizedEvent.userId,
+            messageId: normalizedEvent.messageId,
+            providerKind: replyProviderKind,
+            flags: initialQualityFlags,
+            message: error.message,
+          });
+        }
+      } else {
+        replyStyleRewriteOutcome = 'no-model-provider';
       }
     }
-    const replyText = deps.polishReplyNaturalness(shapedReplyText, {
-      event: normalizedEvent,
-      route: task,
-      replyLengthProfile,
-      personalityStrategy,
-    });
-    const shapedVoiceText = shapeChatReplyText(replyDecision.voiceText || replyText, emotionResult);
-    const voiceText = deps.polishReplyNaturalness(shapedVoiceText, {
-      event: normalizedEvent,
-      route: task,
-      replyLengthProfile,
-      personalityStrategy,
+
+    let replyText = deps.polishReplyNaturalness(shapedReplyText, naturalnessOptions);
+    let voiceText = deps.polishReplyNaturalness(shapedVoiceText || replyText, naturalnessOptions);
+    let finalNaturalness = deps.inspectReplyNaturalness(replyText, naturalnessOptions);
+    let finalVoiceNaturalness = deps.inspectReplyNaturalness(voiceText, naturalnessOptions);
+    if (finalNaturalness.rewriteRecommended || finalVoiceNaturalness.rewriteRecommended) {
+      replyText = deps.deescalateReplyNaturalness(replyText, naturalnessOptions);
+      voiceText = deps.deescalateReplyNaturalness(voiceText || replyText, naturalnessOptions);
+      replyStyleRewriteOutcome = replyStyleRewriteOutcome === 'success'
+        ? 'rejected-deescalated'
+        : `${replyStyleRewriteOutcome}-deescalated`;
+      finalNaturalness = deps.inspectReplyNaturalness(replyText, naturalnessOptions);
+      finalVoiceNaturalness = deps.inspectReplyNaturalness(voiceText, naturalnessOptions);
+    }
+    if (finalVoiceNaturalness.rewriteRecommended) {
+      voiceText = replyText;
+      finalVoiceNaturalness = finalNaturalness;
+    }
+    replyDecision = {
+      ...replyDecision,
+      text: replyText,
+      voiceText,
+      sendVoice: originalVoiceExceededLimit ? false : Boolean(replyDecision.sendVoice),
+    };
+
+    if (replyStyleRewriteOutcome !== 'not-needed') {
+      recordWorkflowMetric('yuno_reply_style_rewrite_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        route: task.category,
+        outcome: replyStyleRewriteOutcome,
+      });
+    }
+    deps.logger.info('model', 'Reply style quality gate completed', {
+      traceId: trace.traceId,
+      chatType: normalizedEvent.chatType,
+      route: task.category,
+      signatureMove: personalityStrategy.signatureMove?.key || 'unknown',
+      initialFlags: initialQualityFlags,
+      initialEdgeScore,
+      finalFlags: [...new Set([...finalNaturalness.flags, ...finalVoiceNaturalness.flags])],
+      finalEdgeScore: Math.max(Number(finalNaturalness.edgeScore || 0), Number(finalVoiceNaturalness.edgeScore || 0)),
+      rewriteOutcome: replyStyleRewriteOutcome,
+      providerKind: replyProviderKind,
     });
     const replyTarget = {
       platform: normalizedEvent.platform,
@@ -1773,7 +2014,12 @@ export async function processIncomingMessage(event, precomputed = null, options 
     }
     const nextMessages = [
       { role: 'user', content: userTurn },
-      { role: 'assistant', content: replyText },
+      {
+        role: 'assistant',
+        content: replyText,
+        styleMove: personalityStrategy.signatureMove?.key || '',
+        edgeScore: Number(finalNaturalness.edgeScore || 0),
+      },
     ];
 
     await withTraceSpan(trace, 'send-text', async () => {
@@ -1970,6 +2216,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
       dailyMoodDate: dailyMood?.dateKey || null,
       emotion: emotionResult.emotion,
       emotionReason: emotionResult.reason,
+      signatureMove: personalityStrategy.signatureMove?.key || null,
+      replyEdgeScore: Number(finalNaturalness.edgeScore || 0),
+      replyStyleRewriteOutcome,
     });
     return replyText;
   } catch (error) {

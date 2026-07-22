@@ -31,6 +31,8 @@ const HistorySchema = new mongoose.Schema({
     role: String,
     content: String,
     time: { type: Date, default: Date.now },
+    styleMove: { type: String, default: '' },
+    edgeScore: { type: Number, default: 0 },
   }],
 }, { minimize: false });
 HistorySchema.index({ groupId: 1, userId: 1 }, { unique: true });

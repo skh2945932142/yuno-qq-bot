@@ -38,6 +38,8 @@ function normalizeMessage(item) {
     role: item.role === 'assistant' ? 'assistant' : 'user',
     content: String(item.content || '').trim(),
     time: item.time ? new Date(item.time) : new Date(),
+    styleMove: item.role === 'assistant' ? String(item.styleMove || '').trim() : '',
+    edgeScore: item.role === 'assistant' ? Math.max(0, Number(item.edgeScore || 0)) : 0,
   };
 }
 

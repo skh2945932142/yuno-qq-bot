@@ -100,7 +100,7 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
   assert.match(prompt, /不要复述 JSON、字段名、分数、模型名/);
 });
 
-test('buildReplyContext uses current daily mood instead of stale stored emotion', () => {
+test('buildReplyContext keeps current emotion while treating daily mood as presentation only', () => {
   const prompt = buildReplyContext({
     event: { platform: 'qq', chatType: 'private', userName: 'Alice' },
     route: { category: 'private_chat', allowFollowUp: true },
@@ -117,9 +117,8 @@ test('buildReplyContext uses current daily mood instead of stale stored emotion'
       toneHints: ['锋利', '不讨好'],
       dailyMood: {
         key: 'IRRITABLE',
-        label: '生气',
+        label: '烦躁',
         dateKey: '2026-07-20',
-        antiPleasing: true,
         promptStyle: '今天明显烦躁。',
       },
     },
@@ -129,9 +128,11 @@ test('buildReplyContext uses current daily mood instead of stale stored emotion'
   });
 
   assert.match(prompt, /本轮情绪=ANGRY/);
-  assert.match(prompt, /今日心境=生气/);
-  assert.match(prompt, /不要因好感度高/);
+  assert.match(prompt, /今日心境=烦躁/);
+  assert.match(prompt, /只改变表达方式，不覆盖本轮情绪/);
+  assert.match(prompt, /先回应当前内容，再保持关系连续性/);
   assert.doesNotMatch(prompt, /情绪=AFFECTIONATE/);
+  assert.doesNotMatch(prompt, /不要因好感度高/);
 });
 
 test('buildReplyContext trims non-essential sections in fast_chat mode', () => {

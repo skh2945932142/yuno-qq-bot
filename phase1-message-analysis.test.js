@@ -92,3 +92,27 @@ test('jealousy topics are detected for special users', async () => {
   assert.equal(result.shouldRespond, true);
   assert.match(result.ruleSignals.join(','), /jealousy-topic/);
 });
+
+test('leaving and cold-shoulder language can trigger low-frequency jealousy context', async () => {
+  const result = await analyzeTrigger({
+    platform: 'qq',
+    chatType: 'private',
+    chatId: 'u1',
+    userId: '20001',
+    userName: 'Scathach',
+    rawText: '我先走了，晚点可能不回你',
+  }, {
+    relation: { affection: 90, activeScore: 80 },
+    groupState: null,
+    specialUser: {
+      userId: '20001',
+      label: 'Scathach',
+      affectionFloor: 88,
+      triggerKeywords: [],
+      memorySeeds: [],
+    },
+  });
+
+  assert.equal(result.shouldRespond, true);
+  assert.match(result.ruleSignals.join(','), /jealousy-topic/);
+});

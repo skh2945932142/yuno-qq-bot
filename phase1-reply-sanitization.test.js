@@ -45,10 +45,11 @@ function createContext(overrides = {}) {
   };
 }
 
-function createDeps(sendReply, chat) {
+function createDeps(sendReply, chat, overrides = {}) {
   return {
     sendReply,
     sendVoice: async () => false,
+    tts: async () => Buffer.from('voice'),
     retrieveKnowledge: async () => ({
       enabled: false,
       documents: [],
@@ -60,6 +61,7 @@ function createDeps(sendReply, chat) {
     updateUserState: async () => null,
     updateUserProfileMemory: async () => null,
     shouldSendVoiceForEmotion: () => false,
+    ...overrides,
   };
 }
 
@@ -415,6 +417,133 @@ test('JSON boilerplate from both reply models is never sent to the user', async 
   assert.equal(reply, '我在。刚才那句没生成完整，但你的消息我记住了。');
   assert.deepEqual(sentReplies, [reply]);
   assert.doesNotMatch(reply, /Here is|JSON/i);
+});
+
+test('aggressive generated reply is rewritten once by the same provider before sending', async () => {
+  const sentReplies = [];
+  const modelCalls = [];
+  const reply = await processIncomingMessage(createEvent({ rawText: '因为有你呀' }), createContext(), {
+    deps: createDeps(
+      async (_target, text) => sentReplies.push(text),
+      async (_messages, _systemPrompt, _userTurn, options = {}) => {
+        modelCalls.push({ operation: options.operation, providerKind: options.providerKind, temperature: options.temperature });
+        if (options.operation === 'reply-style-rewrite') {
+          return JSON.stringify({ text: '嗯，这句我收下了。别得意，我只是没打算推开你。', sendVoice: false, voiceText: '' });
+        }
+        return JSON.stringify({
+          text: '这种话倒是说得越来越顺口了。你就这么确定，每次拿这句话当理由都能在我这蒙混过关？',
+          sendVoice: false,
+          voiceText: '',
+        });
+      },
+    ),
+  });
+
+  assert.equal(reply, '嗯，这句我收下了。别得意，我只是没打算推开你。');
+  assert.deepEqual(sentReplies, [reply]);
+  assert.deepEqual(modelCalls.map((item) => item.operation), ['reply', 'reply-style-rewrite']);
+  assert.equal(modelCalls[1].providerKind, 'reply');
+  assert.equal(modelCalls[1].temperature, 0.35);
+  assert.doesNotMatch(reply, /蒙混过关|每次拿|你就这么确定/);
+});
+
+test('style rewrite failure never sends the original accusatory reply', async () => {
+  const sentReplies = [];
+  const reply = await processIncomingMessage(createEvent({ rawText: '因为有你呀' }), createContext(), {
+    deps: createDeps(
+      async (_target, text) => sentReplies.push(text),
+      async (_messages, _systemPrompt, _userTurn, options = {}) => {
+        if (options.operation === 'reply-style-rewrite') {
+          throw new Error('rewrite unavailable');
+        }
+        return JSON.stringify({
+          text: '你每次被讲中就换语气，把责任全扔给我。',
+          sendVoice: false,
+          voiceText: '',
+        });
+      },
+    ),
+  });
+
+  assert.equal(reply, '嗯，这句我收下了。别得意。');
+  assert.deepEqual(sentReplies, [reply]);
+  assert.doesNotMatch(reply, /你每次|责任|扔给我/);
+});
+
+test('fallback model style rewrite stays on the fallback provider', async () => {
+  const modelCalls = [];
+  const reply = await processIncomingMessage(createEvent({ rawText: '因为有你呀' }), createContext(), {
+    replyLlmFallbackChatModel: 'gemini-3.1-flash-lite',
+    deps: createDeps(
+      async () => {},
+      async (_messages, _systemPrompt, _userTurn, options = {}) => {
+        modelCalls.push({ operation: options.operation, providerKind: options.providerKind });
+        if (options.providerKind === 'reply') {
+          const error = new Error('429 status code');
+          error.status = 429;
+          throw error;
+        }
+        if (options.operation === 'reply-style-rewrite') {
+          return JSON.stringify({ text: '嗯，这句我收下了。', sendVoice: false, voiceText: '' });
+        }
+        return JSON.stringify({ text: '你每次都这样，把我的话当借口。', sendVoice: false, voiceText: '' });
+      },
+    ),
+  });
+
+  assert.equal(reply, '嗯，这句我收下了。');
+  assert.deepEqual(modelCalls.map((item) => item.providerKind), ['reply', 'reply-fallback', 'reply-fallback']);
+  assert.equal(modelCalls[2].operation, 'reply-style-rewrite');
+});
+
+test('voice delivery uses rewritten voice text instead of the aggressive original', async () => {
+  const ttsInputs = [];
+  const sentVoices = [];
+  const reply = await processIncomingMessage(createEvent({
+    rawText: '用语音说，因为有你呀',
+    text: '用语音说，因为有你呀',
+  }), createContext(), {
+    deps: createDeps(
+      async () => {},
+      async (_messages, _systemPrompt, _userTurn, options = {}) => {
+        if (options.operation === 'reply-style-rewrite') {
+          return JSON.stringify({
+            text: '嗯，这句我收下了。',
+            sendVoice: false,
+            voiceText: '这句我收下了。',
+          });
+        }
+        return JSON.stringify({
+          text: '你每次都拿这句话当借口。',
+          sendVoice: true,
+          voiceText: '你每次都拿这句话当借口。',
+        });
+      },
+      {
+        resolveVoiceRuntimeConfig: () => ({
+          enableVoice: true,
+          voiceName: 'test-voice',
+          mode: 'model',
+          cooldownMs: 0,
+          maxChars: 90,
+          onUserRecord: true,
+        }),
+        tts: async (text) => {
+          ttsInputs.push(text);
+          return Buffer.from(`audio:${text}`);
+        },
+        sendVoice: async (_target, audio) => {
+          sentVoices.push(audio.toString());
+          return true;
+        },
+      }
+    ),
+  });
+
+  assert.equal(reply, '嗯，这句我收下了。');
+  assert.deepEqual(ttsInputs, ['这句我收下了。']);
+  assert.deepEqual(sentVoices, ['audio:这句我收下了。']);
+  assert.doesNotMatch(ttsInputs[0], /你每次|借口/);
 });
 
 test('personality strategy explicitly forbids unsafe possessive escalation', async () => {

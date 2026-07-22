@@ -24,3 +24,16 @@ test('compactConversationState rolls older messages into a summary after eight m
   assert.match(state.rollingSummary, /a1/);
   assert.equal(state.summarizedCount, 2);
 });
+
+test('compactConversationState preserves assistant style metadata for repetition guards', () => {
+  const compacted = compactConversationState({
+    rollingSummary: '',
+    messages: [
+      { role: 'user', content: '靠一下' },
+      { role: 'assistant', content: '这次让你靠一会儿。', styleMove: 'mild_edge', edgeScore: 1 },
+    ],
+  });
+
+  assert.equal(compacted.messages[1].styleMove, 'mild_edge');
+  assert.equal(compacted.messages[1].edgeScore, 1);
+});

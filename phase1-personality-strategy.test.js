@@ -36,7 +36,7 @@ test('special user with high affection enters exclusive strategy with stronger m
 
   assert.equal(strategy.relationshipStage, 'exclusive');
   assert.equal(strategy.memoryUse.level, 'high');
-  assert.equal(strategy.possessiveness, 'medium');
+  assert.equal(strategy.possessiveness, 'low');
   assert.match(strategy.promptHints.join(' '), /共同记忆|特殊关系/);
 });
 
@@ -100,24 +100,29 @@ test('jealous strategy keeps safety boundaries explicit', () => {
   assert.match(strategy.forbiddenMoves.join(' '), /现实威胁|羞辱|攻击第三方/);
 });
 
-test('restrictive daily mood caps warmth and forbids pleasing at high affection', () => {
+test('daily mood changes expression without erasing warmth at high affection', () => {
   const strategy = resolvePersonalityStrategy({
     event: baseEvent(),
     relation: { affection: 99 },
     userState: { currentEmotion: 'AFFECTIONATE' },
     messageAnalysis: { intent: 'chat', sentiment: 'positive', ruleSignals: [] },
     emotionResult: {
-      emotion: 'SAD',
+      emotion: 'FIXATED',
       intensity: 0.8,
-      dailyMood: { key: 'GLOOMY', warmthCap: 'low', antiPleasing: true },
+      dailyMood: {
+        key: 'GLOOMY',
+        edgeLevel: 'mild',
+        promptStyle: '今天亮度偏低，但仍然接得住亲近。',
+      },
     },
     replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '接话' } },
     specialUser: { label: 'Alice' },
   });
 
-  assert.equal(strategy.warmth, 'low');
-  assert.equal(strategy.stance, 'gloomy_reserved');
-  assert.match(strategy.forbiddenMoves.join(' '), /今日心境禁止讨好/);
+  assert.equal(strategy.warmth, 'high');
+  assert.equal(strategy.stance, 'attached');
+  assert.match(strategy.promptHints.join(' '), /仍然接得住亲近/);
+  assert.doesNotMatch(strategy.forbiddenMoves.join(' '), /今日心境禁止讨好/);
 });
 
 test('signature move changes with the conversational intent instead of using one catchphrase', () => {
@@ -140,29 +145,78 @@ test('signature move changes with the conversational intent instead of using one
     replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '要信息' } },
   });
 
-  assert.equal(normal.signatureMove.key, 'pattern_notice');
-  assert.equal(playful.signatureMove.key, 'dry_tease');
-  assert.match(playful.signatureMove.guidance, /不要反问/);
+  assert.equal(['observation', 'quiet_care', 'pleased_restraint', 'playful_echo', 'reciprocal_warmth'].includes(normal.signatureMove.key), true);
+  assert.equal(['playful_echo', 'dry_tease', 'mild_edge'].includes(playful.signatureMove.key), true);
+  assert.doesNotMatch(playful.signatureMove.guidance, /揣测动机|攻击人格/);
   assert.equal(factual.signatureMove.key, 'sharp_answer');
-  assert.match(
-    resolvePersonalityStrategy({
+  assert.equal(
+    ['quiet_anchor', 'quiet_care'].includes(resolvePersonalityStrategy({
       event: baseEvent(),
       relation: { affection: 40 },
       messageAnalysis: { intent: 'help', sentiment: 'negative', ruleSignals: [] },
       replyPlan: { type: 'empathic_followup', questionNeeded: true, interpretation: { subIntent: '求安慰', needsEmpathy: true } },
-    }).signatureMove.guidance,
-    /身体、事情、时间/
+    }).signatureMove.key),
+    true
   );
 
   const companionship = resolvePersonalityStrategy({
     event: baseEvent(),
     relation: { affection: 72 },
-    messageAnalysis: { intent: 'social', sentiment: 'negative', ruleSignals: [] },
+    messageAnalysis: { intent: 'social', sentiment: 'positive', ruleSignals: [] },
     replyPlan: {
-      type: 'empathic_followup',
-      questionNeeded: true,
-      interpretation: { subIntent: '亲近陪伴', needsEmpathy: true },
+      type: 'direct',
+      questionNeeded: false,
+      interpretation: { subIntent: '亲近陪伴', needsEmpathy: false },
     },
   });
-  assert.equal(companionship.signatureMove.key, 'direct_attention');
+  assert.equal([
+    'pleased_restraint',
+    'shy_deflection',
+    'reciprocal_warmth',
+    'quiet_care',
+    'playful_echo',
+  ].includes(companionship.signatureMove.key), true);
+});
+
+test('recent style metadata prevents repeated moves and consecutive edge', () => {
+  const strategy = resolvePersonalityStrategy({
+    event: baseEvent({ messageId: 'next-turn', rawText: '我偏要现在黏着你' }),
+    relation: { affection: 82 },
+    conversationState: {
+      messages: [
+        { role: 'assistant', content: '这次让你靠一会儿。', styleMove: 'mild_edge', edgeScore: 1 },
+      ],
+    },
+    messageAnalysis: { intent: 'challenge', sentiment: 'neutral', ruleSignals: [] },
+    emotionResult: { emotion: 'CALM', dailyMood: { key: 'IRRITABLE', edgeLevel: 'mild' } },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '接话' } },
+  });
+
+  assert.notEqual(strategy.signatureMove.key, 'mild_edge');
+  assert.equal(strategy.signatureMove.previousEdgeScore, 1);
+});
+
+test('custom nickname is only enabled when stored and not recently used', () => {
+  const allowed = resolvePersonalityStrategy({
+    event: baseEvent({ messageId: 'nickname-1' }),
+    relation: { affection: 80 },
+    userProfile: { preferredName: '小月' },
+    conversationState: { messages: [] },
+    messageAnalysis: { intent: 'social', sentiment: 'positive', ruleSignals: [] },
+    emotionResult: { emotion: 'AFFECTIONATE' },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '亲近陪伴' } },
+  });
+  const suppressed = resolvePersonalityStrategy({
+    event: baseEvent({ messageId: 'nickname-2' }),
+    relation: { affection: 80 },
+    userProfile: { preferredName: '小月' },
+    conversationState: { messages: [{ role: 'assistant', content: '小月，先听我说。' }] },
+    messageAnalysis: { intent: 'social', sentiment: 'positive', ruleSignals: [] },
+    emotionResult: { emotion: 'AFFECTIONATE' },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '亲近陪伴' } },
+  });
+
+  assert.equal(allowed.addressing.allowed, true);
+  assert.equal(allowed.addressing.value, '小月');
+  assert.equal(suppressed.addressing.allowed, false);
 });

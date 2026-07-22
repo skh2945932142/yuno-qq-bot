@@ -19,7 +19,7 @@ test('resolveDailyMood is stable for the same natural day and seed', () => {
   assert.equal(second.key, first.key);
 });
 
-test('daily irritable mood overrides affectionate baseline at high affection', () => {
+test('daily irritable mood only changes presentation at high affection', () => {
   const dailyMood = resolveDailyMood({
     now: new Date('2026-07-20T12:00:00+08:00'),
     override: 'IRRITABLE',
@@ -38,10 +38,10 @@ test('daily irritable mood overrides affectionate baseline at high affection', (
     dailyMood,
   });
 
-  assert.equal(result.emotion, 'ANGRY');
-  assert.equal(result.reason, 'daily-mood:irritable');
-  assert.equal(result.dailyMood.antiPleasing, true);
-  assert.match(result.toneHints.join(' '), /不讨好/);
+  assert.equal(result.emotion, 'FIXATED');
+  assert.equal(result.reason, 'positive-message');
+  assert.equal(result.dailyMood.edgeLevel, 'mild');
+  assert.match(result.promptStyle, /不攻击用户人格/);
 });
 
 test('disabled daily mood returns no global mood constraint', () => {
