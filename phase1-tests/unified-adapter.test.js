@@ -93,3 +93,38 @@ test('validateOnebotMessageEvent infers private message type when message_type i
   assert.equal(result.value.chatId, '23333');
   assert.equal(result.value.userId, '23333');
 });
+
+test('validateOnebotMessageEvent reports missing group and raw message fields', () => {
+  const missingGroup = validateOnebotMessageEvent({
+    post_type: 'message', message_type: 'group', user_id: 1,
+  });
+  assert.equal(missingGroup.ok, false);
+  assert.match(missingGroup.errors.join(','), /group_id|required/);
+  const missingRaw = validateOnebotMessageEvent({
+    post_type: 'message', message_type: 'private', user_id: 1, message: [],
+  });
+  assert.equal(missingRaw.ok, false);
+  assert.match(missingRaw.errors.join(','), /raw_message/);
+});
+
+test('validateOnebotMessageEvent handles notices and de-duplicates segment attachments', () => {
+  const poke = validateOnebotMessageEvent({
+    post_type: 'notice', notice_type: 'notify', sub_type: 'poke', group_id: 1, user_id: 2, self_id: 9, target_id: 9,
+  });
+  assert.equal(poke.value.rawText, '[poke]');
+  assert.equal(poke.value.text, '/poke');
+  assert.equal(poke.value.mentionsBot, true);
+
+  const increase = validateOnebotMessageEvent({
+    post_type: 'notice', notice_type: 'group_increase', group_id: 1, user_id: 2, sender: { nickname: 'New' },
+  });
+  assert.equal(increase.value.rawText, '[group_increase]');
+  assert.equal(increase.value.text, '/welcome');
+
+  const duplicate = validateOnebotMessageEvent({
+    post_type: 'message', message_type: 'group', group_id: 1, user_id: 2,
+    raw_message: '[CQ:image,file=a.png]',
+    message: [{ type: 'image', data: { file: 'a.png' } }, { type: 'file', data: { file: 'b.zip' } }],
+  });
+  assert.deepEqual(duplicate.value.attachments.map((item) => item.type), ['image', 'file']);
+});

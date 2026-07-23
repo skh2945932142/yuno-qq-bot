@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import {
   cancelReminderTask,
   cancelSubscriptionTask,
+  claimDueAutomationTasks,
   createReminderTask,
   createSubscriptionTask,
   getDueAutomationTasks,
   listReminderTasks,
   listSubscriptionTasks,
   markAutomationTaskDelivered,
+  releaseAutomationTaskClaim,
 } from './src/automation-tasks.js';
 
 test('reminder tasks can be created, listed, and cancelled', async () => {
@@ -171,4 +173,50 @@ test('subscription creation enforces active task quota per chat and user', async
     }, { tasks }),
     /quota/i
   );
+});
+
+test('due automation tasks are claimed once across competing scheduler instances', async () => {
+  const now = new Date('2026-07-23T12:00:00+08:00');
+  const tasks = [{
+    taskId: 'due-1',
+    platform: 'qq',
+    chatType: 'private',
+    chatId: 'user-1',
+    userId: 'user-1',
+    taskType: 'reminder',
+    enabled: true,
+    nextRunAt: new Date(now.getTime() - 1000),
+  }];
+
+  const first = await claimDueAutomationTasks(now, {
+    ownerId: 'scheduler-a',
+    lockMs: 60_000,
+    limit: 1,
+  }, { tasks });
+  const competing = await claimDueAutomationTasks(now, {
+    ownerId: 'scheduler-b',
+    lockMs: 60_000,
+    limit: 1,
+  }, { tasks });
+
+  assert.equal(first.length, 1);
+  assert.equal(first[0].lockedBy, 'scheduler-a');
+  assert.equal(competing.length, 0);
+
+  await releaseAutomationTaskClaim(first[0], {
+    ownerId: 'scheduler-a',
+    now,
+    nextRunAt: first[0].nextRunAt,
+    error: 'retry',
+  }, { tasks });
+
+  const reclaimed = await claimDueAutomationTasks(now, {
+    ownerId: 'scheduler-b',
+    lockMs: 60_000,
+    limit: 1,
+  }, { tasks });
+
+  assert.equal(reclaimed.length, 1);
+  assert.equal(reclaimed[0].lockedBy, 'scheduler-b');
+  assert.equal(reclaimed[0].deliveryAttempts, 2);
 });

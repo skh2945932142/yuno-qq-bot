@@ -46,6 +46,9 @@ function createDeps() {
     }),
     ensureGroupState: async () => null,
     getRecentEvents: async () => [],
+    observeGroupEvent: async () => null,
+    evaluateGroupAutomation: async () => null,
+    isNonTargetPokeEvent: () => false,
     updateRelationProfile: async () => null,
     updateUserState: async () => null,
     appendConversationMessages: async () => null,
@@ -57,6 +60,14 @@ function createDeps() {
     sendVoice: async () => true,
     enqueuePersistJob: null,
     shouldSendVoiceForEmotion: () => false,
+    resolveVoiceRuntimeConfig: () => ({
+      enableVoice: false,
+      voiceName: '',
+      mode: 'off',
+      cooldownMs: 0,
+      maxChars: 90,
+      onUserRecord: false,
+    }),
     chat: async (_messages, _systemPrompt, userTurn) => `mock:${userTurn || 'ok'}`,
   };
 }

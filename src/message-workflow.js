@@ -49,6 +49,8 @@ import {
   inspectReplyNaturalness,
   polishReplyNaturalness,
 } from './reply-naturalness.js';
+import { withConversationExecution } from './conversation-executor.js';
+import { executeTrackedDelivery as executeDeliveryTask } from './delivery-ledger.js';
 
 registerQueryTools(toolRegistry);
 
@@ -169,6 +171,31 @@ function isModelUnavailableError(error) {
     || code === 'ETIMEDOUT'
     || status === 429
     || status >= 500;
+}
+
+function normalizeProviderEndpoint(value) {
+  return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function hasDistinctReplyFallback(fallbackModel, options = {}) {
+  const normalizedFallbackModel = String(fallbackModel || '').trim();
+  if (!normalizedFallbackModel) return false;
+
+  const primaryModel = String(options.replyLlmChatModel || config.replyLlmChatModel || '').trim();
+  const primaryBaseUrl = normalizeProviderEndpoint(
+    options.replyLlmBaseUrl ?? config.replyLlmBaseUrl
+  );
+  const fallbackBaseUrl = normalizeProviderEndpoint(
+    options.replyLlmFallbackBaseUrl ?? config.replyLlmFallbackBaseUrl
+  );
+  const primaryApiKey = String(options.replyLlmApiKey ?? config.replyLlmApiKey ?? '');
+  const fallbackApiKey = String(
+    options.replyLlmFallbackApiKey ?? config.replyLlmFallbackApiKey ?? ''
+  );
+
+  return normalizedFallbackModel !== primaryModel
+    || fallbackBaseUrl !== primaryBaseUrl
+    || fallbackApiKey !== primaryApiKey;
 }
 
 function createInvalidModelReplyError(rawReplyText) {
@@ -797,8 +824,12 @@ async function loadMemeCandidatesForReply({ event, trace, memoryContext }, deps)
   }
 }
 
-function createWorkflowDeps(deps = {}) {
+function createWorkflowDeps(deps = {}, options = {}) {
   const runtimeServices = getRuntimeServices();
+  const deliveryLedgerEnabled = options.responseMode !== 'capture' && deps.disableDeliveryLedger !== true;
+  const runtimeDelivery = deliveryLedgerEnabled
+    ? runtimeServices.deliveryLedger?.execute?.bind(runtimeServices.deliveryLedger)
+    : null;
 
   return {
     analyzeTrigger: deps.analyzeTrigger || analyzeTrigger,
@@ -844,7 +875,27 @@ function createWorkflowDeps(deps = {}) {
     resolveVoiceRuntimeConfig: deps.resolveVoiceRuntimeConfig || resolveVoiceRuntimeConfig,
     toolRegistry: deps.toolRegistry || toolRegistry,
     enqueuePersistJob: deps.enqueuePersistJob || runtimeServices.queueManager?.enqueuePersist || null,
+    executeDelivery: deliveryLedgerEnabled ? (deps.executeDelivery || runtimeDelivery) : null,
   };
+}
+
+async function executeTrackedDelivery(deps, event, kind, task, explicitKey = '') {
+  const trackedDelivery = typeof deps.executeDelivery === 'function';
+  const result = await executeDeliveryTask({
+    executeDelivery: deps.executeDelivery,
+    event,
+    kind,
+    task,
+    explicitKey,
+  });
+  if (trackedDelivery) {
+    recordWorkflowMetric('yuno_delivery_attempts_total', 1, {
+      chat_type: event.chatType,
+      kind,
+      result: result?.deduplicated ? `deduplicated_${result.status || 'unknown'}` : 'sent',
+    });
+  }
+  return result;
 }
 
 function shouldUseLightweightContext(event, analysis = null) {
@@ -976,14 +1027,16 @@ export async function shouldRespondToEvent(event, options = {}) {
         reason: fastAnalysis.reason,
       });
 
-      finalizeTrace(trace, {
-        shouldRespond: fastAnalysis.shouldRespond,
-        reason: fastAnalysis.reason,
-        chatType: normalizedEvent.chatType,
-        messageId: normalizedEvent.messageId,
-        decisionReason: fastAnalysis.reason,
-        fastPath: true,
-      });
+      if (options.finalizeTrace !== false) {
+        finalizeTrace(trace, {
+          shouldRespond: fastAnalysis.shouldRespond,
+          reason: fastAnalysis.reason,
+          chatType: normalizedEvent.chatType,
+          messageId: normalizedEvent.messageId,
+          decisionReason: fastAnalysis.reason,
+          fastPath: true,
+        });
+      }
 
       return {
         event: normalizedEvent,
@@ -1018,14 +1071,16 @@ export async function shouldRespondToEvent(event, options = {}) {
       reason: analysis.reason,
     });
 
-    finalizeTrace(trace, {
-        shouldRespond: analysis.shouldRespond,
-        reason: analysis.reason,
-        chatType: normalizedEvent.chatType,
-        messageId: normalizedEvent.messageId,
-        decisionReason: analysis.reason,
-        fastPath: false,
-      });
+    if (options.finalizeTrace !== false) {
+      finalizeTrace(trace, {
+          shouldRespond: analysis.shouldRespond,
+          reason: analysis.reason,
+          chatType: normalizedEvent.chatType,
+          messageId: normalizedEvent.messageId,
+          decisionReason: analysis.reason,
+          fastPath: false,
+        });
+    }
 
     return { ...context, analysis, trace };
   } catch (error) {
@@ -1082,7 +1137,7 @@ function extractHttpStatusFromError(error) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-async function persistReplyState(context, payload, trace, deps) {
+async function persistReplyState(context, payload, trace, deps, options = {}) {
   const namedTasks = [];
 
   namedTasks.push({
@@ -1209,15 +1264,27 @@ async function persistReplyState(context, payload, trace, deps) {
     });
   }
 
+  const taskMode = options.taskMode || 'all';
+  const selectedTasks = namedTasks.filter((task) => {
+    const critical = task.name === 'append-conversation-messages';
+    if (taskMode === 'critical') return critical;
+    if (taskMode === 'optional') return !critical;
+    return true;
+  });
+
+  if (selectedTasks.length === 0) {
+    return;
+  }
+
   const results = await withTraceSpan(
     trace,
     'persist-state',
-    () => Promise.allSettled(namedTasks.map((item) => item.run())),
-    { taskCount: namedTasks.length }
+    () => Promise.allSettled(selectedTasks.map((item) => item.run())),
+    { taskCount: selectedTasks.length, taskMode }
   );
 
   const failures = results
-    .map((item, index) => ({ name: namedTasks[index]?.name || `task-${index}`, result: item }))
+    .map((item, index) => ({ name: selectedTasks[index]?.name || `task-${index}`, result: item }))
     .filter((item) => item.result.status === 'rejected');
   recordWorkflowMetric('yuno_persist_failures_total', failures.length, {
     chat_type: context.event.chatType,
@@ -1225,7 +1292,7 @@ async function persistReplyState(context, payload, trace, deps) {
 
   if (failures.length > 0) {
     const retryResults = await Promise.allSettled(
-      failures.map((item) => namedTasks.find((task) => task.name === item.name)?.run?.())
+      failures.map((item) => selectedTasks.find((task) => task.name === item.name)?.run?.())
     );
     const finalFailures = retryResults
       .map((result, index) => ({ result, task: failures[index]?.name }))
@@ -1402,7 +1469,7 @@ export async function processPersistJob(jobData, options = {}) {
       emotionResult: jobData.emotionResult,
       summary: jobData.summary,
       username: jobData.username,
-    }, trace, deps);
+    }, trace, deps, { taskMode: jobData.taskMode || 'all' });
 
     recordWorkflowMetric('yuno_trigger_context_reused_total', 1, {
       chat_type: event.chatType,
@@ -1427,7 +1494,7 @@ export async function processPersistJob(jobData, options = {}) {
 }
 
 export async function processIncomingMessage(event, precomputed = null, options = {}) {
-  const deps = createWorkflowDeps(options.deps);
+  const deps = createWorkflowDeps(options.deps, options);
   const normalizedEvent = normalizeLegacyMessageEvent(event);
   const trace = precomputed?.trace || options.trace || createTraceContext('incoming-message', {
     chatType: normalizedEvent.chatType,
@@ -1451,6 +1518,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
     const configuredReplyBudgetMs = options.replyTimeBudgetMs
       ?? (config.replyTimeBudgetMs > 0 ? config.replyTimeBudgetMs : config.replyHardTimeoutMs);
     const replyBudgetMs = Math.max(0, Number(configuredReplyBudgetMs || 0));
+    const configuredPrimaryTimeoutMs = options.replyPrimaryTimeoutMs
+      ?? config.replyPrimaryTimeoutMs;
+    const replyPrimaryTimeoutMs = Math.max(0, Number(configuredPrimaryTimeoutMs || 0));
     const replyBudgetStartedAt = Date.now();
     const getRemainingReplyBudgetMs = () => (
       replyBudgetMs <= 0
@@ -1503,17 +1573,27 @@ export async function processIncomingMessage(event, precomputed = null, options 
           });
           replyText = formatToolResultAsYuno(toolResult, policy);
           const outputs = normalizeFormatterOutputs(toolResult, replyText);
-          await withTraceSpan(trace, 'send-tool-response', () => deps.sendStructuredReply(target, outputs), {
-            toolName: task.toolName,
-          });
+          await withTraceSpan(
+            trace,
+            'send-tool-response',
+            () => executeTrackedDelivery(deps, normalizedEvent, 'primary', () => (
+              deps.sendStructuredReply(target, outputs)
+            ), options.deliveryKey),
+            { toolName: task.toolName }
+          );
           recordWorkflowMetric('yuno_tool_results_total', 1, {
             tool: task.toolName,
             chat_type: normalizedEvent.chatType,
           });
         } else {
-          await withTraceSpan(trace, 'send-tool-response', () => deps.sendReply(target, replyText), {
-            toolName: task.toolName,
-          });
+          await withTraceSpan(
+            trace,
+            'send-tool-response',
+            () => executeTrackedDelivery(deps, normalizedEvent, 'primary', () => (
+              deps.sendReply(target, replyText)
+            ), options.deliveryKey),
+            { toolName: task.toolName }
+          );
         }
 
         finalizeTrace(trace, {
@@ -1667,6 +1747,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
       role: item.role,
       content: item.content,
     }));
+    const primaryReplyModel = String(
+      options.replyLlmChatModel || config.replyLlmChatModel || ''
+    ).trim();
     const primaryReplyOptions = {
       traceContext: trace,
       promptVersion: 'reply-context/v7',
@@ -1677,6 +1760,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       maxTokens: replyLengthProfile.maxTokens,
       historyLimit: replyLengthProfile.historyLimit,
       temperature: replyLengthProfile.temperature,
+      ...(options.replyLlmChatModel ? { model: primaryReplyModel } : {}),
     };
     try {
       const remainingReplyBudgetMs = getRemainingReplyBudgetMs();
@@ -1688,8 +1772,16 @@ export async function processIncomingMessage(event, precomputed = null, options 
       }
 
       const modelTimeoutMs = remainingReplyBudgetMs === null
-        ? null
-        : Math.max(REPLY_BUDGET_MIN_GENERATION_MS, remainingReplyBudgetMs);
+        ? (replyPrimaryTimeoutMs > 0
+          ? Math.max(REPLY_BUDGET_MIN_GENERATION_MS, replyPrimaryTimeoutMs)
+          : null)
+        : Math.max(
+            REPLY_BUDGET_MIN_GENERATION_MS,
+            Math.min(
+              remainingReplyBudgetMs,
+              replyPrimaryTimeoutMs > 0 ? replyPrimaryTimeoutMs : remainingReplyBudgetMs
+            )
+          );
       const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => runReplyWithBudget(() => deps.chat(
         replyMessages,
         systemPrompt,
@@ -1698,7 +1790,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
           ...primaryReplyOptions,
           timeoutMs: modelTimeoutMs || undefined,
         }
-      ), modelTimeoutMs), {
+      ), remainingReplyBudgetMs), {
         historySize: workflowContext.conversationState.messages.length,
         route: task.category,
         advancedMode: workflowContext.isAdvanced,
@@ -1718,7 +1810,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       }
       visibleReplyText = replyDecision.text;
       replyProviderKind = 'reply';
-      replyProviderModel = config.replyLlmChatModel;
+      replyProviderModel = primaryReplyModel;
       const strippedReplyText = stripHiddenReasoning(rawReplyText);
       if (!replyDecision.structured && visibleReplyText !== String(strippedReplyText || '').trim()) {
         recordWorkflowMetric('yuno_hidden_reasoning_stripped_total', 1, {
@@ -1751,11 +1843,12 @@ export async function processIncomingMessage(event, precomputed = null, options 
         });
         visibleReplyText = buildReplyBudgetFallbackReply(normalizedEvent, task);
       } else if (isModelUnavailableError(error)) {
+        const primaryError = error;
         const fallbackModel = String(options.replyLlmFallbackChatModel
           || options.modelFallbackChatModel
           || config.replyLlmFallbackChatModel
           || '').trim();
-        if (fallbackModel && fallbackModel !== config.replyLlmChatModel) {
+        if (hasDistinctReplyFallback(fallbackModel, options)) {
           try {
             const fallbackRemainingBudgetMs = getRemainingReplyBudgetMs();
             if (
@@ -1767,7 +1860,10 @@ export async function processIncomingMessage(event, precomputed = null, options 
 
             const fallbackTimeoutMs = fallbackRemainingBudgetMs === null
               ? null
-              : Math.max(REPLY_BUDGET_MIN_GENERATION_MS, fallbackRemainingBudgetMs);
+              : Math.max(
+                  REPLY_BUDGET_MIN_GENERATION_MS,
+                  fallbackRemainingBudgetMs - 100
+                );
             const fallbackReply = await withTraceSpan(trace, 'generate-reply-fallback-model', () => runReplyWithBudget(
               () => deps.chat(
                 replyMessages,
@@ -1783,7 +1879,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
                   timeoutMs: fallbackTimeoutMs || undefined,
                 }
               ),
-              fallbackTimeoutMs
+              fallbackRemainingBudgetMs
             ), {
               historySize: workflowContext.conversationState.messages.length,
               route: task.category,
@@ -1807,7 +1903,24 @@ export async function processIncomingMessage(event, precomputed = null, options 
               });
               visibleReplyText = buildReplyBudgetFallbackReply(normalizedEvent, task);
             } else {
-              error = fallbackError;
+              recordWorkflowMetric('yuno_model_fallback_provider_failure_total', 1, {
+                chat_type: normalizedEvent.chatType,
+                route: task.category,
+                reason: String(fallbackError?.code || fallbackError?.status || 'unknown').toLowerCase(),
+              });
+              logger.warn('model', 'Fallback reply model failed; using primary failure fallback', {
+                traceId: trace.traceId,
+                chatType: normalizedEvent.chatType,
+                chatId: normalizedEvent.chatId,
+                userId: normalizedEvent.userId,
+                messageId: normalizedEvent.messageId,
+                route: task.category,
+                fallbackModel,
+                code: fallbackError?.code,
+                status: fallbackError?.status || fallbackError?.response?.status,
+                errorMessage: fallbackError?.message,
+              });
+              error = primaryError;
             }
           }
         }
@@ -2034,11 +2147,13 @@ export async function processIncomingMessage(event, precomputed = null, options 
         let sendError = null;
         try {
           const imageOutput = await deps.buildMemeImageOutput(memeDecision.asset);
-          const sent = await deps.sendStructuredReply(replyTarget, [
-            { type: 'text', text: replyText },
-            imageOutput,
-          ]);
-          if (!sent) {
+          const delivery = await executeTrackedDelivery(deps, normalizedEvent, 'primary', () => (
+            deps.sendStructuredReply(replyTarget, [
+              { type: 'text', text: replyText },
+              imageOutput,
+            ])
+          ), options.deliveryKey);
+          if (!delivery.sent && !delivery.deduplicated) {
             throw new Error('structured-meme-message-empty');
           }
           memeSent = true;
@@ -2052,11 +2167,13 @@ export async function processIncomingMessage(event, precomputed = null, options 
             if (!imageOutput?.image?.base64) {
               throw sendError || new Error('meme-base64-fallback-unavailable');
             }
-            const sent = await deps.sendStructuredReply(replyTarget, [
-              { type: 'text', text: replyText },
-              imageOutput,
-            ]);
-            if (!sent) {
+            const delivery = await executeTrackedDelivery(deps, normalizedEvent, 'primary', () => (
+              deps.sendStructuredReply(replyTarget, [
+                { type: 'text', text: replyText },
+                imageOutput,
+              ])
+            ), options.deliveryKey);
+            if (!delivery.sent && !delivery.deduplicated) {
               throw new Error('structured-meme-message-empty');
             }
             memeSent = true;
@@ -2100,7 +2217,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
         });
       }
 
-      await deps.sendReply(replyTarget, replyText);
+      await executeTrackedDelivery(deps, normalizedEvent, 'primary', () => (
+        deps.sendReply(replyTarget, replyText)
+      ), options.deliveryKey);
     });
 
     const persistJobData = buildPersistJobData(workflowContext, {
@@ -2113,20 +2232,48 @@ export async function processIncomingMessage(event, precomputed = null, options 
       username: normalizedEvent.userName,
     });
 
-    if (!options.persistInline && deps.enqueuePersistJob) {
+    const persistPayload = {
+      nextMessages,
+      rawText,
+      userTurn,
+      analysis,
+      emotionResult,
+      summary,
+      username: normalizedEvent.userName,
+    };
+    const persistJobId = `persist:${normalizedEvent.platform}:${normalizedEvent.chatId}:${normalizedEvent.messageId || Date.now()}`;
+
+    if (options.deferPostReplyEffects) {
+      await persistReplyState(workflowContext, persistPayload, trace, deps, {
+        taskMode: 'critical',
+      });
+      const optionalJobData = {
+        ...persistJobData,
+        taskMode: 'optional',
+      };
+      if (deps.enqueuePersistJob) {
+        await deps.enqueuePersistJob(optionalJobData, {
+          jobId: persistJobId,
+          waitForCompletion: false,
+        });
+      } else {
+        setImmediate(() => {
+          processPersistJob(optionalJobData, { deps }).catch((error) => {
+            deps.logger.warn('memory', 'Detached post-reply effects failed', {
+              message: error.message,
+              chatId: normalizedEvent.chatId,
+              userId: normalizedEvent.userId,
+              messageId: normalizedEvent.messageId,
+            });
+          });
+        });
+      }
+    } else if (!options.persistInline && deps.enqueuePersistJob) {
       await deps.enqueuePersistJob(persistJobData, {
-        jobId: `persist:${normalizedEvent.platform}:${normalizedEvent.chatId}:${normalizedEvent.messageId || Date.now()}`,
+        jobId: persistJobId,
       });
     } else {
-      await persistReplyState(workflowContext, {
-        nextMessages,
-        rawText,
-        userTurn,
-        analysis,
-        emotionResult,
-        summary,
-        username: normalizedEvent.userName,
-      }, trace, deps);
+      await persistReplyState(workflowContext, persistPayload, trace, deps);
     }
 
     const voiceReadiness = getRuntimeServices().readiness?.voice;
@@ -2168,11 +2315,14 @@ export async function processIncomingMessage(event, precomputed = null, options 
           traceContext: trace,
           operation: 'tts',
         }));
-        const sent = await withTraceSpan(trace, 'send-voice', () => deps.sendVoice({
-          platform: normalizedEvent.platform,
-          chatType: normalizedEvent.chatType,
-          chatId: normalizedEvent.chatId,
-        }, audio));
+        const voiceDelivery = await withTraceSpan(trace, 'send-voice', () => (
+          executeTrackedDelivery(deps, normalizedEvent, 'voice', () => deps.sendVoice({
+            platform: normalizedEvent.platform,
+            chatType: normalizedEvent.chatType,
+            chatId: normalizedEvent.chatId,
+          }, audio), options.voiceDeliveryKey)
+        ));
+        const sent = Boolean(voiceDelivery.sent || voiceDelivery.status === 'sent');
         recordWorkflowMetric('yuno_voice_replies_total', 1, {
           chat_type: normalizedEvent.chatType,
           route: task.category,
@@ -2240,13 +2390,14 @@ export async function processIncomingMessage(event, precomputed = null, options 
 }
 
 export async function processReplyJob(jobData, options = {}) {
-  return processIncomingMessage(jobData.event, {
+  const event = normalizeLegacyMessageEvent(jobData.event);
+  return withConversationExecution(event, () => processIncomingMessage(event, {
     analysis: jobData.analysis,
   }, {
     ...options,
     queueJobId: options.queueJobId,
     persistInline: false,
-  });
+  }));
 }
 
 export async function processGroupMessage(event, precomputed = null, options = {}) {

@@ -6,8 +6,10 @@ import path from 'node:path';
 import {
   normalizeVoiceTtsText,
   processIncomingMessage,
+  processReplyJob,
   resolveVoiceReplyDecision,
 } from './src/message-workflow.js';
+import { createDeliveryLedger } from './src/delivery-ledger.js';
 
 function createEvent(overrides = {}) {
   return {
@@ -750,4 +752,260 @@ test('processIncomingMessage does not throttle consecutive group replies from th
   assert.equal(sentReplies.length, 3);
   assert.equal(sentReplies.some((text) => text.includes('慢一点说')), false);
   assert.equal(persistedMessages.length, 3);
+
+test('processReplyJob forwards queue metadata and keeps text delivery separate from persistence', async () => {
+  const sentReplies = [];
+  const event = createEvent({ messageId: 'reply-job-1' });
+  const reply = await processReplyJob({
+    event,
+    analysis: createPrecomputedContext(event).analysis,
+  }, {
+    queueJobId: 'bull-job-1',
+    deps: createWorkflowDeps({
+      ensureRelation: async () => ({ _id: 'r1', affection: 40, activeScore: 10 }),
+      ensureUserState: async () => ({ _id: 'u1', currentEmotion: 'CALM', intensity: 0.3 }),
+      ensureUserProfileMemory: async () => ({ _id: 'p1', profileSummary: '' }),
+      getConversationState: async () => ({ rollingSummary: '', messages: [] }),
+      ensureGroupState: async () => null,
+      getRecentEvents: async () => [],
+      retrieveMemoryContext: async () => ({ eventMemories: [], memeMemories: [] }),
+      sendReply: async (_target, text) => sentReplies.push(text),
+      appendConversationMessages: async () => ({ rollingSummary: 'queued-summary', messages: [] }),
+      chat: async () => JSON.stringify({ text: 'queued reply', sendVoice: false, voiceText: '' }),
+    }),
+  });
+
+  assert.equal(reply, 'queued reply');
+  assert.deepEqual(sentReplies, ['queued reply']);
+});
+
+test('processIncomingMessage retries recoverable persistence failures without blocking reply', async () => {
+  let appendCalls = 0;
+  const sentReplies = [];
+  const event = createEvent({ rawText: 'persist retry' });
+  const reply = await processIncomingMessage(event, createPrecomputedContext(event), {
+    deps: createWorkflowDeps({
+      sendReply: async (_target, text) => sentReplies.push(text),
+      appendConversationMessages: async () => {
+        appendCalls += 1;
+        if (appendCalls === 1) throw new Error('temporary persistence error');
+        return { rollingSummary: 'recovered', messages: [] };
+      },
+      chat: async () => JSON.stringify({ text: 'reply after retry', sendVoice: false, voiceText: '' }),
+    }),
+  });
+
+  assert.equal(reply, 'reply after retry');
+  assert.deepEqual(sentReplies, ['reply after retry']);
+  assert.equal(appendCalls, 2);
+});
+
+test('processIncomingMessage keeps reply delivery when persistence remains failed', async () => {
+  let appendCalls = 0;
+  const sentReplies = [];
+  const event = createEvent({ rawText: 'persist failure' });
+  const reply = await processIncomingMessage(event, createPrecomputedContext(event), {
+    deps: createWorkflowDeps({
+      sendReply: async (_target, text) => sentReplies.push(text),
+      appendConversationMessages: async () => {
+        appendCalls += 1;
+        throw new Error('persistent failure');
+      },
+      chat: async () => JSON.stringify({ text: 'reply despite persistence', sendVoice: false, voiceText: '' }),
+    }),
+  });
+
+  assert.equal(reply, 'reply despite persistence');
+  assert.deepEqual(sentReplies, ['reply despite persistence']);
+  assert.equal(appendCalls, 2);
+});
+
+test('processIncomingMessage does not hide a text sender failure', async () => {
+  const event = createEvent({ rawText: 'send failure' });
+  await assert.rejects(
+    () => processIncomingMessage(event, createPrecomputedContext(event), {
+      deps: createWorkflowDeps({
+        sendReply: async () => { throw new Error('napcat unavailable'); },
+        chat: async () => JSON.stringify({ text: 'cannot deliver', sendVoice: false, voiceText: '' }),
+      }),
+    }),
+    /napcat unavailable/
+  );
+});
+
+test('processIncomingMessage continues with text when TTS fails', async () => {
+  const sentReplies = [];
+  const event = createEvent({ text: 'say it aloud', rawText: 'say it aloud' });
+  const reply = await processIncomingMessage(event, createPrecomputedContext(event), {
+    deps: createWorkflowDeps({
+      sendReply: async (_target, text) => sentReplies.push(text),
+      chat: async () => JSON.stringify({ text: 'text first', sendVoice: true, voiceText: 'voice second' }),
+      tts: async () => { throw new Error('tts unavailable'); },
+      resolveVoiceRuntimeConfig: () => ({
+        enableVoice: true,
+        voiceName: 'test-voice',
+        mode: 'model',
+        cooldownMs: 0,
+        maxChars: 90,
+        onUserRecord: false,
+      }),
+    }),
+  });
+
+  assert.equal(reply, 'text first');
+  assert.deepEqual(sentReplies, ['text first']);
+});
+});
+
+test('processIncomingMessage suppresses a precomputed deny without sending or persisting', async () => {
+  let sendCount = 0;
+  let planCount = 0;
+  const event = createEvent({ rawText: 'group chatter' });
+  const precomputed = createPrecomputedContext(event, {
+    analysis: { shouldRespond: false, reason: 'explicit-trigger-required', confidence: 0.1 },
+  });
+  const result = await processIncomingMessage(event, precomputed, {
+    deps: createWorkflowDeps({
+      sendReply: async () => { sendCount += 1; },
+      planIncomingTask: () => { planCount += 1; return {}; },
+    }),
+  });
+  assert.equal(result, null);
+  assert.equal(sendCount, 0);
+  assert.equal(planCount, 0);
+});
+
+test('processIncomingMessage sends structured tool results and preserves image outputs', async () => {
+  const sent = [];
+  const event = createEvent({ rawText: '/help' });
+  const result = await processIncomingMessage(event, createPrecomputedContext(event), {
+    deps: createWorkflowDeps({
+      planIncomingTask: () => ({ type: 'tool', category: 'command', toolName: 'get_help', toolArgs: {} }),
+      toolRegistry: {
+        execute: async () => ({
+          tool: 'meme_retrieve',
+          payload: { action: 'send-existing', image: { file: 'image.png' } },
+          summary: 'one image',
+        }),
+      },
+      sendStructuredReply: async (_target, outputs) => sent.push(outputs),
+    }),
+  });
+  assert.match(result, /合适/);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].some((item) => item.type === 'image'), true);
+});
+
+test('processIncomingMessage sends plain tool text without formatter output', async () => {
+  const sent = [];
+  const event = createEvent({ rawText: '/status' });
+  const result = await processIncomingMessage(event, createPrecomputedContext(event), {
+    deps: createWorkflowDeps({
+      planIncomingTask: () => ({ type: 'tool', category: 'command', toolName: 'plain_tool', toolArgs: {} }),
+      toolRegistry: { execute: async () => ({ text: 'plain tool result' }) },
+      sendReply: async (_target, text) => sent.push(text),
+    }),
+  });
+  assert.equal(result, 'plain tool result');
+  assert.deepEqual(sent, ['plain tool result']);
+});
+
+test('processIncomingMessage falls back from tool failure to model chat', async () => {
+  const sent = [];
+  const event = createEvent({ rawText: '/broken-tool' });
+  const result = await processIncomingMessage(event, createPrecomputedContext(event), {
+    deps: createWorkflowDeps({
+      planIncomingTask: () => ({ type: 'tool', category: 'command', toolName: 'broken_tool', toolArgs: {} }),
+      toolRegistry: { execute: async () => { throw new Error('tool failed'); } },
+      retrieveKnowledge: async () => ({ enabled: false, documents: [] }),
+      sendReply: async (_target, text) => sent.push(text),
+      chat: async () => JSON.stringify({ text: 'fallback chat', sendVoice: false, voiceText: '' }),
+    }),
+  });
+  assert.equal(result, 'fallback chat');
+  assert.deepEqual(sent, ['fallback chat']);
+});
+
+test('processIncomingMessage continues with no style examples when retrieval fails', async () => {
+  const sent = [];
+  const event = createEvent({ rawText: 'style retrieval error' });
+  const result = await processIncomingMessage(event, createPrecomputedContext(event), {
+    deps: createWorkflowDeps({
+      retrieveReplyStyleExamples: async () => { throw new Error('style store unavailable'); },
+      sendReply: async (_target, text) => sent.push(text),
+      chat: async () => JSON.stringify({ text: 'still replies', sendVoice: false, voiceText: '' }),
+    }),
+  });
+  assert.equal(result, 'still replies');
+  assert.deepEqual(sent, ['still replies']);
+});
+
+test('processIncomingMessage commits conversation history before deferring optional post-reply effects', async () => {
+  const queuedJobs = [];
+  let appendCalls = 0;
+  let relationUpdates = 0;
+  const event = createEvent({ rawText: 'defer persistence' });
+
+  const reply = await processIncomingMessage(event, createPrecomputedContext(event), {
+    deferPostReplyEffects: true,
+    deps: createWorkflowDeps({
+      sendReply: async () => true,
+      appendConversationMessages: async () => {
+        appendCalls += 1;
+        return { rollingSummary: '', messages: [] };
+      },
+      updateRelationProfile: async () => {
+        relationUpdates += 1;
+      },
+      enqueuePersistJob: async (jobData, jobOptions) => {
+        queuedJobs.push({ jobData, jobOptions });
+        return { id: jobOptions.jobId };
+      },
+      chat: async () => JSON.stringify({ text: 'fast capture reply', sendVoice: false, voiceText: '' }),
+    }),
+  });
+
+  assert.equal(reply, 'fast capture reply');
+  assert.equal(appendCalls, 1);
+  assert.equal(relationUpdates, 0);
+  assert.equal(queuedJobs.length, 1);
+  assert.equal(queuedJobs[0].jobData.taskMode, 'optional');
+  assert.equal(queuedJobs[0].jobOptions.waitForCompletion, false);
+});
+
+test('processIncomingMessage deduplicates the primary reply across job retries', async () => {
+  const records = [];
+  const sentReplies = [];
+  const ledger = createDeliveryLedger({
+    records,
+    now: () => new Date('2026-07-23T12:00:00Z'),
+  });
+  const event = createEvent({
+    messageId: 'delivery-main-1',
+    timestamp: Date.parse('2026-07-23T12:00:00Z'),
+    rawText: 'deduplicate this reply',
+    text: 'deduplicate this reply',
+  });
+  const deps = createWorkflowDeps({
+    executeDelivery: ledger.execute,
+    sendReply: async (_target, text) => sentReplies.push(text),
+    enqueuePersistJob: async (_data, options) => ({ id: options.jobId }),
+    retrieveReplyStyleExamples: async () => [],
+    chat: async () => JSON.stringify({
+      text: 'one visible reply',
+      sendVoice: false,
+      voiceText: '',
+    }),
+  });
+
+  const first = await processIncomingMessage(event, createPrecomputedContext(event), { deps });
+  const second = await processIncomingMessage(event, createPrecomputedContext(event), { deps });
+
+  assert.equal(first, 'one visible reply');
+  assert.equal(second, 'one visible reply');
+  assert.deepEqual(sentReplies, ['one visible reply']);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].deliveryKey, 'qq:private:10001:delivery-main-1:primary');
+  assert.equal(records[0].status, 'sent');
+  assert.equal(records[0].attempts, 1);
 });

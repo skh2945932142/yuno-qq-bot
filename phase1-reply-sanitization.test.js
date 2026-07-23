@@ -316,6 +316,44 @@ test('processIncomingMessage degrades gracefully when model times out', async ()
   assert.equal(sentReplies.length, 1);
 });
 
+test('distinct fallback provider is attempted for the same model and cannot suppress canned fallback', async () => {
+  const sentReplies = [];
+  const modelCalls = [];
+
+  const reply = await processIncomingMessage(createEvent(), createContext(), {
+    replyLlmChatModel: 'shared-model',
+    replyLlmBaseUrl: 'https://primary.example/v1',
+    replyLlmApiKey: 'primary-key',
+    replyLlmFallbackChatModel: 'shared-model',
+    replyLlmFallbackBaseUrl: 'https://fallback.example/v1',
+    replyLlmFallbackApiKey: 'fallback-key',
+    replyTimeBudgetMs: 2000,
+    replyPrimaryTimeoutMs: 500,
+    deps: createDeps(
+      async (_target, text) => {
+        sentReplies.push(text);
+      },
+      async (_messages, _systemPrompt, _userTurn, options = {}) => {
+        modelCalls.push(options.providerKind);
+        if (options.providerKind === 'reply') {
+          const error = new Error('primary timed out');
+          error.code = 'MODEL_TIMEOUT';
+          throw error;
+        }
+
+        const fallbackError = new Error('fallback credentials rejected');
+        fallbackError.status = 400;
+        throw fallbackError;
+      }
+    ),
+  });
+
+  assert.deepEqual(modelCalls, ['reply', 'reply-fallback']);
+  assert.match(reply, /刚才卡了一下/);
+  assert.equal(sentReplies.length, 1);
+  assert.equal(sentReplies[0], reply);
+});
+
 test('processIncomingMessage uses the configured fallback model after a 500', async () => {
   const sentReplies = [];
   const modelCalls = [];

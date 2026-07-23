@@ -1,5 +1,6 @@
 let runtimeServices = {
   queueManager: null,
+  deliveryLedger: null,
   readiness: {
     qdrant: { enabled: false, ready: false, reason: 'unknown' },
     voice: { enabled: false, ready: false, reason: 'unknown' },

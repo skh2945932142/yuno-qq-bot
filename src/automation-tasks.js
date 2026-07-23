@@ -251,6 +251,99 @@ export async function getDueAutomationTasks(now = new Date(), deps = {}) {
   return results.map(toTask);
 }
 
+export async function claimDueAutomationTasks(now = new Date(), claim = {}, deps = {}) {
+  const current = asDate(now);
+  const ownerId = String(claim.ownerId || `scheduler-${process.pid}`);
+  const lockMs = Math.max(1000, Number(claim.lockMs || 120_000));
+  const limit = Math.max(1, Number(claim.limit || config.automationTaskConcurrency || 3));
+  const lockedUntil = new Date(current.getTime() + lockMs);
+
+  if (Array.isArray(deps.tasks)) {
+    const candidates = deps.tasks
+      .filter((task) => task.enabled !== false
+        && task.nextRunAt
+        && asDate(task.nextRunAt).getTime() <= current.getTime()
+        && (!task.lockedUntil || asDate(task.lockedUntil).getTime() <= current.getTime()))
+      .sort((left, right) => asDate(left.nextRunAt).getTime() - asDate(right.nextRunAt).getTime())
+      .slice(0, limit);
+
+    return candidates.map((task) => {
+      task.lockedBy = ownerId;
+      task.lockedUntil = lockedUntil;
+      task.deliveryAttempts = Number(task.deliveryAttempts || 0) + 1;
+      task.lastDeliveryError = '';
+      task.updatedAt = current;
+      return { ...task };
+    });
+  }
+
+  const model = getTaskModel(deps);
+  const claimed = [];
+  for (let index = 0; index < limit; index += 1) {
+    const task = await model.findOneAndUpdate(
+      {
+        enabled: true,
+        nextRunAt: { $lte: current },
+        $or: [
+          { lockedUntil: null },
+          { lockedUntil: { $exists: false } },
+          { lockedUntil: { $lte: current } },
+        ],
+      },
+      {
+        $set: {
+          lockedBy: ownerId,
+          lockedUntil,
+          lastDeliveryError: '',
+        },
+        $inc: { deliveryAttempts: 1 },
+      },
+      {
+        sort: { nextRunAt: 1 },
+        returnDocument: 'after',
+      }
+    );
+    if (!task) break;
+    claimed.push(toTask(task));
+  }
+  return claimed;
+}
+
+export async function releaseAutomationTaskClaim(task, meta = {}, deps = {}) {
+  const now = asDate(meta.now);
+  const ownerId = String(meta.ownerId || task.lockedBy || '');
+  const nextRunAt = meta.nextRunAt === undefined ? task.nextRunAt : meta.nextRunAt;
+  const errorMessage = String(meta.error || '');
+
+  if (Array.isArray(deps.tasks)) {
+    const mutable = deps.tasks.find((item) => item.taskId === task.taskId
+      && (!ownerId || String(item.lockedBy || '') === ownerId));
+    if (!mutable) return null;
+    mutable.lockedBy = '';
+    mutable.lockedUntil = null;
+    mutable.lastDeliveryError = errorMessage;
+    mutable.nextRunAt = nextRunAt;
+    mutable.updatedAt = now;
+    return { ...mutable };
+  }
+
+  const model = getTaskModel(deps);
+  const query = { taskId: task.taskId };
+  if (ownerId) query.lockedBy = ownerId;
+  const updated = await model.findOneAndUpdate(
+    query,
+    {
+      $set: {
+        lockedBy: '',
+        lockedUntil: null,
+        lastDeliveryError: errorMessage,
+        nextRunAt,
+      },
+    },
+    { returnDocument: 'after' }
+  );
+  return updated ? toTask(updated) : null;
+}
 export async function markAutomationTaskDelivered(task, meta = {}, deps = {}) {
   const now = asDate(meta.now);
   const deliveryKey = String(meta.deliveryKey || `${task.taskId}:${now.toISOString()}`);
@@ -260,25 +353,34 @@ export async function markAutomationTaskDelivered(task, meta = {}, deps = {}) {
   const enabled = task.taskType === 'subscription';
 
   if (Array.isArray(deps.tasks)) {
-    const mutable = deps.tasks.find((item) => item.taskId === task.taskId);
+    const mutable = deps.tasks.find((item) => item.taskId === task.taskId
+      && (!meta.ownerId || String(item.lockedBy || '') === String(meta.ownerId)));
     if (!mutable) return null;
     mutable.lastTriggeredAt = now;
     mutable.lastDeliveredKey = deliveryKey;
     mutable.nextRunAt = nextRunAt;
     mutable.enabled = enabled;
+    mutable.lockedBy = '';
+    mutable.lockedUntil = null;
+    mutable.lastDeliveryError = '';
     mutable.updatedAt = now;
     return { ...mutable };
   }
 
   const model = getTaskModel(deps);
+  const query = { taskId: task.taskId };
+  if (meta.ownerId) query.lockedBy = String(meta.ownerId);
   const updated = await model.findOneAndUpdate(
-    { taskId: task.taskId },
+    query,
     {
       $set: {
         lastTriggeredAt: now,
         lastDeliveredKey: deliveryKey,
         nextRunAt,
         enabled,
+        lockedBy: '',
+        lockedUntil: null,
+        lastDeliveryError: '',
       },
     },
     { returnDocument: 'after' }

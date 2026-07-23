@@ -79,9 +79,14 @@ export function normalizeImageMessage(image) {
   return null;
 }
 
-export async function sendReply(target, text) {
+export async function sendReplyWithDeps(target, text, deps = {}) {
+  const postNapcatFn = deps.postNapcat || postNapcat;
   const request = buildNapcatTargetPayload(target, [{ type: 'text', data: { text } }]);
-  await invokePostNapcat(postNapcat, request.action, request.payload, `send ${request.target.chatType} text`);
+  await invokePostNapcat(postNapcatFn, request.action, request.payload, `send ${request.target.chatType} text`);
+}
+
+export async function sendReply(target, text) {
+  return sendReplyWithDeps(target, text);
 }
 
 export async function sendStructuredReplyWithDeps(target, outputs = [], deps = {}) {

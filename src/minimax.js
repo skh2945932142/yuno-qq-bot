@@ -135,14 +135,24 @@ function createTimeoutError(operation, timeoutMs) {
 
 async function withTimeout(task, timeoutMs, operation) {
   const safeTimeout = Math.max(1000, Number(timeoutMs || config.requestTimeoutMs || 15000));
+  const controller = new AbortController();
+  const timeoutError = createTimeoutError(operation, safeTimeout);
+  let timedOut = false;
   let timer = null;
   try {
     return await Promise.race([
-      task(),
+      task(controller.signal),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(createTimeoutError(operation, safeTimeout)), safeTimeout);
+        timer = setTimeout(() => {
+          timedOut = true;
+          reject(timeoutError);
+          controller.abort(timeoutError);
+        }, safeTimeout);
       }),
     ]);
+  } catch (error) {
+    if (timedOut) throw timeoutError;
+    throw error;
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -250,7 +260,7 @@ async function createChatCompletion(messages, options = {}) {
   try {
     const response = await withRetry(
       () => withTimeout(
-        () => runtime.client.chat.completions.create(payload),
+        (signal) => runtime.client.chat.completions.create(payload, { signal }),
         options.timeoutMs || config.requestTimeoutMs,
         operation
       ),
@@ -317,6 +327,7 @@ export async function createEmbeddings(input, options = {}) {
   const startedAt = Date.now();
   const normalizedInput = Array.isArray(input) ? input : [input];
   const operation = options.operation || 'embedding';
+  const embeddingRuntimeClient = options.client || embeddingClient;
   const model = options.model || config.embeddingModel;
   const breakerKey = buildModelCircuitKey('embedding', model);
 
@@ -327,10 +338,10 @@ export async function createEmbeddings(input, options = {}) {
   try {
     const response = await withRetry(
       () => withTimeout(
-        () => embeddingClient.embeddings.create({
+        (signal) => embeddingRuntimeClient.embeddings.create({
           model,
           input: normalizedInput,
-        }),
+        }, { signal }),
         options.timeoutMs || config.requestTimeoutMs,
         operation
       ),
@@ -443,6 +454,7 @@ export async function analyzeMessage(text, context = {}, options = {}) {
       temperature: 0.2,
       maxTokens: 180,
       traceContext: options.traceContext,
+      client: options.client,
       promptVersion: options.promptVersion || 'message-analysis/v1',
       operation: options.operation || 'analysis',
     });
@@ -531,6 +543,7 @@ export async function classifyReplyTrigger(text, context = {}, options = {}) {
       temperature: 0.1,
       maxTokens: options.maxTokens ?? 180,
       traceContext: options.traceContext,
+      client: options.client,
       promptVersion: options.promptVersion || 'trigger-classifier/v1',
       operation: options.operation || 'trigger-classifier',
     });

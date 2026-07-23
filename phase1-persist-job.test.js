@@ -311,3 +311,50 @@ test('processPersistJob also skips memory extraction 400 when status only appear
   assert.equal(warnings[0].message, 'User memory extraction skipped after provider error');
   assert.equal(warnings[0].fields.status, 400);
 });
+
+test('processPersistJob optional mode skips critical conversation history writes', async () => {
+  let appendCalls = 0;
+  let relationUpdates = 0;
+  const result = await processPersistJob({
+    taskMode: 'optional',
+    event: {
+      platform: 'qq', chatType: 'private', chatId: 'user-1', userId: 'user-1',
+      userName: 'Tester', text: 'hello', rawText: 'hello', messageId: 'msg-optional',
+    },
+    analysis: { reason: 'private-default-reply', sentiment: 'neutral', intent: 'chat', ruleSignals: [] },
+    emotionResult: { emotion: 'CALM', intensity: 0.2 },
+    summary: 'Tester: hello',
+    username: 'Tester',
+    rawText: 'hello',
+    userTurn: 'hello',
+    nextMessages: [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'hi' },
+    ],
+    contextSnapshot: {
+      session: { platform: 'qq', chatType: 'private', chatId: 'user-1', userId: 'user-1' },
+      isAdvanced: false,
+      relation: {
+        _id: 'rel-1', platform: 'qq', chatType: 'private', chatId: 'user-1',
+        groupId: 'user-1', userId: 'user-1', affection: 40, preferences: [], favoriteTopics: [], tags: [],
+      },
+      userState: null,
+      userProfile: null,
+      memoryContext: { eventMemories: [], memeMemories: [] },
+    },
+  }, {
+    deps: {
+      appendConversationMessages: async () => { appendCalls += 1; },
+      updateRelationProfile: async () => { relationUpdates += 1; },
+      persistUserMemoryEvents: async () => [],
+      indexUserMemoryEvents: async () => null,
+      updateUserState: async () => null,
+      updateUserProfileMemory: async () => null,
+      updateGroupStateFromAnalysis: async () => null,
+    },
+  });
+
+  assert.equal(result, true);
+  assert.equal(appendCalls, 0);
+  assert.equal(relationUpdates, 1);
+});

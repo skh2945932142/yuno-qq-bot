@@ -1,7 +1,12 @@
 import express from 'express';
 import axios from 'axios';
 import { timingSafeEqual } from 'node:crypto';
-import { config, describeHttpBaseUrlProblem, validateRuntimeConfig } from './config.js';
+import {
+  config,
+  describeHttpBaseUrlProblem,
+  getRuntimeRoleCapabilities,
+  validateRuntimeConfig,
+} from './config.js';
 import { connectDB, isDbReady } from './db.js';
 import { logger } from './logger.js';
 import { startScheduler } from './scheduler.js';
@@ -16,9 +21,18 @@ import { recordInboundGroupObservation } from './group-ops.js';
 import { evaluateGroupAutomation } from './group-automation.js';
 import { isNonTargetPokeEvent } from './message-analysis.js';
 import { resolveFfmpegPath } from './services/audio.js';
+import { handleInboundEvent } from './inbound-event-service.js';
+import { buildDeliveryKey, createDeliveryLedger } from './delivery-ledger.js';
 
 function buildReplyJobId(event) {
   return `reply:${event.platform}:${event.chatId}:${event.messageId || `${event.userId}:${event.timestamp}`}`;
+}
+
+function buildAutomationDeliveryKey(event, toolResult, index = 0) {
+  return buildDeliveryKey(
+    event,
+    `automation-${index}-${toolResult?.tool || 'unknown'}`
+  );
 }
 
 function constantTimeEquals(actual, expected) {
@@ -54,7 +68,7 @@ function hasSharedSecret(req, expectedSecret, headerName, options = {}) {
   return [directSecret, bearerToken].some((candidate) => constantTimeEquals(candidate, expectedSecret));
 }
 
-async function deliverAutomationToolResult(event, toolResult) {
+async function deliverAutomationToolResult(event, toolResult, options = {}) {
   return runYunoConversation({
     platform: event.platform,
     scene: event.chatType,
@@ -75,6 +89,20 @@ async function deliverAutomationToolResult(event, toolResult) {
   }, {
     toolResult,
     responseMode: 'send',
+    deliveryKey: options.deliveryKey,
+  });
+}
+
+export async function processReplyQueueJob(payload, job = {}, deps = {}) {
+  const deliverAutomation = deps.deliverAutomationToolResult || deliverAutomationToolResult;
+  const processReply = deps.processReplyJob || processReplyJob;
+  if (payload?.kind === 'automation-tool-result') {
+    return deliverAutomation(payload.event, payload.toolResult, {
+      deliveryKey: payload.deliveryKey,
+    });
+  }
+  return processReply(payload, {
+    queueJobId: job.id,
   });
 }
 
@@ -94,7 +122,28 @@ function dispatchAutomationToolResults(event, toolResults = []) {
     return;
   }
 
-  Promise.allSettled(toolResults.map((toolResult) => deliverAutomationToolResult(event, toolResult)))
+  const runtimeServices = getRuntimeServices();
+  const queueManager = runtimeServices.queueManager;
+  const capabilities = getRuntimeRoleCapabilities(config.yunoRole) || getRuntimeRoleCapabilities('all');
+  const deliveries = toolResults.map((toolResult, index) => {
+    const deliveryKey = buildAutomationDeliveryKey(event, toolResult, index);
+    if (queueManager?.enqueueReply) {
+      return queueManager.enqueueReply({
+        kind: 'automation-tool-result',
+        event,
+        toolResult,
+        deliveryKey,
+      }, {
+        jobId: `automation:${deliveryKey}`,
+      });
+    }
+    if (capabilities.directDelivery) {
+      return deliverAutomationToolResult(event, toolResult, { deliveryKey });
+    }
+    return Promise.reject(new Error('Automation delivery requires a reply queue'));
+  });
+
+  Promise.allSettled(deliveries)
     .then((results) => {
       results.forEach((result, index) => {
         const tool = toolResults[index]?.tool || 'unknown';
@@ -228,10 +277,14 @@ async function probeVoiceReadiness() {
   };
 }
 
-async function probeRuntimeReadiness() {
+async function probeRuntimeReadiness(capabilities = getRuntimeRoleCapabilities('all')) {
   const [qdrant, voice] = await Promise.all([
-    probeQdrantReadiness(),
-    probeVoiceReadiness(),
+    capabilities.model
+      ? probeQdrantReadiness()
+      : Promise.resolve({ enabled: false, ready: true, reason: 'role-disabled' }),
+    capabilities.replyWorker
+      ? probeVoiceReadiness()
+      : Promise.resolve({ enabled: false, ready: true, reason: 'role-disabled' }),
   ]);
 
   return { qdrant, voice };
@@ -239,10 +292,30 @@ async function probeRuntimeReadiness() {
 
 export function createApp(options = {}) {
   const runtimeConfig = options.config || config;
+  const roleCapabilities = getRuntimeRoleCapabilities(runtimeConfig.yunoRole || 'all')
+    || getRuntimeRoleCapabilities('all');
+  const runtimeDeps = {
+    handleInboundEvent,
+    validateOnebotMessageEvent,
+    shouldRespondToEvent,
+    runYunoConversation,
+    isNonTargetPokeEvent,
+    observeGroupEventInBackground,
+    evaluateGroupAutomation,
+    dispatchAutomationToolResults,
+    getRuntimeServices,
+    isDbReady,
+    getTelemetryStatus,
+    ...options.deps,
+  };
   const app = express();
   app.use(express.json({ limit: runtimeConfig.webhookBodyLimit || '128kb' }));
 
   app.post('/onebot', async (req, res) => {
+    if (!roleCapabilities.onebotIngress) {
+      res.status(404).send('not available for this role');
+      return;
+    }
     if (!hasSharedSecret(req, runtimeConfig.onebotWebhookSecret, 'x-yuno-webhook-secret', {
       requireSecret: isProductionRuntime(runtimeConfig),
     })) {
@@ -252,7 +325,7 @@ export function createApp(options = {}) {
 
     res.send();
 
-    const validation = validateOnebotMessageEvent(req.body);
+    const validation = runtimeDeps.validateOnebotMessageEvent(req.body);
     if (!validation.ok) {
       if (validation.reason === 'system_payload') {
         return;
@@ -274,74 +347,23 @@ export function createApp(options = {}) {
     });
 
     try {
-      let automationPromise = null;
-      if (event.chatType === 'group' && isNonTargetPokeEvent(event)) {
-        recordWorkflowMetric('yuno_poke_ignored_total', 1, {
-          chat_type: event.chatType,
-          reason: 'non-target-poke',
-        });
-        recordWorkflowMetric('yuno_suppressed_messages_total', 1, {
-          chat_type: event.chatType,
-          reason: 'non-target-poke',
-        });
-        logger.info('webhook', 'Ignored non-target poke event', {
-          chatId: event.chatId,
-          userId: event.userId,
-          messageId: event.messageId,
-          decisionReason: 'non-target-poke',
-        });
-        return;
-      }
-
-      if (event.chatType === 'group') {
-        observeGroupEventInBackground(event);
-        automationPromise = evaluateGroupAutomation(event).catch((error) => {
-          logger.warn('automation', 'Failed to evaluate group automation', {
-            message: error.message,
-            chatId: event.chatId,
-            userId: event.userId,
-            messageId: event.messageId,
-          });
-          return null;
-        });
-
-        if (event.source?.noticeType === 'group_increase') {
-          const automationDecision = await automationPromise;
-          dispatchAutomationToolResults(event, automationDecision?.toolResults || []);
-          return;
-        }
-      }
-
-      const decisionPromise = shouldRespondToEvent(event);
-      const [decision, automationDecision] = await Promise.all([
-        decisionPromise,
-        automationPromise || Promise.resolve(null),
-      ]);
-
-      dispatchAutomationToolResults(event, automationDecision?.toolResults || []);
-
-      if (automationDecision?.suppressNormalReply) {
-        recordWorkflowMetric('yuno_suppressed_messages_total', 1, {
-          chat_type: event.chatType,
-          reason: 'automation-suppressed',
-        });
-        return;
-      }
-
-      if (!decision.analysis.shouldRespond) {
-        recordWorkflowMetric('yuno_suppressed_messages_total', 1, {
-          chat_type: event.chatType,
-          reason: decision.analysis.reason,
-        });
-        return;
-      }
-
-      const runtimeServices = getRuntimeServices();
-      await runtimeServices.queueManager.enqueueReply({
-        event,
-        analysis: decision.analysis,
-      }, {
-        jobId: buildReplyJobId(event),
+      await runtimeDeps.handleInboundEvent(event, {
+        deps: {
+          isNonTargetPokeEvent: runtimeDeps.isNonTargetPokeEvent,
+          observeGroupEvent: runtimeDeps.observeGroupEventInBackground,
+          evaluateGroupAutomation: runtimeDeps.evaluateGroupAutomation,
+          dispatchAutomationToolResults: runtimeDeps.dispatchAutomationToolResults,
+          shouldRespondToEvent: runtimeDeps.shouldRespondToEvent,
+          onReplyApproved: async ({ event: approvedEvent, decision }) => {
+            const runtimeServices = runtimeDeps.getRuntimeServices();
+            return runtimeServices.queueManager.enqueueReply({
+              event: approvedEvent,
+              analysis: decision.analysis,
+            }, {
+              jobId: buildReplyJobId(approvedEvent),
+            });
+          },
+        },
       });
     } catch (error) {
       logger.error('webhook', 'Failed to process incoming message', {
@@ -354,6 +376,10 @@ export function createApp(options = {}) {
   });
 
   app.post('/api/yuno/conversation', async (req, res) => {
+    if (!roleCapabilities.conversationApi) {
+      res.status(404).json({ error: 'not_available_for_role' });
+      return;
+    }
     if (!hasSharedSecret(req, runtimeConfig.onebotWebhookSecret, 'x-yuno-api-secret', {
       requireSecret: isProductionRuntime(runtimeConfig),
     })) {
@@ -361,9 +387,15 @@ export function createApp(options = {}) {
       return;
     }
 
+    const responseMode = req.body.responseMode || 'capture';
+    if (responseMode === 'send' && !roleCapabilities.directDelivery) {
+      res.status(400).json({ error: 'response_mode_not_allowed', allowed: ['capture'] });
+      return;
+    }
+
     try {
-      const result = await runYunoConversation(req.body.input, {
-        responseMode: req.body.responseMode || 'capture',
+      const result = await runtimeDeps.runYunoConversation(req.body.input, {
+        responseMode,
         pluginRoute: req.body.pluginRoute,
         toolResult: req.body.toolResult,
       });
@@ -386,17 +418,24 @@ export function createApp(options = {}) {
   });
 
   app.get('/ready', (_req, res) => {
-    const runtimeServices = getRuntimeServices();
-    const ready = isDbReady() && Boolean(runtimeServices.queueManager?.getStatus().ready);
+    const runtimeServices = runtimeDeps.getRuntimeServices();
+    const dbReady = !roleCapabilities.database || runtimeDeps.isDbReady();
+    const queueStatus = runtimeServices.queueManager?.getStatus() || null;
+    const queueRequired = roleCapabilities.queueProducer
+      || roleCapabilities.replyWorker
+      || roleCapabilities.persistWorker;
+    const queueReady = !queueRequired || Boolean(queueStatus?.ready);
+    const ready = dbReady && queueReady;
     const readiness = runtimeServices.readiness || {};
     const degraded = Object.values(readiness)
       .some((item) => item && item.enabled && !item.ready);
     res.status(ready ? 200 : 503).json({
       ready,
       degraded,
-      db: isDbReady(),
-      queue: runtimeServices.queueManager?.getStatus() || null,
-      telemetry: getTelemetryStatus(),
+      role: roleCapabilities.role,
+      db: dbReady,
+      queue: queueStatus,
+      telemetry: runtimeDeps.getTelemetryStatus(),
       readiness,
     });
   });
@@ -420,19 +459,30 @@ export function createApp(options = {}) {
 }
 
 export async function startApplication() {
-  validateRuntimeConfig();
+  const capabilities = validateRuntimeConfig(config);
   await connectDB();
+  const deliveryLedger = capabilities.directDelivery ? createDeliveryLedger() : null;
   await initializeTelemetry(config);
 
-  const queueManager = await createQueueManager(config, {
-    replyJob: async (payload, job) => processReplyJob(payload, {
-      queueJobId: job.id,
-    }),
-    persistJob: async (payload, job) => processPersistJob(payload, {
-      queueJobId: job.id,
-    }),
-  });
-  const readiness = await probeRuntimeReadiness();
+  const needsQueue = capabilities.queueProducer
+    || capabilities.replyWorker
+    || capabilities.persistWorker;
+  const queueManager = needsQueue
+    ? await createQueueManager(config, {
+        replyJob: processReplyQueueJob,
+        persistJob: async (payload, job) => processPersistJob(payload, {
+          queueJobId: job.id,
+        }),
+        workers: {
+          reply: capabilities.replyWorker,
+          persist: capabilities.persistWorker,
+        },
+        deferWorkers: true,
+      }, {
+        allowInlineFallback: !capabilities.requiresDistributedQueue,
+      })
+    : null;
+  const readiness = await probeRuntimeReadiness(capabilities);
   if (readiness.qdrant.enabled && !readiness.qdrant.ready) {
     logger.warn('bootstrap', 'Qdrant is degraded; retrieval will gracefully fall back', {
       reason: readiness.qdrant.reason,
@@ -446,16 +496,39 @@ export async function startApplication() {
     });
   }
 
-  setRuntimeServices({ queueManager, readiness });
-  startScheduler();
+  setRuntimeServices({ queueManager, readiness, deliveryLedger });
+  await queueManager?.startWorkers();
+  if (capabilities.scheduler) {
+    startScheduler();
+  }
 
-  const app = createApp();
-  app.listen(config.port, () => {
-    logger.info('webhook', 'Yuno QQ Bot started', {
-      port: config.port,
-      queueMode: queueManager.getStatus().mode,
-      metricsPath: config.metricsPath,
+  let server = null;
+  if (capabilities.http) {
+    const app = createApp();
+    server = app.listen(config.port, () => {
+      logger.info('webhook', 'Yuno HTTP runtime started', {
+        role: capabilities.role,
+        port: config.port,
+        queueMode: queueManager?.getStatus().mode || 'disabled',
+        metricsPath: config.metricsPath,
+        readiness,
+      });
+    });
+  } else {
+    logger.info('bootstrap', 'Yuno worker runtime started', {
+      role: capabilities.role,
+      queueMode: queueManager?.getStatus().mode || 'disabled',
+      scheduler: capabilities.scheduler,
       readiness,
     });
-  });
+  }
+
+  return {
+    role: capabilities.role,
+    capabilities,
+    queueManager,
+    deliveryLedger,
+    readiness,
+    server,
+  };
 }

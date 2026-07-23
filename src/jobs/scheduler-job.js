@@ -1,4 +1,4 @@
-﻿import cron from 'node-cron';
+import cron from 'node-cron';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { chat } from '../minimax.js';
@@ -14,10 +14,17 @@ import {
 import { buildScheduledPrompt } from '../prompt-builder.js';
 import { createTraceContext, failTrace, finalizeTrace, withTraceSpan } from '../runtime-tracing.js';
 import { buildDailyDigest } from '../group-ops.js';
-import { getDueAutomationTasks, markAutomationTaskDelivered } from '../automation-tasks.js';
+import {
+  claimDueAutomationTasks,
+  markAutomationTaskDelivered,
+  releaseAutomationTaskClaim,
+} from '../automation-tasks.js';
 import { isWithinQuietHours, listGroupRules } from '../group-automation.js';
 import { runYunoConversation } from '../yuno-core.js';
 import { recordWorkflowMetric } from '../metrics.js';
+
+const SCHEDULER_INSTANCE_ID = process.env.YUNO_SCHEDULER_INSTANCE_ID
+  || process.env.HOSTNAME || `scheduler-${process.pid}`;
 
 function buildSchedulerToolResult(task) {
   return task.taskType === 'reminder'
@@ -51,16 +58,27 @@ function buildSchedulerToolResult(task) {
       };
 }
 
-async function runSingleAutomationTask(task, now) {
+export async function runSingleAutomationTask(task, now, options = {}) {
+  const listRules = options.listGroupRules || listGroupRules;
+  const withinQuietHours = options.isWithinQuietHours || isWithinQuietHours;
+  const releaseClaim = options.releaseAutomationTaskClaim || releaseAutomationTaskClaim;
+  const deliver = options.deliverSchedulerToolResult || deliverSchedulerToolResult;
+  const markDelivered = options.markAutomationTaskDelivered || markAutomationTaskDelivered;
   const groupId = task.groupId || (task.chatType === 'group' ? task.chatId : '');
   if (groupId) {
-    const rules = await listGroupRules(groupId, { enabled: true });
-    if (isWithinQuietHours(groupId, now, rules)) {
+    const rules = await listRules(groupId, { enabled: true });
+    if (withinQuietHours(groupId, now, rules)) {
       recordWorkflowMetric('yuno_automation_tasks_deferred_total', 1, {
         task_type: task.taskType,
         reason: 'quiet-hours',
       });
-      return { taskId: task.taskId, skipped: true };
+      await releaseClaim(task, {
+        ownerId: options.ownerId,
+        now,
+        nextRunAt: new Date(now.getTime() + 5 * 60 * 1000),
+        error: 'quiet-hours',
+      });
+      return { taskId: task.taskId, skipped: true, reason: 'quiet-hours' };
     }
   }
 
@@ -71,17 +89,29 @@ async function runSingleAutomationTask(task, now) {
   }, 'histogram');
 
   const toolResult = buildSchedulerToolResult(task);
-  await deliverSchedulerToolResult(task, toolResult);
-  await markAutomationTaskDelivered(task, {
+  const deliveryKey = `scheduler:${task.taskId}:${new Date(task.nextRunAt || now).toISOString()}`;
+  const deliveryResult = await deliver(task, toolResult, { deliveryKey });
+  if (deliveryResult?.delivery?.status === 'sending') {
+    const error = new Error(`Delivery is already in progress: ${deliveryKey}`);
+    error.code = 'DELIVERY_IN_PROGRESS';
+    throw error;
+  }
+  await markDelivered(task, {
     now,
-    deliveryKey: `scheduler:${task.taskId}:${new Date(now).toISOString()}`,
+    ownerId: options.ownerId,
+    deliveryKey,
   });
 
   recordWorkflowMetric('yuno_automation_tasks_triggered_total', 1, {
     task_type: task.taskType,
     chat_type: task.chatType,
   });
-  return { taskId: task.taskId, skipped: false };
+  return {
+    taskId: task.taskId,
+    skipped: false,
+    deliveryKey,
+    deduplicated: Boolean(deliveryResult?.delivery?.deduplicated),
+  };
 }
 
 async function runWithConcurrency(tasks, concurrency, worker) {
@@ -165,8 +195,8 @@ export async function runScheduledInteraction(groupId) {
   }
 }
 
-async function deliverSchedulerToolResult(taskLike, toolResult) {
-  await runYunoConversation({
+async function deliverSchedulerToolResult(taskLike, toolResult, options = {}) {
+  return runYunoConversation({
     platform: taskLike.platform || 'qq',
     scene: taskLike.chatType || 'group',
     userId: taskLike.userId || config.adminQq || 'system',
@@ -182,6 +212,7 @@ async function deliverSchedulerToolResult(taskLike, toolResult) {
   }, {
     toolResult,
     responseMode: 'send',
+    deliveryKey: options.deliveryKey,
   });
 }
 
@@ -197,7 +228,8 @@ export async function runDailyGroupDigest(groupId, now = new Date()) {
     safetyFlags: [],
   };
 
-  await deliverSchedulerToolResult({
+  const deliveryKey = `scheduler:digest:${groupId}:${now.toISOString().slice(0, 10)}`;
+  const deliveryResult = await deliverSchedulerToolResult({
     platform: 'qq',
     chatType: 'group',
     chatId: String(groupId),
@@ -205,7 +237,12 @@ export async function runDailyGroupDigest(groupId, now = new Date()) {
     userId: config.adminQq || 'scheduler',
     taskId: `digest:${groupId}`,
     summary: digest.summary,
-  }, toolResult);
+  }, toolResult, { deliveryKey });
+  if (deliveryResult?.delivery?.status === 'sending') {
+    const error = new Error(`Delivery is already in progress: ${deliveryKey}`);
+    error.code = 'DELIVERY_IN_PROGRESS';
+    throw error;
+  }
 
   recordWorkflowMetric('yuno_group_reports_generated_total', 1, {
     group_id: String(groupId),
@@ -213,14 +250,30 @@ export async function runDailyGroupDigest(groupId, now = new Date()) {
   });
 }
 
-export async function runDueAutomationTasks(now = new Date()) {
-  const dueTasks = await getDueAutomationTasks(now);
-  const concurrency = Math.max(1, Number(config.automationTaskConcurrency || 3));
-  const results = await runWithConcurrency(dueTasks, concurrency, (task) => runSingleAutomationTask(task, now));
+export async function runDueAutomationTasks(now = new Date(), options = {}) {
+  const concurrency = Math.max(1, Number(options.concurrency || config.automationTaskConcurrency || 3));
+  const ownerId = options.ownerId || SCHEDULER_INSTANCE_ID;
+  const claimTasks = options.claimDueAutomationTasks || claimDueAutomationTasks;
+  const releaseClaim = options.releaseAutomationTaskClaim || releaseAutomationTaskClaim;
+  const dueTasks = await claimTasks(now, {
+    ownerId,
+    lockMs: Math.max(30_000, Number(config.schedulerTaskLockMs || 120_000)),
+    limit: concurrency * 2,
+  });
+  const results = await runWithConcurrency(dueTasks, concurrency, (task) => runSingleAutomationTask(task, now, {
+    ...options,
+    ownerId,
+  }));
 
   for (const [index, result] of results.entries()) {
     if (!result?.error) continue;
     const task = dueTasks[index];
+    await releaseClaim(task, {
+      ownerId,
+      now,
+      nextRunAt: task.nextRunAt,
+      error: result.error.message,
+    }).catch(() => {});
     logger.error('scheduler', 'Automation task execution failed', {
       taskId: task?.taskId,
       taskType: task?.taskType,
@@ -228,8 +281,8 @@ export async function runDueAutomationTasks(now = new Date()) {
       message: result.error.message,
     });
   }
+  return results;
 }
-
 export function startScheduler() {
   const hasTargetGroup = Boolean(config.targetGroupId);
 

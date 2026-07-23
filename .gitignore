@@ -3,3 +3,7 @@ node_modules/
 deploy/astrbot/.env
 deploy/astrbot/data/
 reports/
+coverage/
+.playwright-mcp/
+test-results.txt
+src/prompt-builder.js.bak

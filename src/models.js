@@ -99,9 +99,12 @@ const ConversationStateSchema = new mongoose.Schema({
     role: String,
     content: String,
     time: { type: Date, default: Date.now },
+    styleMove: { type: String, default: '' },
+    edgeScore: { type: Number, default: 0 },
   }],
   lastSummarizedAt: { type: Date, default: null },
   updatedAt: { type: Date, default: Date.now },
+  revision: { type: Number, default: 0 },
 }, { minimize: false });
 export const ConversationState = mongoose.model('ConversationState', ConversationStateSchema);
 
@@ -218,6 +221,10 @@ const AutomationTaskSchema = new mongoose.Schema({
   sourceType: { type: String, default: 'manual' },
   target: { type: String, default: '' },
   summary: { type: String, default: '' },
+  lockedBy: { type: String, default: '' },
+  lockedUntil: { type: Date, default: null },
+  deliveryAttempts: { type: Number, default: 0 },
+  lastDeliveryError: { type: String, default: '' },
   payload: { type: mongoose.Schema.Types.Mixed, default: {} },
   lastTriggeredAt: { type: Date, default: null },
   lastDeliveredKey: { type: String, default: '' },
@@ -226,6 +233,27 @@ const AutomationTaskSchema = new mongoose.Schema({
   timestamps: true,
 });
 AutomationTaskSchema.index({ enabled: 1, nextRunAt: 1 });
+AutomationTaskSchema.index({ enabled: 1, nextRunAt: 1, lockedUntil: 1 });
 AutomationTaskSchema.index({ chatId: 1, taskType: 1, enabled: 1 });
 AutomationTaskSchema.index({ userId: 1, taskType: 1, enabled: 1 });
 export const AutomationTask = mongoose.model('AutomationTask', AutomationTaskSchema);
+
+const DeliveryRecordSchema = new mongoose.Schema({
+  deliveryKey: { type: String, required: true, unique: true },
+  platform: { type: String, default: 'qq' },
+  chatType: { type: String, default: 'group' },
+  chatId: { type: String, required: true },
+  sourceMessageId: { type: String, default: '' },
+  kind: { type: String, default: 'primary' },
+  status: { type: String, default: 'pending' },
+  claimToken: { type: String, default: '' },
+  lockedUntil: { type: Date, default: null },
+  attempts: { type: Number, default: 0 },
+  lastError: { type: String, default: '' },
+  sentAt: { type: Date, default: null },
+}, {
+  minimize: false,
+  timestamps: true,
+});
+DeliveryRecordSchema.index({ status: 1, lockedUntil: 1 });
+export const DeliveryRecord = mongoose.model('DeliveryRecord', DeliveryRecordSchema);

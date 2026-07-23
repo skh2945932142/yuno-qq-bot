@@ -111,7 +111,8 @@ test('processIncomingMessage retries once with fallback model on model unavailab
 
   const reply = await processIncomingMessage(event, precomputed, {
     modelFallbackChatModel: 'mock-fast-model',
-    replyTimeBudgetMs: 1000,
+    replyTimeBudgetMs: 1200,
+    replyPrimaryTimeoutMs: 400,
     deps: {
       sendReply: async (_target, text) => {
         sentReplies.push(text);
@@ -119,7 +120,10 @@ test('processIncomingMessage retries once with fallback model on model unavailab
       sendVoice: async () => false,
       retrieveKnowledge: async () => ({ enabled: false, documents: [], reason: 'disabled' }),
       chat: async (_messages, _systemPrompt, _userTurn, options = {}) => {
-        chatCalls.push(options.model || 'primary');
+        chatCalls.push({
+          model: options.model || 'primary',
+          timeoutMs: options.timeoutMs,
+        });
         if (!options.model) {
           const error = new Error('timeout');
           error.code = 'MODEL_TIMEOUT';
@@ -136,7 +140,9 @@ test('processIncomingMessage retries once with fallback model on model unavailab
   });
 
   assert.equal(chatCalls.length, 2);
-  assert.equal(chatCalls[1], 'mock-fast-model');
+  assert.equal(chatCalls[0].timeoutMs, 400);
+  assert.equal(chatCalls[1].model, 'mock-fast-model');
+  assert.ok(chatCalls[1].timeoutMs > chatCalls[0].timeoutMs);
   assert.match(reply, /fallback model reply/);
   assert.equal(sentReplies.length, 1);
 });

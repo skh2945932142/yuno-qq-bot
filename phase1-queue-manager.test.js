@@ -58,3 +58,36 @@ test('inline queue prunes expired dedup entries', async () => {
     Date.now = originalNow;
   }
 });
+
+test('inline queue can detach non-critical work from the caller', async () => {
+  let started = false;
+  let finished = false;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const manager = await createQueueManager({
+    enableQueue: false,
+    redisUrl: '',
+    replyQueueName: 'reply',
+    persistQueueName: 'persist',
+    queueConcurrency: { default: 1, reply: 1, persist: 1 },
+  }, {
+    replyJob: async () => {
+      started = true;
+      await gate;
+      finished = true;
+    },
+    persistJob: async () => null,
+  });
+
+  await manager.enqueueReply({}, {
+    jobId: 'reply:detached',
+    waitForCompletion: false,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(started, true);
+  assert.equal(finished, false);
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(finished, true);
+});

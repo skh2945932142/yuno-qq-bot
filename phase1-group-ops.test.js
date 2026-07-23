@@ -108,3 +108,51 @@ test('recordInboundGroupObservation extracts keyword hits and repeat anomaly', a
   assert.equal(result.summary, 'deploy issue');
 });
 
+
+test('recordInboundGroupObservation covers notice, poke, attachments, long messages, and invalid events', async () => {
+  assert.equal(await recordInboundGroupObservation(null, {}), null);
+  const recorded = [];
+  const deps = {
+    getRecentEvents: async () => [],
+    recordGroupEvent: async (payload) => { recorded.push(payload); return payload; },
+    updateGroupStateFromAnalysis: async () => null,
+    keywords: ['', 'deploy', 'deploy'],
+  };
+  const base = {
+    platform: 'qq', chatType: 'group', chatId: 'g2', userId: 'u2', userName: 'Bob',
+    messageId: '', timestamp: now.getTime(), source: { postType: 'message' }, attachments: [],
+  };
+  await recordInboundGroupObservation({ ...base, rawText: '', source: { noticeType: 'group_increase' } }, deps);
+  await recordInboundGroupObservation({ ...base, rawText: '[poke]' }, deps);
+  await recordInboundGroupObservation({ ...base, rawText: '', attachments: [{ type: 'image' }] }, deps);
+  await recordInboundGroupObservation({ ...base, rawText: '', attachments: [{ type: 'face' }] }, deps);
+  await recordInboundGroupObservation({ ...base, rawText: '', attachments: [{ type: 'file' }] }, deps);
+  await recordInboundGroupObservation({ ...base, rawText: 'x'.repeat(90) }, deps);
+  assert.match(recorded[0].summary, /加入/);
+  assert.equal(recorded[1].type, 'poke');
+  assert.match(recorded[2].summary, /图片/);
+  assert.match(recorded[3].summary, /表情/);
+  assert.match(recorded[4].summary, /消息/);
+  assert.equal(recorded[5].anomalyType, 'long-message');
+});
+
+test('group event window covers model query and empty report branches', async () => {
+  const calls = [];
+  const model = {
+    find(query) {
+      calls.push(query);
+      return {
+        sort(order) { calls.push(order); return this; },
+        async limit(limit) { calls.push(limit); return []; },
+      };
+    },
+  };
+  const { getGroupEventsForWindow, buildGroupObservationSummary } = await import('./src/group-ops.js');
+  const events = await getGroupEventsForWindow('g-model', { windowHours: 1, now, limit: 2 }, { GroupEvent: model });
+  assert.deepEqual(events, []);
+  const report = await buildGroupActivityReport('g-empty', { windowHours: 1, now }, { events: [] });
+  assert.equal(report.totalMessages, 0);
+  assert.equal(report.lastEventAt, null);
+  assert.equal(buildGroupObservationSummary({ userName: 'A' }, { anomalyType: 'repeat', keywordHits: ['deploy'] }), 'A 触发了 repeat 关键词=deploy');
+  assert.equal(buildGroupObservationSummary({ userId: 'u1' }), 'u1 刚刚发言');
+});

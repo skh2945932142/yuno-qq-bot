@@ -102,9 +102,109 @@ function normalizeMetricsPath(value) {
   return normalized;
 }
 
+const RUNTIME_ROLE_CAPABILITIES = Object.freeze({
+  all: Object.freeze({
+    database: true,
+    model: true,
+    analysisModel: true,
+    replyModel: true,
+    directDelivery: true,
+    http: true,
+    conversationApi: true,
+    onebotIngress: true,
+    queueProducer: true,
+    requiresDistributedQueue: false,
+    replyWorker: true,
+    persistWorker: true,
+    scheduler: true,
+  }),
+  api: Object.freeze({
+    database: true,
+    model: true,
+    analysisModel: true,
+    replyModel: true,
+    directDelivery: false,
+    http: true,
+    conversationApi: true,
+    onebotIngress: false,
+    queueProducer: false,
+    requiresDistributedQueue: false,
+    replyWorker: false,
+    persistWorker: false,
+    scheduler: false,
+  }),
+  'reply-worker': Object.freeze({
+    database: true,
+    model: true,
+    analysisModel: true,
+    replyModel: true,
+    directDelivery: true,
+    http: false,
+    conversationApi: false,
+    onebotIngress: false,
+    queueProducer: false,
+    requiresDistributedQueue: true,
+    replyWorker: true,
+    persistWorker: false,
+    scheduler: false,
+  }),
+  'persist-worker': Object.freeze({
+    database: true,
+    model: false,
+    analysisModel: false,
+    replyModel: false,
+    directDelivery: false,
+    http: false,
+    conversationApi: false,
+    onebotIngress: false,
+    queueProducer: false,
+    requiresDistributedQueue: true,
+    replyWorker: false,
+    persistWorker: true,
+    scheduler: false,
+  }),
+  scheduler: Object.freeze({
+    database: true,
+    model: true,
+    analysisModel: true,
+    replyModel: false,
+    directDelivery: true,
+    http: false,
+    conversationApi: false,
+    onebotIngress: false,
+    queueProducer: false,
+    requiresDistributedQueue: false,
+    replyWorker: false,
+    persistWorker: false,
+    scheduler: true,
+  }),
+  'onebot-ingress': Object.freeze({
+    database: true,
+    model: true,
+    analysisModel: true,
+    replyModel: false,
+    directDelivery: false,
+    http: true,
+    conversationApi: false,
+    onebotIngress: true,
+    queueProducer: true,
+    requiresDistributedQueue: true,
+    replyWorker: false,
+    persistWorker: false,
+    scheduler: false,
+  }),
+});
+
+export function getRuntimeRoleCapabilities(role = 'all') {
+  const normalizedRole = String(role || 'all').trim().toLowerCase() || 'all';
+  const capabilities = RUNTIME_ROLE_CAPABILITIES[normalizedRole];
+  return capabilities ? { role: normalizedRole, ...capabilities } : null;
+}
+
 export const config = Object.freeze({
   nodeEnv: process.env.NODE_ENV || 'development',
   port: readNumber('PORT', 3000),
+  yunoRole: readTrimmed('YUNO_ROLE', 'all').toLowerCase(),
   botExperienceMode: readTrimmed('BOT_EXPERIENCE_MODE', 'companion'),
   dailyMoodEnabled: readBoolean('BOT_DAILY_MOOD_ENABLED', true),
   dailyMoodSeed: readTrimmed('BOT_DAILY_MOOD_SEED', 'yuno-daily-mood-v1'),
@@ -154,7 +254,8 @@ export const config = Object.freeze({
   voiceBitrate: readNumber('VOICE_BITRATE', 24000),
   requestTimeoutMs: readNumber('REQUEST_TIMEOUT_MS', 60000),
   replyTimeBudgetMs: readNumber('REPLY_TIME_BUDGET_MS', 0),
-  replyHardTimeoutMs: readNumber('REPLY_HARD_TIMEOUT_MS', 12000),
+  replyPrimaryTimeoutMs: readNumber('REPLY_PRIMARY_TIMEOUT_MS', 14000),
+  replyHardTimeoutMs: readNumber('REPLY_HARD_TIMEOUT_MS', 22000),
   externalToolTimeoutMs: readNumber('EXTERNAL_TOOL_TIMEOUT_MS', 4000),
   modelFallbackChatModel: process.env.MODEL_FALLBACK_CHAT_MODEL || '',
   modelCircuitFailureThreshold: readNumber('MODEL_CIRCUIT_FAILURE_THRESHOLD', 3),
@@ -183,12 +284,14 @@ export const config = Object.freeze({
   persistQueueName: process.env.PERSIST_QUEUE_NAME || 'persist_job',
   queueRetryAttempts: readNumber('QUEUE_RETRY_ATTEMPTS', 3),
   queueBackoffMs: readNumber('QUEUE_BACKOFF_MS', 500),
+  queueConnectTimeoutMs: readNumber('QUEUE_CONNECT_TIMEOUT_MS', 3000),
   queueConcurrency: Object.freeze({
     default: readNumber('QUEUE_CONCURRENCY_DEFAULT', 4),
     reply: readNumber('QUEUE_CONCURRENCY_REPLY', 2),
     persist: readNumber('QUEUE_CONCURRENCY_PERSIST', 4),
   }),
   automationTaskConcurrency: readNumber('AUTOMATION_TASK_CONCURRENCY', 3),
+  schedulerTaskLockMs: readNumber('SCHEDULER_TASK_LOCK_MS', 120000),
   maxActiveRemindersPerUser: readNumber('MAX_ACTIVE_REMINDERS_PER_USER', 20),
   maxActiveSubscriptionsPerUser: readNumber('MAX_ACTIVE_SUBSCRIPTIONS_PER_USER', 10),
   groupEventRetentionCount: readNumber('GROUP_EVENT_RETENTION_COUNT', 100),
@@ -246,20 +349,43 @@ export function describeHttpBaseUrlProblem(value) {
   return '';
 }
 
-export function validateRuntimeConfig() {
-  const required = [
-    ['MONGODB_URI', config.mongodbUri],
-    ['LLM_API_KEY/OPENAI_API_KEY/SILICONFLOW_API_KEY/GEMINI_API_KEY', config.llmApiKey],
-    ['LLM_CHAT_MODEL', config.llmChatModel],
-    ['REPLY_LLM_API_KEY/GEMINI_API_KEY/LLM_API_KEY', config.replyLlmApiKey],
-    ['REPLY_LLM_CHAT_MODEL/LLM_CHAT_MODEL', config.replyLlmChatModel],
-    ['NAPCAT_API', config.napcatApi],
-  ];
+export function validateRuntimeConfig(runtimeConfig = config) {
+  const capabilities = getRuntimeRoleCapabilities(runtimeConfig.yunoRole);
+  if (!capabilities) {
+    throw new Error(`Unsupported YUNO_ROLE: ${runtimeConfig.yunoRole || ''}`);
+  }
+
+  const required = [];
+  if (capabilities.database) {
+    required.push(['MONGODB_URI', runtimeConfig.mongodbUri]);
+  }
+  if (capabilities.analysisModel) {
+    required.push(
+      ['LLM_API_KEY/OPENAI_API_KEY/SILICONFLOW_API_KEY/GEMINI_API_KEY', runtimeConfig.llmApiKey],
+      ['LLM_CHAT_MODEL', runtimeConfig.llmChatModel]
+    );
+  }
+  if (capabilities.replyModel) {
+    required.push(
+      ['REPLY_LLM_API_KEY/GEMINI_API_KEY/LLM_API_KEY', runtimeConfig.replyLlmApiKey],
+      ['REPLY_LLM_CHAT_MODEL/LLM_CHAT_MODEL', runtimeConfig.replyLlmChatModel]
+    );
+  }
+  if (capabilities.directDelivery) {
+    required.push(['NAPCAT_API', runtimeConfig.napcatApi]);
+  }
+  if (capabilities.requiresDistributedQueue) {
+    required.push(
+      ['ENABLE_QUEUE=true', runtimeConfig.enableQueue],
+      ['REDIS_URL', runtimeConfig.redisUrl]
+    );
+  }
 
   const missing = required.filter(([, value]) => !value).map(([name]) => name);
   if (missing.length > 0) {
-    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+    throw new Error(`Missing required environment variables for YUNO_ROLE=${capabilities.role}: ${missing.join(', ')}`);
   }
+  return capabilities;
 }
 
 export function isAdvancedGroup(groupId) {

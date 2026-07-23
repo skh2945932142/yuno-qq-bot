@@ -108,6 +108,7 @@ MEME_NAPCAT_FAVORITES_SYNC_TTL_MS=3600000
 - `MODEL_CIRCUIT_FAILURE_THRESHOLD`
 - `MODEL_CIRCUIT_OPEN_MS`
 - `REPLY_TIME_BUDGET_MS`
+- `REPLY_PRIMARY_TIMEOUT_MS`
 - `REPLY_HARD_TIMEOUT_MS`
 - `EXTERNAL_TOOL_TIMEOUT_MS`
 - `MODEL_FALLBACK_CHAT_MODEL`
@@ -116,11 +117,13 @@ MEME_NAPCAT_FAVORITES_SYNC_TTL_MS=3600000
 - `CHAT_STYLE_REPEAT_GUARD`
 - `CHAT_ELLIPSIS_LIMIT`
 
-默认策略（2026-05）：
+默认策略（2026-07）：
 
 - `REQUEST_TIMEOUT_MS` 默认 `60000`（60 秒），降低慢模型被过早超时的概率
-- `REPLY_HARD_TIMEOUT_MS` 默认 `12000`（12 秒），用于陪伴型回复的单轮硬上限
+- `REPLY_PRIMARY_TIMEOUT_MS` 默认 `14000`（14 秒），只限制主回复模型，超时后为快速备用模型保留预算
+- `REPLY_HARD_TIMEOUT_MS` 默认 `22000`（22 秒），限制主模型、备用模型和回复质量处理的总预算
 - `REPLY_TIME_BUDGET_MS` 默认 `0`，表示使用 `REPLY_HARD_TIMEOUT_MS`；如果显式设为大于 `0`，则覆盖硬上限
+- 模型请求超时会主动取消底层 HTTP 请求，避免已经降级后仍占用连接和上游额度
 
 语音相关：
 
@@ -160,6 +163,7 @@ MEME_NAPCAT_FAVORITES_SYNC_TTL_MS=3600000
 
 队列相关：
 
+- `YUNO_ROLE`（默认 `all`）
 - `ENABLE_QUEUE`
 - `REDIS_URL`
 - `REPLY_QUEUE_NAME`
@@ -169,7 +173,9 @@ MEME_NAPCAT_FAVORITES_SYNC_TTL_MS=3600000
 - `QUEUE_CONCURRENCY_DEFAULT`
 - `QUEUE_CONCURRENCY_REPLY`
 - `QUEUE_CONCURRENCY_PERSIST`
+- `QUEUE_CONNECT_TIMEOUT_MS`
 - `AUTOMATION_TASK_CONCURRENCY`
+- `SCHEDULER_TASK_LOCK_MS`
 - `GROUP_EVENT_RETENTION_COUNT`
 
 观测相关：
@@ -381,6 +387,19 @@ npm run eval:report
 
 ## 运行与运维说明
 
+`YUNO_ROLE=all` 保留单进程部署，也可以用同一份代码按职责启动：
+
+| 角色 | 职责 | 是否需要 NapCat | 是否强制 Redis |
+|---|---|---:|---:|
+| `api` | `/api/yuno/conversation` capture API | 否 | 否 |
+| `onebot-ingress` | `/onebot` 接入、触发判断、入队 | 否 | 是 |
+| `reply-worker` | 回复生成与 QQ 发送 | 是 | 是 |
+| `persist-worker` | 画像、长期记忆和向量等后处理 | 否 | 是 |
+| `scheduler` | 定时互动、提醒和订阅任务 | 是 | 否 |
+| `all` | 上述职责合并运行 | 是 | 否，可降级 inline |
+
+`api` 角色只允许 capture，拒绝 `responseMode=send`；`onebot-ingress` 会把普通回复和自动化输出都交给 reply queue，不持有 NapCat 发送凭据。拆分角色时，`onebot-ingress`、`reply-worker` 和 `persist-worker` 必须配置 `ENABLE_QUEUE=true` 与 `REDIS_URL`。
+
 - 检索是正式功能，不是占位边界。只有在 `QDRANT_URL` 和 `QDRANT_COLLECTION` 都配置后，并且执行过 `npm run kb:sync`，它才会真正启用。
 - 知识库同步会跳过 `knowledge/README.md`，并把 Markdown 文件头部的 `Tags:`、`Priority:` 继承到子章节；占位片段不会入库。
 - 如果 `ENABLE_QUEUE=false`，或者 BullMQ / Redis 不可用，系统会退回 inline 模式，但队列接口不变。
@@ -394,4 +413,4 @@ npm run eval:report
 - 在 `src/tool-config.js` 里新增工具定义
 - 在 `src/query-tools.js` 里补对应执行器
 - 在 `knowledge/` 里继续补设定、FAQ、世界观或业务文档
-- 如果要把 reply/persist 队列拆到独立 worker，只需要在现有队列接口外再起单独进程
+- 使用 `YUNO_ROLE=reply-worker` 与 `YUNO_ROLE=persist-worker` 可以分别扩容回复和持久化 worker

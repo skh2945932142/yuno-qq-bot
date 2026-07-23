@@ -4,8 +4,12 @@ import {
   shouldRespondToEvent,
 } from './message-workflow.js';
 import { normalizeLegacyMessageEvent } from './chat/session.js';
-import { createTraceContext } from './runtime-tracing.js';
+import { createTraceContext, finalizeTrace } from './runtime-tracing.js';
+import { handleInboundEvent } from './inbound-event-service.js';
+import { withConversationExecution } from './conversation-executor.js';
 import { sendReply, sendStructuredReply, sendVoice } from './sender.js';
+import { getRuntimeServices } from './runtime-services.js';
+import { executeTrackedDelivery } from './delivery-ledger.js';
 import { resolveUserPersonaPolicy } from './persona-policy.js';
 import {
   formatToolResultAsYuno,
@@ -109,13 +113,42 @@ function appendStructuredOutputs(output, target, outputs = []) {
   }
 }
 
+function buildCapturedResponse(output, fallbackText = '') {
+  const texts = [];
+  const normalizedFallback = String(fallbackText || '').trim();
+  if (normalizedFallback) {
+    texts.push(normalizedFallback);
+  }
+
+  for (const reply of output.replies) {
+    if (reply?.type !== 'text') continue;
+    const text = String(reply.text || '').trim();
+    if (text) texts.push(text);
+  }
+
+  return {
+    text: [...new Set(texts)].join('\n'),
+    voices: output.voices,
+    outputs: output.outputs,
+  };
+}
+
+function hasCapturedOutput(output) {
+  return output.replies.length > 0 || output.voices.length > 0 || output.outputs.length > 0;
+}
+
 function createRuntimeDeps(output, options = {}) {
   const responseMode = options.responseMode === 'send' ? 'send' : 'capture';
   const replySender = options.deps?.sendReply || sendReply;
   const structuredSender = options.deps?.sendStructuredReply || sendStructuredReply;
   const voiceSender = options.deps?.sendVoice || sendVoice;
+  const deliveryLedgerEnabled = responseMode === 'send' && options.deps?.disableDeliveryLedger !== true;
+  const runtimeServices = getRuntimeServices();
+  const runtimeDelivery = deliveryLedgerEnabled
+    ? runtimeServices.deliveryLedger?.execute?.bind(runtimeServices.deliveryLedger) : null;
 
   return {
+    executeDelivery: deliveryLedgerEnabled ? (options.deps?.executeDelivery || runtimeDelivery) : null,
     sendReply: async (target, text) => {
       appendStructuredOutputs(output, target, [{ type: 'text', text }]);
       if (responseMode === 'send') {
@@ -141,7 +174,6 @@ function createRuntimeDeps(output, options = {}) {
       }
       return true;
     },
-    enqueuePersistJob: null,
   };
 }
 
@@ -179,11 +211,19 @@ async function formatStructuredToolReply(event, options, output) {
     ...createRuntimeDeps(output, options),
   };
 
-  await mergedDeps.sendStructuredReply({
+  const target = {
     platform: event.platform,
     chatType: event.chatType,
     chatId: event.chatId,
-  }, structuredOutputs);
+  };
+  const deliveryKind = options.deliveryKind || 'primary';
+  const delivery = await executeTrackedDelivery({
+    executeDelivery: mergedDeps.executeDelivery,
+    event,
+    kind: deliveryKind,
+    task: () => mergedDeps.sendStructuredReply(target, structuredOutputs),
+    explicitKey: options.deliveryKey,
+  });
 
   return {
     ok: true,
@@ -194,6 +234,7 @@ async function formatStructuredToolReply(event, options, output) {
       reason: 'tool-result',
       route: options.pluginRoute || null,
     },
+    delivery,
     outputs: output,
     response: {
       text,
@@ -206,6 +247,23 @@ async function formatStructuredToolReply(event, options, output) {
   };
 }
 
+async function dispatchCoreAutomationToolResults(event, toolResults, options, output, trace) {
+  const results = [];
+  for (const [index, toolResult] of toolResults.entries()) {
+    results.push(await formatStructuredToolReply(event, {
+      ...options,
+      trace,
+      toolResult,
+      deliveryKind: `automation-${index}-${toolResult?.tool || 'unknown'}`,
+    }, output));
+  }
+  return results;
+}
+
+function shouldUseInboundLifecycle(options = {}) {
+  return options.processInboundLifecycle ?? !options.engine;
+}
+
 export async function runYunoConversation(input, options = {}) {
   const event = input?.platform && input?.chatType
     ? normalizeLegacyMessageEvent(input)
@@ -216,6 +274,14 @@ export async function runYunoConversation(input, options = {}) {
     return formatStructuredToolReply(event, options, output);
   }
 
+  return withConversationExecution(event, async () => {
+  const trace = options.trace || createTraceContext('conversation', {
+    chatType: event.chatType,
+    chatId: event.chatId,
+    userId: event.userId,
+    messageId: event.messageId,
+    source: event.source?.adapter || event.platform,
+  });
   const runtimeDeps = createRuntimeDeps(output, options);
   const pluginRoute = normalizePluginRoute(options.pluginRoute, event);
   const mergedDeps = {
@@ -227,38 +293,107 @@ export async function runYunoConversation(input, options = {}) {
     mergedDeps.planIncomingTask = () => pluginRoute;
   }
 
-  const decision = await (options.engine?.shouldRespondToEvent || shouldRespondToEvent)(event, {
+  const shouldRespond = options.engine?.shouldRespondToEvent || shouldRespondToEvent;
+  const deferPostReplyEffects = options.deferPostReplyEffects ?? options.responseMode !== 'send';
+  const processMessage = options.engine?.processIncomingMessage || processIncomingMessage;
+  const processApprovedReply = async ({ decision }) => processMessage(event, decision, {
     ...options,
+    trace,
     deps: mergedDeps,
+    persistInline: !deferPostReplyEffects,
+    deferPostReplyEffects,
   });
 
-  if (!decision.analysis.shouldRespond) {
+  let lifecycleResult;
+  if (shouldUseInboundLifecycle(options)) {
+    const inboundHandler = options.engine?.handleInboundEvent || handleInboundEvent;
+    lifecycleResult = await inboundHandler(event, {
+      decisionOptions: {
+        ...options,
+        trace,
+        deps: mergedDeps,
+        finalizeTrace: false,
+      },
+      deps: {
+        isNonTargetPokeEvent: options.deps?.isNonTargetPokeEvent,
+        observeGroupEvent: options.deps?.observeGroupEvent || options.deps?.observeGroupEventInBackground,
+        evaluateGroupAutomation: options.deps?.evaluateGroupAutomation,
+        recordWorkflowMetric: options.deps?.recordWorkflowMetric,
+        logger: options.deps?.logger,
+        shouldRespondToEvent: (normalizedEvent, decisionOptions) => shouldRespond(normalizedEvent, {
+          ...decisionOptions,
+          deps: mergedDeps,
+        }),
+        dispatchAutomationToolResults: options.deps?.dispatchAutomationToolResults
+          || ((normalizedEvent, toolResults) => dispatchCoreAutomationToolResults(
+            normalizedEvent,
+            toolResults,
+            options,
+            output,
+            trace
+          )),
+        onReplyApproved: processApprovedReply,
+      },
+    });
+  } else {
+    const decision = await shouldRespond(event, {
+      ...options,
+      trace,
+      deps: mergedDeps,
+      finalizeTrace: false,
+    });
+    lifecycleResult = decision.analysis.shouldRespond
+      ? {
+          suppressed: false,
+          reason: decision.analysis.reason,
+          analysis: decision.analysis,
+          decision,
+          replyResult: await processApprovedReply({ decision }),
+        }
+      : {
+          suppressed: true,
+          reason: decision.analysis.reason,
+          analysis: decision.analysis,
+          decision,
+          replyResult: null,
+        };
+  }
+
+  if (lifecycleResult.suppressed) {
+    const captured = hasCapturedOutput(output);
+    finalizeTrace(trace, {
+      replyType: captured ? 'automation' : 'suppressed',
+      shouldRespond: captured,
+      reason: lifecycleResult.reason,
+      messageId: event.messageId,
+    });
     return {
       ok: true,
-      suppressed: true,
+      suppressed: !captured,
       event,
-      analysis: decision.analysis,
+      analysis: lifecycleResult.analysis,
       outputs: output,
-      response: null,
+      response: captured ? buildCapturedResponse(output) : null,
     };
   }
 
-  const replyText = await (options.engine?.processIncomingMessage || processIncomingMessage)(event, decision, {
-    ...options,
-    deps: mergedDeps,
-    persistInline: true,
-  });
+  const replyText = lifecycleResult.replyResult;
+  if (options.engine?.processIncomingMessage) {
+    finalizeTrace(trace, {
+      replyType: 'chat',
+      shouldRespond: true,
+      reason: lifecycleResult.reason,
+      messageId: event.messageId,
+    });
+  }
 
   return {
     ok: true,
     suppressed: false,
     event,
-    analysis: decision.analysis,
+    analysis: lifecycleResult.analysis,
     outputs: output,
-    response: {
-      text: replyText,
-      voices: output.voices,
-      outputs: output.outputs,
-    },
+    response: buildCapturedResponse(output, replyText),
   };
+  });
 }

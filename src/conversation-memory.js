@@ -4,6 +4,7 @@ import { buildSessionKey } from './chat/session.js';
 const RECENT_MESSAGE_LIMIT = 8;
 const SUMMARY_CHAR_LIMIT = 1200;
 const MESSAGE_SNIPPET_LIMIT = 96;
+const DEFAULT_APPEND_ATTEMPTS = 5;
 
 function truncateText(text, limit = MESSAGE_SNIPPET_LIMIT) {
   const normalized = String(text || '').trim();
@@ -75,17 +76,19 @@ function buildConversationDefaults(session) {
     userId: session.userId,
     rollingSummary: '',
     messages: [],
+    revision: 0,
     lastSummarizedAt: null,
     updatedAt: new Date(),
   };
 }
 
-async function loadLegacyHistory(session) {
+async function loadLegacyHistory(session, options = {}) {
+  const historyModel = options.History || History;
   if (session.platform !== 'qq' || session.chatType !== 'group') {
     return null;
   }
 
-  const historyDoc = await History.findOne({
+  const historyDoc = await historyModel.findOne({
     groupId: String(session.chatId),
     userId: String(session.userId),
   });
@@ -100,9 +103,10 @@ async function loadLegacyHistory(session) {
   };
 }
 
-export async function getConversationState(session) {
+export async function getConversationState(session, options = {}) {
+  const conversationModel = options.ConversationState || ConversationState;
   const sessionKey = buildSessionKey(session);
-  const existing = await ConversationState.findOne({ sessionKey });
+  const existing = await conversationModel.findOne({ sessionKey });
 
   if (existing) {
     return {
@@ -112,44 +116,105 @@ export async function getConversationState(session) {
     };
   }
 
-  const migrated = await loadLegacyHistory(session);
+  const migrated = await loadLegacyHistory(session, options);
   return migrated || buildConversationDefaults(session);
 }
 
-export async function saveConversationState(session, state) {
+function createConversationWriteConflict(sessionKey, cause = null) {
+  const error = new Error(`Conversation state changed while appending: ${sessionKey}`);
+  error.code = 'CONVERSATION_WRITE_CONFLICT';
+  if (cause) error.cause = cause;
+  return error;
+}
+
+function isConversationWriteConflict(error) {
+  return error?.code === 'CONVERSATION_WRITE_CONFLICT' || Number(error?.code) === 11000;
+}
+
+export async function saveConversationState(session, state, options = {}) {
+  const conversationModel = options.ConversationState || ConversationState;
   const compacted = compactConversationState(state);
   const sessionKey = buildSessionKey(session);
   const now = new Date();
+  const expectedRevision = Math.max(0, Number(state.revision || 0));
+  const filter = { sessionKey };
 
-  const updated = await ConversationState.findOneAndUpdate(
-    { sessionKey },
-    {
-      $set: {
-        platform: session.platform,
-        chatType: session.chatType,
-        chatId: session.chatId,
-        sessionKey,
-        userId: session.userId,
-        rollingSummary: compacted.rollingSummary,
-        messages: compacted.messages,
-        lastSummarizedAt: compacted.summarizedCount > 0 ? now : state.lastSummarizedAt || null,
-        updatedAt: now,
+  if (options.requireRevision) {
+    if (expectedRevision === 0) {
+      filter.$or = [
+        { revision: 0 },
+        { revision: { $exists: false } },
+      ];
+    } else {
+      filter.revision = expectedRevision;
+    }
+  }
+
+  let updated;
+  try {
+    updated = await conversationModel.findOneAndUpdate(
+      filter,
+      {
+        $set: {
+          platform: session.platform,
+          chatType: session.chatType,
+          chatId: session.chatId,
+          sessionKey,
+          userId: session.userId,
+          rollingSummary: compacted.rollingSummary,
+          messages: compacted.messages,
+          lastSummarizedAt: compacted.summarizedCount > 0 ? now : state.lastSummarizedAt || null,
+          updatedAt: now,
+        },
+        $inc: { revision: 1 },
       },
-    },
-    { upsert: true, returnDocument: 'after' }
-  );
+      { upsert: true, returnDocument: 'after' }
+    );
+  } catch (error) {
+    if (options.requireRevision && isConversationWriteConflict(error)) {
+      throw createConversationWriteConflict(sessionKey, error);
+    }
+    throw error;
+  }
+
+  if (!updated) {
+    throw createConversationWriteConflict(sessionKey);
+  }
 
   return {
     ...buildConversationDefaults(session),
     ...updated.toObject(),
+    revision: Number(updated.revision ?? expectedRevision + 1),
     messages: (updated.messages || []).map(normalizeMessage),
   };
 }
 
-export async function appendConversationMessages(session, messages) {
-  const current = await getConversationState(session);
-  return saveConversationState(session, {
-    ...current,
-    messages: [...current.messages, ...messages.map(normalizeMessage)],
-  });
+export async function appendConversationMessages(session, messages, options = {}) {
+  const normalizedMessages = messages.map(normalizeMessage).filter((item) => item.content);
+  if (normalizedMessages.length === 0) {
+    return getConversationState(session, options);
+  }
+
+  const maxAttempts = Math.max(1, Number(options.maxAttempts || DEFAULT_APPEND_ATTEMPTS));
+  let lastConflict = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const current = await getConversationState(session, options);
+    try {
+      return await saveConversationState(session, {
+        ...current,
+        messages: [...current.messages, ...normalizedMessages],
+      }, {
+        ...options,
+        requireRevision: true,
+      });
+    } catch (error) {
+      if (!isConversationWriteConflict(error)) {
+        throw error;
+      }
+      lastConflict = error;
+    }
+  }
+
+  throw lastConflict || createConversationWriteConflict(buildSessionKey(session));
 }

@@ -85,6 +85,7 @@ export function extractYunoReplyPayload(result = {}) {
 }
 
 export function createAstrBotYunoHttpPlugin(options = {}) {
+  const httpClient = options.httpClient || axios;
   const yunoApiUrl = String(options.yunoApiUrl || process.env.YUNO_API_URL || 'http://yuno-qq-bot:3000').trim();
   const yunoApiSecret = String(options.yunoApiSecret || process.env.YUNO_API_SECRET || '').trim();
   const requestTimeout = Number(options.requestTimeout || 30000);
@@ -99,7 +100,7 @@ export function createAstrBotYunoHttpPlugin(options = {}) {
     }
 
     try {
-      const response = await axios.post(
+      const response = await httpClient.post(
         `${yunoApiUrl}/api/yuno/conversation`,
         {
           input,
@@ -135,7 +136,7 @@ export function createAstrBotYunoHttpPlugin(options = {}) {
 
       // 测试连接
       try {
-        const healthResponse = await axios.get(`${yunoApiUrl}/health`, { timeout: 5000 });
+        const healthResponse = await httpClient.get(`${yunoApiUrl}/health`, { timeout: 5000 });
         console.log(`[Yuno HTTP Plugin] 健康检查成功: ${healthResponse.data}`);
       } catch (error) {
         console.warn(`[Yuno HTTP Plugin] 健康检查失败: ${error.message}`);

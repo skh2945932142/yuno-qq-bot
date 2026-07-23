@@ -112,6 +112,8 @@ function createBaseDeps(scenarioName) {
     getRecentEvents: async () => ([
       { summary: '群里刚才主要在随便聊今天的安排。' },
     ]),
+    observeGroupEvent: async () => null,
+    evaluateGroupAutomation: async () => null,
     updateRelationProfile: async () => null,
     updateUserState: async () => null,
     appendConversationMessages: async () => null,
@@ -119,6 +121,14 @@ function createBaseDeps(scenarioName) {
     updateGroupStateFromAnalysis: async () => null,
     recordGroupEvent: async () => null,
     shouldSendVoiceForEmotion: () => false,
+    resolveVoiceRuntimeConfig: () => ({
+      enableVoice: false,
+      voiceName: '',
+      mode: 'off',
+      cooldownMs: 0,
+      maxChars: 90,
+      onUserRecord: false,
+    }),
     sendVoice: async () => true,
     enqueuePersistJob: null,
   };

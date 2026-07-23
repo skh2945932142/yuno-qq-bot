@@ -9,6 +9,10 @@ import {
   buildStructuredReplyResponseFormat,
   chat,
 } from './src/minimax.js';
+import {
+  getRuntimeRoleCapabilities,
+  validateRuntimeConfig,
+} from './src/config.js';
 
 test('model circuit keys isolate primary and fallback reply models', () => {
   assert.equal(
@@ -252,6 +256,84 @@ test('fallback chat builds its payload before deriving the circuit key', async (
   assert.equal(output, '{"text":"备用模型可用。","sendVoice":false,"voiceText":""}');
 });
 
+test('runtime roles expose isolated process capabilities', () => {
+  assert.deepEqual(getRuntimeRoleCapabilities('api'), {
+    role: 'api',
+    database: true,
+    model: true,
+    analysisModel: true,
+    replyModel: true,
+    directDelivery: false,
+    http: true,
+    conversationApi: true,
+    onebotIngress: false,
+    queueProducer: false,
+    requiresDistributedQueue: false,
+    replyWorker: false,
+    persistWorker: false,
+    scheduler: false,
+  });
+  assert.equal(getRuntimeRoleCapabilities('reply-worker').replyWorker, true);
+  assert.equal(getRuntimeRoleCapabilities('persist-worker').model, false);
+  assert.equal(getRuntimeRoleCapabilities('scheduler').scheduler, true);
+  assert.equal(getRuntimeRoleCapabilities('onebot-ingress').directDelivery, false);
+  assert.equal(getRuntimeRoleCapabilities('onebot-ingress').analysisModel, true);
+  assert.equal(getRuntimeRoleCapabilities('onebot-ingress').replyModel, false);
+  assert.equal(getRuntimeRoleCapabilities('invalid-role'), null);
+});
+
+test('api role validation does not require NapCat delivery credentials', () => {
+  const capabilities = validateRuntimeConfig({
+    yunoRole: 'api',
+    mongodbUri: 'mongodb://localhost/yuno',
+    llmApiKey: 'analysis-key',
+    llmChatModel: 'analysis-model',
+    replyLlmApiKey: 'reply-key',
+    replyLlmChatModel: 'reply-model',
+    napcatApi: '',
+    enableQueue: false,
+    redisUrl: '',
+  });
+
+  assert.equal(capabilities.role, 'api');
+  assert.equal(capabilities.directDelivery, false);
+});
+
+test('persist worker validation only requires MongoDB and the distributed queue', () => {
+  const capabilities = validateRuntimeConfig({
+    yunoRole: 'persist-worker',
+    mongodbUri: 'mongodb://localhost/yuno',
+    llmApiKey: '',
+    llmChatModel: '',
+    replyLlmApiKey: '',
+    replyLlmChatModel: '',
+    napcatApi: '',
+    enableQueue: true,
+    redisUrl: 'redis://localhost:6379',
+  });
+
+  assert.equal(capabilities.persistWorker, true);
+  assert.equal(capabilities.model, false);
+});
+
+test('split queue roles reject inline mode and invalid role names fail fast', () => {
+  assert.throws(() => validateRuntimeConfig({
+    yunoRole: 'reply-worker',
+    mongodbUri: 'mongodb://localhost/yuno',
+    llmApiKey: 'analysis-key',
+    llmChatModel: 'analysis-model',
+    replyLlmApiKey: 'reply-key',
+    replyLlmChatModel: 'reply-model',
+    napcatApi: 'http://napcat.local',
+    enableQueue: false,
+    redisUrl: '',
+  }), /ENABLE_QUEUE=true.*REDIS_URL/);
+  assert.throws(
+    () => validateRuntimeConfig({ yunoRole: 'invalid-role' }),
+    /Unsupported YUNO_ROLE/
+  );
+});
+
 test('non-Gemini fallback provider uses JSON object response mode', () => {
   const responseFormat = buildReplyResponseFormat({
     providerKind: 'reply-fallback',
@@ -301,6 +383,7 @@ test('Gemini final prompt places upstream data before the final generation task'
 test('config exposes companion experience and external enhancement knobs', async () => {
   const { config } = await loadConfigModule({
     BOT_EXPERIENCE_MODE: '',
+    REPLY_PRIMARY_TIMEOUT_MS: '',
     REPLY_HARD_TIMEOUT_MS: '',
     EXTERNAL_TOOL_TIMEOUT_MS: '',
     MEMORY_EXTRACTION_ENABLED: '',
@@ -308,7 +391,8 @@ test('config exposes companion experience and external enhancement knobs', async
   });
 
   assert.equal(config.botExperienceMode, 'companion');
-  assert.equal(config.replyHardTimeoutMs, 12000);
+  assert.equal(config.replyPrimaryTimeoutMs, 14000);
+  assert.equal(config.replyHardTimeoutMs, 22000);
   assert.equal(config.externalToolTimeoutMs, 4000);
   assert.equal(config.memoryExtractionEnabled, true);
   assert.equal(config.memeVisionEnabled, true);
