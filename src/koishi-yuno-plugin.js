@@ -42,11 +42,12 @@ export function createYunoKoishiPlugin(options = {}) {
   const shutdownRuntime = options.shutdownYunoRuntime || shutdownYunoRuntime;
   const runConversation = options.runYunoConversation || runYunoConversation;
   const isRuntimeAccepting = options.isYunoRuntimeAcceptingMessages || isYunoRuntimeAcceptingMessages;
+  const runtimeLogger = options.logger || logger;
 
   return (ctx) => {
     const deliveryAdapter = options.deliveryAdapter || createKoishiDeliveryAdapter(ctx, {
       selfId: runtimeConfig.selfQq,
-      logger: options.logger || logger,
+      logger: runtimeLogger,
     });
     const protocolAdapter = options.protocolAdapter || createKoishiProtocolAdapter(ctx, {
       selfId: runtimeConfig.selfQq,
@@ -54,9 +55,27 @@ export function createYunoKoishiPlugin(options = {}) {
     let runtime = null;
     let acceptingMessages = false;
 
+    // Shadow mode records the Session boundary without invoking any Yuno service.
+    if (mode === 'shadow') {
+      ctx.on('message', (session) => {
+        const event = adaptKoishiSession(session);
+        runtimeLogger.info('koishi', 'shadow_session', {
+          selfId: event.selfId,
+          userId: event.userId,
+          chatId: event.chatId,
+          messageId: event.messageId,
+          chatType: event.chatType,
+          sessionType: event.source?.sessionType,
+          postType: event.source?.postType,
+          messageType: event.source?.messageType,
+          attachments: event.attachments.length,
+        });
+      });
+    }
+
     ctx.on('ready', async () => {
       if (mode === 'shadow') {
-        logger.info('koishi', 'Yuno plugin started in shadow mode');
+        runtimeLogger.info('koishi', 'Yuno plugin started in shadow mode');
         return;
       }
       runtime = await initializeRuntime({
@@ -91,7 +110,7 @@ export function createYunoKoishiPlugin(options = {}) {
       if (!event.userId || !event.chatId || !isYunoSessionEligible(event)) return '';
       if (event.selfId && event.userId === event.selfId) return '';
       if (mode === 'shadow') {
-        logger.info('koishi', 'shadow_event', {
+        runtimeLogger.info('koishi', 'shadow_event', {
           chatType: event.chatType,
           chatId: event.chatId,
           userId: event.userId,
@@ -103,7 +122,7 @@ export function createYunoKoishiPlugin(options = {}) {
         return '';
       }
       if (!runtime || !acceptingMessages || !isRuntimeAccepting()) {
-        logger.warn('koishi', 'Yuno runtime is not ready; message ignored', {
+        runtimeLogger.warn('koishi', 'Yuno runtime is not ready; message ignored', {
           chatId: event.chatId,
           messageId: event.messageId,
         });
@@ -122,7 +141,7 @@ export function createYunoKoishiPlugin(options = {}) {
           },
         });
       } catch (error) {
-        logger.error('koishi', 'Yuno message processing failed', {
+        runtimeLogger.error('koishi', 'Yuno message processing failed', {
           message: error.message,
           chatId: event.chatId,
           userId: event.userId,
