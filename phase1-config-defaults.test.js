@@ -9,10 +9,7 @@ import {
   buildStructuredReplyResponseFormat,
   chat,
 } from './src/minimax.js';
-import {
-  getRuntimeRoleCapabilities,
-  validateRuntimeConfig,
-} from './src/config.js';
+import { validateRuntimeConfig } from './src/config.js';
 
 test('model circuit keys isolate primary and fallback reply models', () => {
   assert.equal(
@@ -256,82 +253,26 @@ test('fallback chat builds its payload before deriving the circuit key', async (
   assert.equal(output, '{"text":"备用模型可用。","sendVoice":false,"voiceText":""}');
 });
 
-test('runtime roles expose isolated process capabilities', () => {
-  assert.deepEqual(getRuntimeRoleCapabilities('api'), {
-    role: 'api',
-    database: true,
-    model: true,
-    analysisModel: true,
-    replyModel: true,
-    directDelivery: false,
-    http: true,
-    conversationApi: true,
-    onebotIngress: false,
-    queueProducer: false,
-    requiresDistributedQueue: false,
-    replyWorker: false,
-    persistWorker: false,
-    scheduler: false,
-  });
-  assert.equal(getRuntimeRoleCapabilities('reply-worker').replyWorker, true);
-  assert.equal(getRuntimeRoleCapabilities('persist-worker').model, false);
-  assert.equal(getRuntimeRoleCapabilities('scheduler').scheduler, true);
-  assert.equal(getRuntimeRoleCapabilities('onebot-ingress').directDelivery, false);
-  assert.equal(getRuntimeRoleCapabilities('onebot-ingress').analysisModel, true);
-  assert.equal(getRuntimeRoleCapabilities('onebot-ingress').replyModel, false);
-  assert.equal(getRuntimeRoleCapabilities('invalid-role'), null);
-});
-
-test('api role validation does not require NapCat delivery credentials', () => {
+test('embedded runtime validation requires one unified Mongo and model configuration', () => {
   const capabilities = validateRuntimeConfig({
-    yunoRole: 'api',
     mongodbUri: 'mongodb://localhost/yuno',
     llmApiKey: 'analysis-key',
     llmChatModel: 'analysis-model',
     replyLlmApiKey: 'reply-key',
     replyLlmChatModel: 'reply-model',
-    napcatApi: '',
-    enableQueue: false,
-    redisUrl: '',
   });
 
-  assert.equal(capabilities.role, 'api');
-  assert.equal(capabilities.directDelivery, false);
+  assert.deepEqual(capabilities, { role: 'koishi-embedded' });
 });
 
-test('persist worker validation only requires MongoDB and the distributed queue', () => {
-  const capabilities = validateRuntimeConfig({
-    yunoRole: 'persist-worker',
+test('embedded runtime validation rejects missing model credentials', () => {
+  assert.throws(() => validateRuntimeConfig({
     mongodbUri: 'mongodb://localhost/yuno',
     llmApiKey: '',
     llmChatModel: '',
     replyLlmApiKey: '',
     replyLlmChatModel: '',
-    napcatApi: '',
-    enableQueue: true,
-    redisUrl: 'redis://localhost:6379',
-  });
-
-  assert.equal(capabilities.persistWorker, true);
-  assert.equal(capabilities.model, false);
-});
-
-test('split queue roles reject inline mode and invalid role names fail fast', () => {
-  assert.throws(() => validateRuntimeConfig({
-    yunoRole: 'reply-worker',
-    mongodbUri: 'mongodb://localhost/yuno',
-    llmApiKey: 'analysis-key',
-    llmChatModel: 'analysis-model',
-    replyLlmApiKey: 'reply-key',
-    replyLlmChatModel: 'reply-model',
-    napcatApi: 'http://napcat.local',
-    enableQueue: false,
-    redisUrl: '',
-  }), /ENABLE_QUEUE=true.*REDIS_URL/);
-  assert.throws(
-    () => validateRuntimeConfig({ yunoRole: 'invalid-role' }),
-    /Unsupported YUNO_ROLE/
-  );
+  }), /Missing required environment variables/);
 });
 
 test('non-Gemini fallback provider uses JSON object response mode', () => {
@@ -407,10 +348,10 @@ test('config exposes contextual meme auto-send controls', async () => {
     MEME_AUTO_SEND_MIN_SCORE: '0.8',
     MEME_AUTO_SEND_MAX_PER_HOUR: '2',
     MEME_AUTO_SEND_PROBABILITY: '0.4',
-    MEME_PROVIDER: 'napcat-favorites',
+    MEME_PROVIDER: 'onebot-favorites',
     MEME_IMPORT_DIR: 'custom/memes',
-    MEME_NAPCAT_FAVORITES_COUNT: '24',
-    MEME_NAPCAT_FAVORITES_SYNC_TTL_MS: '30000',
+    MEME_FAVORITES_COUNT: '24',
+    MEME_FAVORITES_SYNC_TTL_MS: '30000',
   });
 
   assert.equal(config.memeAutoSendMode, 'suggest');
@@ -418,10 +359,10 @@ test('config exposes contextual meme auto-send controls', async () => {
   assert.equal(config.memeAutoSendMinScore, 0.8);
   assert.equal(config.memeAutoSendMaxPerHour, 2);
   assert.equal(config.memeAutoSendProbability, 0.4);
-  assert.equal(config.memeProvider, 'napcat-favorites');
+  assert.equal(config.memeProvider, 'onebot-favorites');
   assert.equal(config.memeImportDir, 'custom/memes');
-  assert.equal(config.memeNapcatFavoritesCount, 24);
-  assert.equal(config.memeNapcatFavoritesSyncTtlMs, 30000);
+  assert.equal(config.memeFavoritesCount, 24);
+  assert.equal(config.memeFavoritesSyncTtlMs, 30000);
 });
 
 test('config clamps meme auto-send probability to a safe range', async () => {
@@ -434,18 +375,18 @@ test('config clamps meme auto-send probability to a safe range', async () => {
   assert.equal(fallback.config.memeAutoSendProbability, 0.25);
 });
 
-test('config exposes webhook and metrics security defaults', async () => {
+test('config exposes Koishi OneBot and metrics security defaults', async () => {
   const { config } = await loadConfigModule({
-    ONEBOT_WEBHOOK_SECRET: '',
-    WEBHOOK_BODY_LIMIT: '',
+    ONEBOT_SECRET: '',
     METRICS_AUTH_TOKEN: '',
     METRICS_PATH: '/metrics',
+    KOISHI_PORT: '5140',
   });
 
-  assert.equal(config.onebotWebhookSecret, '');
-  assert.equal(config.webhookBodyLimit, '128kb');
+  assert.equal(config.onebotSecret, '');
   assert.equal(config.metricsAuthToken, '');
   assert.equal(config.metricsPath, '/metrics');
+  assert.equal(config.koishiPort, 5140);
 });
 
 test('config falls back from unsafe metrics route patterns', async () => {

@@ -12,7 +12,14 @@ export function buildConversationExecutionKey(event = {}) {
 
 export function createConversationExecutor(options = {}) {
   const tails = new Map();
+  const idleWaiters = new Set();
   const recordMetric = options.recordWorkflowMetric || recordWorkflowMetric;
+
+  function notifyIdle() {
+    if (tails.size !== 0) return;
+    for (const resolve of idleWaiters) resolve();
+    idleWaiters.clear();
+  }
 
   return {
     async run(event, task) {
@@ -35,11 +42,16 @@ export function createConversationExecutor(options = {}) {
         release();
         if (tails.get(key) === current) {
           tails.delete(key);
+          notifyIdle();
         }
       }
     },
     size() {
       return tails.size;
+    },
+    async waitForIdle() {
+      if (tails.size === 0) return;
+      await new Promise((resolve) => idleWaiters.add(resolve));
     },
   };
 }
@@ -48,4 +60,12 @@ const conversationExecutor = createConversationExecutor();
 
 export function withConversationExecution(event, task) {
   return conversationExecutor.run(event, task);
+}
+
+export function getActiveConversationCount() {
+  return conversationExecutor.size();
+}
+
+export function waitForConversationsIdle() {
+  return conversationExecutor.waitForIdle();
 }

@@ -64,7 +64,8 @@ const criticalFiles = [
   'src/message-analysis.js',
   'src/sender.js',
   'src/queue-manager.js',
-  'src/astrbot-yuno-http-plugin.js',
+  'src/koishi-session-adapter.js',
+  'src/koishi-adapters.js',
 ];
 
 for (const suffix of criticalFiles) {

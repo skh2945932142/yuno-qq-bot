@@ -1,5 +1,4 @@
 ﻿await import('./test/run-tests.js');
-await import('./phase1-tests/unified-adapter.test.js');
 await import('./phase1-inbound-event-service.test.js');
 await import('./phase1-conversation-executor.test.js');
 await import('./phase1-delivery-ledger.test.js');
@@ -39,18 +38,17 @@ await import('./phase1-retry.test.js');
 await import('./phase1-formatter-coverage.test.js');
 await import('./phase1-tool-config.test.js');
 await import('./phase1-yuno-core.test.js');
-await import('./phase1-astrbot-plugin.test.js');
-await import('./phase1-astrbot-http-plugin.test.js');
-await import('./phase1-yuno-status-plugin.test.js');
+await import('./phase1-koishi-session-adapter.test.js');
+await import('./phase1-koishi-adapters.test.js');
+await import('./phase1-yuno-runtime.test.js');
+await import('./phase1-koishi-plugin.test.js');
+await import('./phase1-koishi-app.test.js');
 await import('./phase1-yuno-formatter.test.js');
-await import('./phase1-astrbot-router.test.js');
 await import('./phase1-meme-agent.test.js');
 await import('./phase1-automation-model.test.js');
 await import('./phase1-group-automation-coverage.test.js');
 await import('./phase1-meme-provider.test.js');
 await import('./phase1-meme-import.test.js');
-await import('./phase1-onebot-poke.test.js');
-await import('./phase1-poke-fast-path.test.js');
 await import('./phase1-group-state-legacy.test.js');
 await import('./phase1-group-ops.test.js');
 await import('./phase1-automation-rules.test.js');
@@ -59,13 +57,10 @@ await import('./phase1-scheduler-job.test.js');
 await import('./phase1-formatter-ops.test.js');
 await import('./phase1-copy-style.test.js');
 await import('./phase1-quality-gates.test.js');
-await import('./phase1-security-hardening.test.js');
 await import('./phase1-automation-workflows.test.js');
 await import('./phase1-task-router-vnext.test.js');
-await import('./phase1-onebot-notice.test.js');
 
 
-await import('./phase1-bootstrap-api.test.js');
 await import('./phase1-persist-job.test.js');
 await import('./phase1-performance-guards.test.js');
 

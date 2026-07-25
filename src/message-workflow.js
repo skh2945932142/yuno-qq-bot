@@ -806,6 +806,8 @@ async function loadMemeCandidatesForReply({ event, trace, memoryContext }, deps)
       userId: event.userId,
       limit: 8,
       provider: config.memeProvider,
+    }, {
+      protocolAdapter: deps.protocolAdapter,
     }), {
       chatType: event.chatType,
       chatId: event.chatId,
@@ -866,6 +868,7 @@ function createWorkflowDeps(deps = {}, options = {}) {
     markMemeUsed: deps.markMemeUsed || markMemeUsed,
     planContextualMemeReply: deps.planContextualMemeReply || planContextualMemeReply,
     getMemeCandidates: deps.getMemeCandidates || getMemeCandidates,
+    protocolAdapter: deps.protocolAdapter || runtimeServices.protocolAdapter || null,
     buildMemeImageOutput: deps.buildMemeImageOutput || buildMemeImageOutput,
     logger: deps.logger || logger,
     retrieveReplyStyleExamples: deps.retrieveReplyStyleExamples || retrieveReplyStyleExamples,

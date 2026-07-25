@@ -283,48 +283,76 @@ export async function runDueAutomationTasks(now = new Date(), options = {}) {
   }
   return results;
 }
-export function startScheduler() {
-  const hasTargetGroup = Boolean(config.targetGroupId);
+let activeScheduler = null;
 
-  cron.schedule('* * * * *', () => {
-    runDueAutomationTasks(new Date()).catch((error) => {
-      logger.error('scheduler', 'Automation task tick failed', {
-        message: error.message,
-      });
-    });
-  }, { timezone: 'Asia/Shanghai' });
+export function createScheduler(options = {}) {
+  const runtimeConfig = options.config || config;
+  const tasks = [];
+  let started = false;
 
-  cron.schedule('*/10 * * * *', () => {
-    cleanupGroupEventsRetention().catch((error) => {
-      logger.warn('scheduler', 'Group event cleanup failed', {
-        message: error.message,
-      });
-    });
-  }, { timezone: 'Asia/Shanghai' });
+  return {
+    start() {
+      if (started) return;
+      started = true;
+      const timezone = runtimeConfig.dailyMoodTimezone || 'Asia/Shanghai';
+      const hasTargetGroup = Boolean(runtimeConfig.targetGroupId);
 
-  if (hasTargetGroup) {
-    const trigger = () => {
-      runScheduledInteraction(config.targetGroupId).catch((error) => {
-        logger.error('scheduler', 'Scheduled interaction tick failed', {
-          message: error.message,
+      tasks.push(cron.schedule('* * * * *', () => {
+        runDueAutomationTasks(new Date()).catch((error) => {
+          logger.error('scheduler', 'Automation task tick failed', { message: error.message });
         });
-      });
-    };
+      }, { timezone }));
 
-    cron.schedule('0 7 * * *', trigger, { timezone: 'Asia/Shanghai' });
-    cron.schedule('0 23 * * *', trigger, { timezone: 'Asia/Shanghai' });
-    cron.schedule('0 21 * * *', () => {
-      runDailyGroupDigest(config.targetGroupId).catch((error) => {
-        logger.error('scheduler', 'Daily digest failed', {
-          message: error.message,
+      tasks.push(cron.schedule('*/10 * * * *', () => {
+        cleanupGroupEventsRetention().catch((error) => {
+          logger.warn('scheduler', 'Group event cleanup failed', { message: error.message });
         });
+      }, { timezone }));
+
+      if (hasTargetGroup) {
+        const trigger = () => {
+          runScheduledInteraction(runtimeConfig.targetGroupId).catch((error) => {
+            logger.error('scheduler', 'Scheduled interaction tick failed', { message: error.message });
+          });
+        };
+
+        tasks.push(cron.schedule('0 7 * * *', trigger, { timezone }));
+        tasks.push(cron.schedule('0 23 * * *', trigger, { timezone }));
+        tasks.push(cron.schedule('0 21 * * *', () => {
+          runDailyGroupDigest(runtimeConfig.targetGroupId).catch((error) => {
+            logger.error('scheduler', 'Daily digest failed', { message: error.message });
+          });
+        }, { timezone }));
+      }
+
+      logger.info('scheduler', 'Scheduler started', {
+        groupId: runtimeConfig.targetGroupId || '',
+        hasTargetGroup,
       });
-    }, { timezone: 'Asia/Shanghai' });
+    },
+    stop() {
+      for (const task of tasks.splice(0)) {
+        task.stop();
+      }
+      started = false;
+      logger.info('scheduler', 'Scheduler stopped');
+    },
+    get started() {
+      return started;
+    },
+  };
+}
+
+export function startScheduler(options = {}) {
+  if (!activeScheduler) {
+    activeScheduler = createScheduler(options);
   }
+  activeScheduler.start();
+  return activeScheduler;
+}
 
-  logger.info('scheduler', 'Scheduler started', {
-    groupId: config.targetGroupId || '',
-    hasTargetGroup,
-  });
+export function stopScheduler() {
+  activeScheduler?.stop();
+  activeScheduler = null;
 }
 

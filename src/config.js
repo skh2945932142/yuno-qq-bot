@@ -102,109 +102,18 @@ function normalizeMetricsPath(value) {
   return normalized;
 }
 
-const RUNTIME_ROLE_CAPABILITIES = Object.freeze({
-  all: Object.freeze({
-    database: true,
-    model: true,
-    analysisModel: true,
-    replyModel: true,
-    directDelivery: true,
-    http: true,
-    conversationApi: true,
-    onebotIngress: true,
-    queueProducer: true,
-    requiresDistributedQueue: false,
-    replyWorker: true,
-    persistWorker: true,
-    scheduler: true,
-  }),
-  api: Object.freeze({
-    database: true,
-    model: true,
-    analysisModel: true,
-    replyModel: true,
-    directDelivery: false,
-    http: true,
-    conversationApi: true,
-    onebotIngress: false,
-    queueProducer: false,
-    requiresDistributedQueue: false,
-    replyWorker: false,
-    persistWorker: false,
-    scheduler: false,
-  }),
-  'reply-worker': Object.freeze({
-    database: true,
-    model: true,
-    analysisModel: true,
-    replyModel: true,
-    directDelivery: true,
-    http: false,
-    conversationApi: false,
-    onebotIngress: false,
-    queueProducer: false,
-    requiresDistributedQueue: true,
-    replyWorker: true,
-    persistWorker: false,
-    scheduler: false,
-  }),
-  'persist-worker': Object.freeze({
-    database: true,
-    model: false,
-    analysisModel: false,
-    replyModel: false,
-    directDelivery: false,
-    http: false,
-    conversationApi: false,
-    onebotIngress: false,
-    queueProducer: false,
-    requiresDistributedQueue: true,
-    replyWorker: false,
-    persistWorker: true,
-    scheduler: false,
-  }),
-  scheduler: Object.freeze({
-    database: true,
-    model: true,
-    analysisModel: true,
-    replyModel: false,
-    directDelivery: true,
-    http: false,
-    conversationApi: false,
-    onebotIngress: false,
-    queueProducer: false,
-    requiresDistributedQueue: false,
-    replyWorker: false,
-    persistWorker: false,
-    scheduler: true,
-  }),
-  'onebot-ingress': Object.freeze({
-    database: true,
-    model: true,
-    analysisModel: true,
-    replyModel: false,
-    directDelivery: false,
-    http: true,
-    conversationApi: false,
-    onebotIngress: true,
-    queueProducer: true,
-    requiresDistributedQueue: true,
-    replyWorker: false,
-    persistWorker: false,
-    scheduler: false,
-  }),
-});
-
-export function getRuntimeRoleCapabilities(role = 'all') {
-  const normalizedRole = String(role || 'all').trim().toLowerCase() || 'all';
-  const capabilities = RUNTIME_ROLE_CAPABILITIES[normalizedRole];
-  return capabilities ? { role: normalizedRole, ...capabilities } : null;
-}
-
 export const config = Object.freeze({
   nodeEnv: process.env.NODE_ENV || 'development',
-  port: readNumber('PORT', 3000),
-  yunoRole: readTrimmed('YUNO_ROLE', 'all').toLowerCase(),
+  port: readNumber('KOISHI_PORT', readNumber('PORT', 5140)),
+  koishiPort: readNumber('KOISHI_PORT', readNumber('PORT', 5140)),
+  yunoPluginMode: readEnum('YUNO_PLUGIN_MODE', ['active', 'shadow'], 'active'),
+  onebotEndpoint: normalizeBaseUrl(process.env.ONEBOT_ENDPOINT || ''),
+  onebotToken: readTrimmed('ONEBOT_TOKEN'),
+  onebotSecret: readTrimmed('ONEBOT_SECRET'),
+  koishiMongoUri: process.env.KOISHI_MONGODB_URI || '',
+  koishiConsoleEnabled: readBoolean('KOISHI_CONSOLE_ENABLED', true),
+  koishiConsoleAdmin: readTrimmed('KOISHI_CONSOLE_ADMIN'),
+  koishiConsolePassword: readTrimmed('KOISHI_CONSOLE_PASSWORD'),
   botExperienceMode: readTrimmed('BOT_EXPERIENCE_MODE', 'companion'),
   dailyMoodEnabled: readBoolean('BOT_DAILY_MOOD_ENABLED', true),
   dailyMoodSeed: readTrimmed('BOT_DAILY_MOOD_SEED', 'yuno-daily-mood-v1'),
@@ -232,8 +141,6 @@ export const config = Object.freeze({
   ttsApiKey: process.env.TTS_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY || '',
   ttsBaseUrl: normalizeBaseUrl(process.env.TTS_BASE_URL || defaultTtsBaseUrl),
   ttsModel: process.env.TTS_MODEL || defaultTtsModel,
-  napcatApi: normalizeBaseUrl(process.env.NAPCAT_API || ''),
-  napcatToken: process.env.NAPCAT_TOKEN || '',
   targetGroupId: process.env.TARGET_GROUP_ID ? String(process.env.TARGET_GROUP_ID) : '',
   adminQq: process.env.ADMIN_QQ ? String(process.env.ADMIN_QQ) : '',
   // SELF_QQ is the bot's own QQ number. It is used as a fallback when the
@@ -295,8 +202,6 @@ export const config = Object.freeze({
   maxActiveRemindersPerUser: readNumber('MAX_ACTIVE_REMINDERS_PER_USER', 20),
   maxActiveSubscriptionsPerUser: readNumber('MAX_ACTIVE_SUBSCRIPTIONS_PER_USER', 10),
   groupEventRetentionCount: readNumber('GROUP_EVENT_RETENTION_COUNT', 100),
-  onebotWebhookSecret: readTrimmed('ONEBOT_WEBHOOK_SECRET'),
-  webhookBodyLimit: readTrimmed('WEBHOOK_BODY_LIMIT', '128kb'),
   otlpEndpoint: process.env.OTLP_ENDPOINT || '',
   enableMetrics: readBoolean('ENABLE_METRICS', true),
   metricsPath: normalizeMetricsPath(process.env.METRICS_PATH || '/metrics'),
@@ -323,8 +228,8 @@ export const config = Object.freeze({
   memeAutoSendProbability: readProbability('MEME_AUTO_SEND_PROBABILITY', 0.25),
   memeProvider: readTrimmed('MEME_PROVIDER', 'local-cache').toLowerCase(),
   memeImportDir: readTrimmed('MEME_IMPORT_DIR', 'data/qq-favorite-memes'),
-  memeNapcatFavoritesCount: readNumber('MEME_NAPCAT_FAVORITES_COUNT', 48),
-  memeNapcatFavoritesSyncTtlMs: readNumber('MEME_NAPCAT_FAVORITES_SYNC_TTL_MS', 3600000),
+  memeFavoritesCount: readNumber('MEME_FAVORITES_COUNT', 48),
+  memeFavoritesSyncTtlMs: readNumber('MEME_FAVORITES_SYNC_TTL_MS', 3600000),
   memeVisionEnabled: readBoolean('MEME_VISION_ENABLED', true),
   memeStorageDir: process.env.MEME_STORAGE_DIR || 'data/memes',
   memeEnabledGroups: readJson('MEME_ENABLED_GROUPS', []),
@@ -350,42 +255,18 @@ export function describeHttpBaseUrlProblem(value) {
 }
 
 export function validateRuntimeConfig(runtimeConfig = config) {
-  const capabilities = getRuntimeRoleCapabilities(runtimeConfig.yunoRole);
-  if (!capabilities) {
-    throw new Error(`Unsupported YUNO_ROLE: ${runtimeConfig.yunoRole || ''}`);
-  }
-
-  const required = [];
-  if (capabilities.database) {
-    required.push(['MONGODB_URI', runtimeConfig.mongodbUri]);
-  }
-  if (capabilities.analysisModel) {
-    required.push(
-      ['LLM_API_KEY/OPENAI_API_KEY/SILICONFLOW_API_KEY/GEMINI_API_KEY', runtimeConfig.llmApiKey],
-      ['LLM_CHAT_MODEL', runtimeConfig.llmChatModel]
-    );
-  }
-  if (capabilities.replyModel) {
-    required.push(
-      ['REPLY_LLM_API_KEY/GEMINI_API_KEY/LLM_API_KEY', runtimeConfig.replyLlmApiKey],
-      ['REPLY_LLM_CHAT_MODEL/LLM_CHAT_MODEL', runtimeConfig.replyLlmChatModel]
-    );
-  }
-  if (capabilities.directDelivery) {
-    required.push(['NAPCAT_API', runtimeConfig.napcatApi]);
-  }
-  if (capabilities.requiresDistributedQueue) {
-    required.push(
-      ['ENABLE_QUEUE=true', runtimeConfig.enableQueue],
-      ['REDIS_URL', runtimeConfig.redisUrl]
-    );
-  }
-
+  const required = [
+    ['MONGODB_URI', runtimeConfig.mongodbUri],
+    ['LLM_API_KEY/OPENAI_API_KEY/SILICONFLOW_API_KEY/GEMINI_API_KEY', runtimeConfig.llmApiKey],
+    ['LLM_CHAT_MODEL', runtimeConfig.llmChatModel],
+    ['REPLY_LLM_API_KEY/GEMINI_API_KEY/LLM_API_KEY', runtimeConfig.replyLlmApiKey],
+    ['REPLY_LLM_CHAT_MODEL/LLM_CHAT_MODEL', runtimeConfig.replyLlmChatModel],
+  ];
   const missing = required.filter(([, value]) => !value).map(([name]) => name);
   if (missing.length > 0) {
-    throw new Error(`Missing required environment variables for YUNO_ROLE=${capabilities.role}: ${missing.join(', ')}`);
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
-  return capabilities;
+  return { role: 'koishi-embedded' };
 }
 
 export function isAdvancedGroup(groupId) {

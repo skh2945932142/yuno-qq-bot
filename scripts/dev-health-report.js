@@ -38,7 +38,7 @@ export function collectDevHealthSignals() {
     allowlistExpiresOn: allowlist.expiresOn || '',
     allowlistDaysLeft: allowlist.expiresOn ? daysUntil(allowlist.expiresOn) : null,
     todoCount: countMatches(files.filter((file) => /\.(js|md|yml|json)$/.test(file)), /\b(?:TODO|FIXME|HACK)\b/g),
-    docsMentionSecurity: /ONEBOT_WEBHOOK_SECRET|security:audit|METRICS_AUTH_TOKEN/.test(readme),
+    docsMentionSecurity: /ONEBOT_SECRET|METRICS_AUTH_TOKEN|security:audit/.test(readme),
     ciRunsSecurity: /security:audit/.test(ci) && /security:secrets/.test(ci),
   };
 }

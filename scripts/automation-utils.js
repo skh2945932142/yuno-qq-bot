@@ -7,7 +7,6 @@ export const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const SKIP_DIRS = new Set([
   '.git',
   'node_modules',
-  'deploy/astrbot/data',
   'reports',
 ]);
 

@@ -1,62 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildNapcatTargetPayload,
   normalizeImageMessage,
   sendReplyWithDeps,
   sendStructuredReplyWithDeps,
+  sendVoiceWithDeps,
 } from './src/sender.js';
 
-test('sender builds private and group NapCat payloads', () => {
-  assert.deepEqual(buildNapcatTargetPayload({ platform: 'QQ', chatType: 'private', chatId: '10001' }, []), {
-    action: 'send_private_msg',
-    payload: { user_id: 10001, message: [] },
-    target: { platform: 'qq', chatType: 'private', chatId: '10001' },
-  });
-  assert.deepEqual(buildNapcatTargetPayload({ chatType: 'group', chatId: '20002' }, []), {
-    action: 'send_group_msg',
-    payload: { group_id: 20002, message: [] },
-    target: { platform: 'qq', chatType: 'group', chatId: '20002' },
-  });
-});
-
 test('sender normalizes supported image forms and rejects empty forms', () => {
-  assert.deepEqual(normalizeImageMessage('https://example.invalid/a.png'), {
-    type: 'image', data: { file: 'https://example.invalid/a.png' },
-  });
-  assert.deepEqual(normalizeImageMessage({ file: 'file:///a.png' }), {
-    type: 'image', data: { file: 'file:///a.png' },
-  });
-  assert.deepEqual(normalizeImageMessage({ path: '/tmp/a.png' }), {
-    type: 'image', data: { file: '/tmp/a.png' },
-  });
-  assert.deepEqual(normalizeImageMessage({ url: 'https://example.invalid/b.png' }), {
-    type: 'image', data: { file: 'https://example.invalid/b.png' },
-  });
-  assert.deepEqual(normalizeImageMessage({ base64: 'YWJj' }), {
-    type: 'image', data: { file: 'base64://YWJj' },
-  });
+  assert.deepEqual(normalizeImageMessage('https://example.invalid/a.png'), { file: 'https://example.invalid/a.png' });
+  assert.deepEqual(normalizeImageMessage({ file: 'file:///a.png' }), { file: 'file:///a.png' });
+  assert.deepEqual(normalizeImageMessage({ path: '/tmp/a.png' }), { path: '/tmp/a.png' });
+  assert.deepEqual(normalizeImageMessage({ url: 'https://example.invalid/b.png' }), { url: 'https://example.invalid/b.png' });
+  assert.deepEqual(normalizeImageMessage({ base64: 'YWJj' }), { base64: 'YWJj' });
   assert.equal(normalizeImageMessage(null), null);
   assert.equal(normalizeImageMessage({}), null);
 });
 
-test('sendReplyWithDeps supports action-payload and payload-only fakes', async () => {
+test('sender delegates private and group text to the runtime delivery adapter', async () => {
   const calls = [];
-  await sendReplyWithDeps({ chatType: 'private', chatId: '10001' }, 'hello', {
-    postNapcat: async (action, payload, label) => calls.push([action, payload, label]),
-  });
-  await sendReplyWithDeps({ chatType: 'group', chatId: '20002' }, 'world', {
-    postNapcat: async (payload) => calls.push([payload]),
-  });
+  const deliveryAdapter = {
+    sendReply: async (target, text) => calls.push({ target, text }),
+  };
 
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0][0], 'send_private_msg');
-  assert.deepEqual(calls[0][1], { user_id: 10001, message: [{ type: 'text', data: { text: 'hello' } }] });
-  assert.equal(calls[1][0].group_id, 20002);
-  assert.equal(calls[1][0].message[0].data.text, 'world');
+  await sendReplyWithDeps({ platform: 'QQ', chatType: 'private', chatId: '10001' }, 'hello', { deliveryAdapter });
+  await sendReplyWithDeps({ chatType: 'group', chatId: '20002' }, 'world', { deliveryAdapter });
+
+  assert.deepEqual(calls, [
+    { target: { platform: 'qq', chatType: 'private', chatId: '10001' }, text: 'hello' },
+    { target: { platform: 'qq', chatType: 'group', chatId: '20002' }, text: 'world' },
+  ]);
 });
 
-test('sendStructuredReplyWithDeps preserves text and image order', async () => {
+test('sender preserves filtered structured output order for the delivery adapter', async () => {
   const requests = [];
   const sent = await sendStructuredReplyWithDeps({ chatType: 'group', chatId: '20002' }, [
     null,
@@ -66,23 +42,42 @@ test('sendStructuredReplyWithDeps preserves text and image order', async () => {
     { type: 'text', text: '' },
     { type: 'text', text: 'last' },
   ], {
-    postNapcat: async (payload) => requests.push(payload),
+    deliveryAdapter: {
+      sendStructuredReply: async (target, outputs) => requests.push({ target, outputs }),
+    },
   });
 
-  assert.equal(sent, true);
-  assert.equal(requests.length, 1);
-  assert.deepEqual(requests[0].message, [
-    { type: 'text', data: { text: 'first' } },
-    { type: 'image', data: { file: 'base64://aGk=' } },
-    { type: 'text', data: { text: 'last' } },
-  ]);
+  assert.equal(sent, 1);
+  assert.deepEqual(requests, [{
+    target: { platform: 'qq', chatType: 'group', chatId: '20002' },
+    outputs: [
+      { type: 'text', text: 'first' },
+      { type: 'image', image: { base64: 'aGk=' } },
+      { type: 'text', text: 'last' },
+    ],
+  }]);
 });
 
-test('sendStructuredReplyWithDeps does not post an empty structured reply', async () => {
-  let postCount = 0;
+test('sender does not invoke the adapter for an empty structured reply', async () => {
+  let calls = 0;
   const sent = await sendStructuredReplyWithDeps({ chatType: 'group', chatId: '20002' }, [null, { type: 'image', image: {} }], {
-    postNapcat: async () => { postCount += 1; },
+    deliveryAdapter: { sendStructuredReply: async () => { calls += 1; } },
   });
+
   assert.equal(sent, false);
-  assert.equal(postCount, 0);
+  assert.equal(calls, 0);
+});
+
+test('sender delegates voice and fails clearly without a delivery adapter', async () => {
+  const voices = [];
+  await sendVoiceWithDeps({ chatType: 'private', chatId: '10001' }, Buffer.from('audio'), {
+    deliveryAdapter: { sendVoice: async (target, audio) => voices.push({ target, audio }) },
+  });
+  assert.equal(voices.length, 1);
+  assert.equal(voices[0].target.chatType, 'private');
+
+  await assert.rejects(
+    () => sendReplyWithDeps({ chatType: 'group', chatId: '20002' }, 'missing adapter'),
+    (error) => error.code === 'YUNO_DELIVERY_UNAVAILABLE'
+  );
 });

@@ -1,21 +1,20 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import axios from 'axios';
 import { config } from './config.js';
 import { isDbReady } from './db.js';
 import { logger } from './logger.js';
 import { MemeAsset } from './models.js';
-import { withRetry } from './retry.js';
+import { getRuntimeServices } from './runtime-services.js';
 
 export const GLOBAL_MEME_CHAT_ID = '__global__';
 export const MEME_PROVIDER_LOCAL_CACHE = 'local-cache';
-export const MEME_PROVIDER_NAPCAT_FAVORITES = 'napcat-favorites';
+export const MEME_PROVIDER_ONEBOT_FAVORITES = 'onebot-favorites';
 
 const knownProviders = new Set([
   MEME_PROVIDER_LOCAL_CACHE,
-  MEME_PROVIDER_NAPCAT_FAVORITES,
+  MEME_PROVIDER_ONEBOT_FAVORITES,
 ]);
-const napcatFavoriteSyncState = new Map();
+const onebotFavoriteSyncState = new Map();
 
 function normalizeProviderName(value) {
   const normalized = String(value || MEME_PROVIDER_LOCAL_CACHE).trim().toLowerCase();
@@ -30,7 +29,7 @@ function normalizeLimit(value, fallback = 8) {
   return Math.min(50, Math.max(1, Math.round(parsed)));
 }
 
-function normalizeNapcatCount(value, fallback = 48) {
+function normalizeFavoriteCount(value, fallback = 48) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return fallback;
@@ -109,36 +108,19 @@ export function mergeMemeCandidates(...candidateLists) {
 }
 
 export function resetMemeProviderState() {
-  napcatFavoriteSyncState.clear();
+  onebotFavoriteSyncState.clear();
 }
 
-function buildNapcatHeaders() {
-  return config.napcatToken ? { Authorization: config.napcatToken } : {};
-}
-
-async function postNapcatAction(action, payload = {}, deps = {}) {
-  if (typeof deps.postNapcat === 'function') {
-    return deps.postNapcat(action, payload, `napcat ${action}`);
+async function callOnebotAction(action, payload = {}, deps = {}) {
+  if (typeof deps.callAction === 'function') {
+    return deps.callAction(action, payload);
   }
 
-  if (!config.napcatApi) {
-    throw new Error('NAPCAT_API is not configured');
+  const adapter = deps.protocolAdapter || getRuntimeServices().protocolAdapter;
+  if (!adapter || typeof adapter.callAction !== 'function') {
+    throw new Error('YUNO_PROTOCOL_UNAVAILABLE');
   }
-
-  return withRetry(
-    () => axios.post(`${config.napcatApi}/${action}`, payload, {
-      headers: buildNapcatHeaders(),
-      maxRedirects: 0,
-      timeout: config.requestTimeoutMs,
-    }),
-    {
-      retries: config.retryAttempts,
-      delayMs: config.retryDelayMs,
-      category: 'meme-provider',
-      label: `napcat ${action}`,
-      logger,
-    }
-  );
+  return adapter.callAction(action, payload);
 }
 
 function findFirstArray(value) {
@@ -159,7 +141,7 @@ function findFirstArray(value) {
   return [];
 }
 
-function extractNapcatList(response) {
+function extractOnebotList(response) {
   return findFirstArray(response);
 }
 
@@ -224,25 +206,25 @@ function deriveTagsFromFavorite(item, source) {
   const sourceName = path.basename(sourcePath).replace(/\.[^.]+$/, '');
   return normalizeStringList([
     'qq-favorite',
-    'napcat-favorite',
+    'onebot-favorite',
     label,
     ...String(sourceName || '').split(/[\\/_.\-\s()[\]{}]+/),
   ]);
 }
 
-function buildNapcatFavoriteAssetId(item, source) {
+function buildOnebotFavoriteAssetId(item, source) {
   if (item && typeof item === 'object') {
     const directId = String(item.md5 || item.file_md5 || item.fileMd5 || item.id || item.file_id || item.fileId || '').trim();
     if (directId) {
-      return `napcatfav:${directId}`;
+      return `onebotfav:${directId}`;
     }
   }
 
   const hash = createHash('sha256').update(String(source || '')).digest('hex');
-  return `napcatfav:${hash}`;
+  return `onebotfav:${hash}`;
 }
 
-function buildNapcatFavoritePayload(item, now = new Date()) {
+function buildOnebotFavoritePayload(item, now = new Date()) {
   const source = pickFavoriteSource(item);
   if (!source) {
     return null;
@@ -255,13 +237,13 @@ function buildNapcatFavoritePayload(item, now = new Date()) {
     ? 'QQ favorite meme'
     : `QQ favorite meme: ${tags.join(', ')}`;
   const payload = {
-    assetId: buildNapcatFavoriteAssetId(item, source),
+    assetId: buildOnebotFavoriteAssetId(item, source),
     platform: 'qq',
     chatId: GLOBAL_MEME_CHAT_ID,
     userId: '',
     sourceMessageId: '',
     type: 'image',
-    origin: 'napcat_favorite_cache',
+    origin: 'onebot_favorite_cache',
     quoteText: '',
     imageUrl: isRemote ? sourceForStorage : '',
     storagePath: isRemote ? '' : sourceForStorage,
@@ -281,7 +263,7 @@ function buildNapcatFavoritePayload(item, now = new Date()) {
   return payload;
 }
 
-async function upsertNapcatFavoriteAsset(payload, model) {
+async function upsertOnebotFavoriteAsset(payload, model) {
   const updates = { ...payload };
   delete updates.disabled;
   delete updates.usageCount;
@@ -319,18 +301,11 @@ async function upsertNapcatFavoriteAsset(payload, model) {
   throw new Error('Meme provider model does not support favorite cache upsert');
 }
 
-async function fetchNapcatFavorites(count, deps = {}) {
-  const customFaceResponse = await postNapcatAction('fetch_custom_face', { count }, deps);
-  const customFaces = extractNapcatList(customFaceResponse);
-  if (customFaces.length > 0) {
-    return customFaces;
-  }
-
-  const collectionResponse = await postNapcatAction('get_collection_list', {}, deps);
-  return extractNapcatList(collectionResponse);
+async function fetchOnebotFavorites(count, deps = {}) {
+  return callOnebotAction('fetch_custom_face', { count }, deps);
 }
 
-export async function syncNapcatFavoriteMemeCache(options = {}, deps = {}) {
+export async function syncOnebotFavoriteMemeCache(options = {}, deps = {}) {
   const model = deps.model || deps.memeModel || MemeAsset;
   const hasInjectedModel = Boolean(deps.model || deps.memeModel);
   if (!hasInjectedModel && !isDbReady()) {
@@ -341,38 +316,38 @@ export async function syncNapcatFavoriteMemeCache(options = {}, deps = {}) {
     return { enabled: false, reason: 'model-not-supported', count: 0 };
   }
 
-  const count = normalizeNapcatCount(options.count ?? deps.count ?? config.memeNapcatFavoritesCount, 48);
-  const ttlMs = normalizeTtlMs(options.syncTtlMs ?? deps.syncTtlMs ?? config.memeNapcatFavoritesSyncTtlMs);
+  const count = normalizeFavoriteCount(options.count ?? deps.count ?? config.memeFavoritesCount, 48);
+  const ttlMs = normalizeTtlMs(options.syncTtlMs ?? deps.syncTtlMs ?? config.memeFavoritesSyncTtlMs);
   const nowMs = Number(options.nowMs ?? deps.nowMs ?? Date.now());
-  const syncKey = 'napcat-favorites';
-  const current = napcatFavoriteSyncState.get(syncKey);
+  const syncKey = 'onebot-favorites';
+  const current = onebotFavoriteSyncState.get(syncKey);
   if (!options.force && current && ttlMs > 0 && nowMs - current.syncedAt < ttlMs) {
     return { enabled: true, reason: 'fresh-cache', count: current.count };
   }
 
   let items = [];
   try {
-    items = await fetchNapcatFavorites(count, deps);
+    items = await fetchOnebotFavorites(count, deps);
   } catch (error) {
-    logger.warn('meme', 'NapCat favorite meme sync failed', {
+    logger.warn('meme', 'OneBot favorite meme sync failed', {
       message: error.message,
     });
-    napcatFavoriteSyncState.set(syncKey, { syncedAt: nowMs, count: 0 });
-    return { enabled: false, reason: 'napcat-failed', count: 0 };
+    onebotFavoriteSyncState.set(syncKey, { syncedAt: nowMs, count: 0 });
+    return { enabled: false, reason: 'onebot-failed', count: 0 };
   }
 
   const now = new Date(nowMs);
   let upserted = 0;
   for (const item of items) {
-    const payload = buildNapcatFavoritePayload(item, now);
+    const payload = buildOnebotFavoritePayload(item, now);
     if (!payload) {
       continue;
     }
-    await upsertNapcatFavoriteAsset(payload, model);
+    await upsertOnebotFavoriteAsset(payload, model);
     upserted += 1;
   }
 
-  napcatFavoriteSyncState.set(syncKey, { syncedAt: nowMs, count: upserted });
+  onebotFavoriteSyncState.set(syncKey, { syncedAt: nowMs, count: upserted });
   return { enabled: true, reason: 'synced', count: upserted };
 }
 
@@ -409,10 +384,10 @@ export async function getMemeCandidates({
   provider = '',
 } = {}, deps = {}) {
   const providerName = normalizeProviderName(provider || deps.provider || config.memeProvider);
-  if (providerName === MEME_PROVIDER_NAPCAT_FAVORITES) {
-    await syncNapcatFavoriteMemeCache({
-      count: deps.count ?? config.memeNapcatFavoritesCount,
-      syncTtlMs: deps.syncTtlMs ?? config.memeNapcatFavoritesSyncTtlMs,
+  if (providerName === MEME_PROVIDER_ONEBOT_FAVORITES) {
+    await syncOnebotFavoriteMemeCache({
+      count: deps.count ?? config.memeFavoritesCount,
+      syncTtlMs: deps.syncTtlMs ?? config.memeFavoritesSyncTtlMs,
       nowMs: deps.nowMs,
     }, deps);
     return getLocalCacheMemeCandidates({ chatId, limit }, deps);

@@ -1,416 +1,56 @@
-﻿# Yuno QQ Bot
+# Yuno QQ Bot
 
-由乃人格驱动的 QQ Bot。当前仓库已经收口成一条统一主线：OneBot/NapCat 事件进入后，走同一份触发分析、记忆、情绪、RAG、工具路由和回复格式化流程；AstrBot 或其他外部编排层也通过同一个 `Yuno Core` 复用这套人格核心。
+Yuno runs as one Koishi + Yuno Node.js application. Koishi is the only OneBot 11 client and QQ delivery boundary; Yuno remains the persona, memory, RAG, tool, queue, scheduler, and final reply core.
 
-## 这是什么
+## Architecture
 
-这个项目现在负责三件事：
+~~~text
+QQ <-> LLBot or NapCat (OneBot 11) <-> Koishi + Yuno <-> MongoDB
+                                             <-> Qdrant (optional)
+                                             <-> Redis (optional)
+~~~
 
-- 在 QQ 群聊和私聊里接收并归一化消息事件
-- 基于触发规则、记忆、情绪、知识库和工具结果生成由乃风格回复
-- 为 AstrBot、自动化任务、群运营能力和表情包能力提供统一的人格化出口
+There is no AstrBot runtime, Koishi-to-Yuno HTTP bridge, standalone Yuno HTTP service, or direct Yuno OneBot sender.
 
-主设计原则只有一条：
+## Message Flow
 
-- 外部能力负责拿结果，最终怎么说都交给 Yuno Core
+1. The protocol service posts a OneBot event to Koishi at /onebot.
+2. Koishi creates a Session and runs explicit command handlers before Yuno.
+3. The Yuno plugin maps the Session with adaptKoishiSession().
+4. runYunoConversation() performs trigger policy, memory, RAG, tools, generation, and formatting.
+5. The Delivery Ledger claims delivery and the Koishi Delivery Adapter sends through SELF_QQ.
+6. Persistence continues through the in-process queue when enabled.
 
-## 当前运行架构
+Scheduled messages use the same Yuno workflow and Delivery Adapter.
 
-```text
-OneBot / NapCat
-  └─ src/index.js
-       └─ src/bootstrap-phase1.js
-            └─ src/message-workflow.js
-                 ├─ src/message-analysis.js
-                 ├─ src/task-router.js
-                 ├─ src/emotion-engine.js
-                 ├─ src/prompt-builder.js
-                 ├─ src/reply-length.js
-                 ├─ src/query-tools.js
-                 └─ src/yuno-formatter.js
+## Setup
 
-AstrBot / 外部编排
-  └─ src/yuno-core.js
-       └─ src/message-workflow.js
-```
-
-## 现在具备的能力
-
-- OneBot 群聊 / 私聊统一入站
-- 显式触发群聊回复：`@bot`、关键词、`/command`、戳一戳 bot 本体
-- 短期记忆、长期画像、关系状态、情绪状态
-- Qdrant 检索增强生成（RAG）
-- BullMQ / inline 双模式队列执行
-- 群报告、活跃榜、关键词监控、提醒、订阅
-- AstrBot 同进程接入接口
-- 表情包一期：素材收集、检索、单条仿聊天截图生成
-- `/health`、`/ready`、`/metrics`、`doctor`、`smoke`
-
-## 快速运行
-
-```bash
-npm install
-npm run doctor
-npm run smoke
+~~~powershell
+npm ci
+Copy-Item env.server.example .env
 npm start
-```
+~~~
 
-如果你是第一次启用知识库，还要再跑一次：
+Configure SELF_QQ, ADMIN_QQ, ONEBOT_ENDPOINT, ONEBOT_TOKEN, ONEBOT_SECRET, KOISHI_MONGODB_URI, MONGODB_URI, console credentials, metrics token, and model credentials. Use separate koishi and yuno MongoDB databases.
 
-```bash
-npm run kb:sync
-```
+Start with YUNO_PLUGIN_MODE=shadow. Shadow mode only validates Session mapping; it starts no Yuno workers or scheduler, calls no LLM, sends no QQ messages, and writes no memory. After validation set YUNO_PLUGIN_MODE=active.
 
-如果你要把 QQ 账号里已添加/已导出的收藏表情接入自动跟发，先把图片放到 `MEME_IMPORT_DIR`（默认 `data/qq-favorite-memes`），再执行：
+## Operations
 
-```bash
-npm run meme:import
-```
+- GET /health: liveness.
+- GET /ready: runtime, MongoDB, configured OneBot bot, queue, and scheduler readiness. Qdrant or voice failure is reported as degraded rather than blocking text chat.
+- GET /metrics: requires x-yuno-metrics-token.
+- /koishi status: restricted to ADMIN_QQ.
+- Production uses one application replica. Redis can back BullMQ, but workers stay in this process.
 
-导入会把图片缓存为全局 `MemeAsset`（`chatId="__global__"`），`assetId` 使用文件内容 SHA-256（`qqfav:<hash>`）去重；同一文件重复导入会更新元数据，不会重复创建。可选 `meme-manifest.json` 支持按相对路径覆盖 `tags`、`semanticTags`、`caption`、`usageContext`、`emotion`、`safetyStatus` 和 `disabled`。
+Configure the protocol event callback as http://<koishi-host>:5140/onebot. ONEBOT_ENDPOINT is the protocol-side HTTP API used for actions and QQ favorite face synchronization.
 
-如果要直接读取 NapCat 当前登录 QQ 账号里的收藏/自定义表情，把 provider 切到：
+## Testing
 
-```env
-MEME_PROVIDER=napcat-favorites
-MEME_NAPCAT_FAVORITES_COUNT=48
-MEME_NAPCAT_FAVORITES_SYNC_TTL_MS=3600000
-```
-
-`napcat-favorites` 会调用 NapCat 的 `fetch_custom_face` 拉取自定义表情，空结果时再尝试 `get_collection_list`，然后缓存成全局 `MemeAsset` 继续复用语境跟发逻辑。缓存 TTL 内不会重复拉取。
-
-## 关键环境变量
-
-完整的变量分类、优先级、默认值和 Zeabur 清理记录见 [docs/environment-variables.md](./docs/environment-variables.md)。生产环境不要把所有可选变量全部复制进去，只配置必需项和确实需要覆盖的默认值。
-
-必填：
-
-- `MONGODB_URI`
-- `LLM_API_KEY` 或 `OPENAI_API_KEY`
-- `LLM_CHAT_MODEL`
-- `REPLY_LLM_API_KEY`
-- `REPLY_LLM_BASE_URL`
-- `REPLY_LLM_CHAT_MODEL`
-- `NAPCAT_API`
-
-常用可选项：
-
-- `LLM_BASE_URL`
-- `EMBEDDING_API_KEY`
-- `EMBEDDING_BASE_URL`
-- `EMBEDDING_MODEL`
-- `TARGET_GROUP_ID`
-- `ADMIN_QQ`
-- `SELF_QQ`
-- `REQUEST_TIMEOUT_MS`
-- `RETRY_ATTEMPTS`
-- `RETRY_DELAY_MS`
-- `MODEL_CIRCUIT_FAILURE_THRESHOLD`
-- `MODEL_CIRCUIT_OPEN_MS`
-- `REPLY_TIME_BUDGET_MS`
-- `REPLY_PRIMARY_TIMEOUT_MS`
-- `REPLY_HARD_TIMEOUT_MS`
-- `EXTERNAL_TOOL_TIMEOUT_MS`
-- `MODEL_FALLBACK_CHAT_MODEL`
-- `CHAT_FOLLOWUP_RATE_PRIVATE`
-- `CHAT_FOLLOWUP_RATE_GROUP`
-- `CHAT_STYLE_REPEAT_GUARD`
-- `CHAT_ELLIPSIS_LIMIT`
-
-默认策略（2026-07）：
-
-- `REQUEST_TIMEOUT_MS` 默认 `60000`（60 秒），降低慢模型被过早超时的概率
-- `REPLY_PRIMARY_TIMEOUT_MS` 默认 `14000`（14 秒），只限制主回复模型，超时后为快速备用模型保留预算
-- `REPLY_HARD_TIMEOUT_MS` 默认 `22000`（22 秒），限制主模型、备用模型和回复质量处理的总预算
-- `REPLY_TIME_BUDGET_MS` 默认 `0`，表示使用 `REPLY_HARD_TIMEOUT_MS`；如果显式设为大于 `0`，则覆盖硬上限
-- 模型请求超时会主动取消底层 HTTP 请求，避免已经降级后仍占用连接和上游额度
-
-语音相关：
-
-- `ENABLE_VOICE`
-- `TTS_API_KEY`
-- `TTS_BASE_URL`
-- `TTS_MODEL`
-- `TTS_VOICE_DESIGN`：`mimo-v2.5-tts-voicedesign` 使用
-- `TTS_VOICE` 或 `YUNO_VOICE_URI`：仅预设 voice 模型使用
-- `VOICE_REPLY_MODE`
-- `VOICE_REPLY_COOLDOWN_MS`
-- `VOICE_REPLY_MAX_CHARS`
-- `VOICE_REPLY_ON_USER_RECORD`
-- `FFMPEG_PATH`
-
-语音回复策略：
-
-- `VOICE_REPLY_MODE=auto` 是默认策略：模型可建议语音，但最终会由代码结合场景、长度、冷却和用户是否发语音裁决
-- `VOICE_REPLY_MODE=model` 只采纳模型的 `sendVoice=true`
-- `VOICE_REPLY_MODE=force` 在允许场景里尽量发语音，仍会受长度和冷却保护
-- `VOICE_REPLY_MODE=off` 关闭自动语音裁决
-- `VOICE_REPLY_MAX_CHARS` 控制可朗读文本长度，长知识答复会保留文字不转 TTS
-- `VOICE_REPLY_ON_USER_RECORD=true` 时，用户发语音后 bot 会更倾向用短语音补充回复；当前不会自动 ASR 转写用户语音
-
-检索相关：
-
-- `EMBEDDING_API_KEY`
-- `EMBEDDING_BASE_URL`
-- `EMBEDDING_MODEL`（默认 `text-embedding-3-small`）
-- `QDRANT_URL`
-- `QDRANT_API_KEY`
-- `QDRANT_COLLECTION`
-- `QDRANT_TOP_K`（默认 `4`）
-- `QDRANT_MIN_SCORE`（默认 `0.25`）
-- `QDRANT_CHAR_LIMIT`
-- `KNOWLEDGE_QUERY_CACHE_TTL_MS`
-
-队列相关：
-
-- `YUNO_ROLE`（默认 `all`）
-- `ENABLE_QUEUE`
-- `REDIS_URL`
-- `REPLY_QUEUE_NAME`
-- `PERSIST_QUEUE_NAME`
-- `QUEUE_RETRY_ATTEMPTS`
-- `QUEUE_BACKOFF_MS`
-- `QUEUE_CONCURRENCY_DEFAULT`
-- `QUEUE_CONCURRENCY_REPLY`
-- `QUEUE_CONCURRENCY_PERSIST`
-- `QUEUE_CONNECT_TIMEOUT_MS`
-- `AUTOMATION_TASK_CONCURRENCY`
-- `SCHEDULER_TASK_LOCK_MS`
-- `GROUP_EVENT_RETENTION_COUNT`
-
-观测相关：
-
-- `ENABLE_METRICS`
-- `METRICS_PATH`
-- `OTLP_ENDPOINT`
-- `LOG_LEVEL`
-- `TRACE_SAMPLE_RATE`
-
-个性化与功能开关：
-
-- `BOT_EXPERIENCE_MODE`
-- `TRIGGER_POLICY_JSON`
-- `TOOL_CONFIG_JSON`
-- `SPECIAL_USERS_JSON`
-- `MEMORY_EXTRACTION_ENABLED`
-- `MEMORY_SUMMARY_MODEL`
-- `MAX_ACTIVE_REMINDERS_PER_USER`
-- `MAX_ACTIVE_SUBSCRIPTIONS_PER_USER`
-- `MEME_ENABLED`
-- `MEME_AUTO_COLLECT`
-- `MEME_AUTO_SEND`
-- `MEME_AUTO_SEND_MODE`
-- `MEME_AUTO_SEND_COOLDOWN_MS`
-- `MEME_AUTO_SEND_MIN_SCORE`
-- `MEME_AUTO_SEND_MAX_PER_HOUR`
-- `MEME_AUTO_SEND_PROBABILITY`
-- `MEME_PROVIDER`
-- `MEME_IMPORT_DIR`
-- `MEME_NAPCAT_FAVORITES_COUNT`
-- `MEME_NAPCAT_FAVORITES_SYNC_TTL_MS`
-- `MEME_VISION_ENABLED`
-- `MEME_STORAGE_DIR`
-- `MEME_ENABLED_GROUPS`
-- `MEME_OPT_OUT_USERS`
-- `MEME_REQUIRE_ADMIN_FOR_AUTO_MODE`
-
-外部增强相关：
-
-- `VISION_API_KEY`
-- `VISION_BASE_URL`
-- `VISION_MODEL`
-- `OCR_API_KEY`
-- `OCR_BASE_URL`
-- `SEARCH_API_KEY`
-- `SEARCH_BASE_URL`
-
-## 部署模式
-
-### 1. 服务器宿主机直接运行
-
-如果你是在 Linux 服务器上直接跑 `node src/index.js` 或 `npm start`，从 [env.server.example](./env.server.example) 开始。
-
-这个模式下要特别注意：
-
-- `MONGODB_URI` 必须填服务器能直接访问到的地址，不要保留 Docker 内部服务名
-- 文本链路建议先跑通，语音默认保持关闭；只有在显式设置 `ENABLE_VOICE=true` 后，`FFMPEG_PATH` 才需要指向真实存在的 ffmpeg，可执行文件通常是 `/usr/bin/ffmpeg`
-- `SELF_QQ` 最好显式填写 bot 自己的 QQ 号，避免上游 notice 缺字段时无法正确识别 @ 与 poke 目标
-- 检索不是默认开启的；只有在填好 `QDRANT_URL`、`QDRANT_COLLECTION` 并执行 `npm run kb:sync` 之后，RAG 才会真正参与回复
-- `EMBEDDING_BASE_URL` 必须指向支持 OpenAI-compatible `/v1/embeddings` 的服务；如果聊天模型和 embedding 不在同一个 provider，不要只依赖 `LLM_BASE_URL`
-
-### 2. Docker / Compose 同网段运行
-
-如果 Node、MongoDB、NapCat、Qdrant 都在同一个容器网络里，从 [env.docker.example](./env.docker.example) 开始。
-
-这个模式下可以使用 `mongo`、`qdrant` 之类的服务名，但前提是 Node 进程真的运行在同一张容器网络里。
-
-### 3. Zeabur 模板部署
-
-Zeabur 上以服务的 `Variables` 页面为准，不要只看仓库里的 `.env.example`。改完变量后需要重新部署 bot 服务。
-
-推荐先确认这些值：
-
-```env
-EMBEDDING_BASE_URL=https://api.openai.com/v1
-EMBEDDING_API_KEY=<your-embedding-api-key>
-EMBEDDING_MODEL=text-embedding-3-small
-QDRANT_URL=http://<qdrant-service-host>:6333
-QDRANT_COLLECTION=qq_bot_knowledge
-QDRANT_API_KEY=
-QDRANT_MIN_SCORE=0.25
-```
-
-如果使用 Qdrant Cloud，则通常是：
-
-```env
-QDRANT_URL=https://<your-qdrant-cloud-endpoint>
-QDRANT_COLLECTION=qq_bot_knowledge
-QDRANT_API_KEY=<your-api-key>
-```
-
-`QDRANT_URL` 必须是完整 `http://` 或 `https://` URL。只填 `qdrant:6333`、collection 名、空值或带错引号，启动时会显示 `invalid-url:missing-protocol`；云端 key 错误通常会显示 `unreachable:401`。修好后再运行 `npm run kb:sync`。
-
-如果更换过 `EMBEDDING_MODEL`，旧 collection 的向量维度可能和新模型不一致；`npm run kb:sync` 会在 upsert 前报出维度不匹配。确认不需要保留旧向量后，删除或重建对应 Qdrant collection，再重新同步。
-
-### 4. Webhook 与指标安全
-
-如果 `/onebot` 会暴露到公网，必须配置共享密钥：
-
-```env
-ONEBOT_WEBHOOK_SECRET=<long-random-secret>
-WEBHOOK_BODY_LIMIT=128kb
-```
-
-NapCat 或反向代理需要给请求加上 `x-yuno-webhook-secret: <long-random-secret>`，也可以用 `Authorization: Bearer <long-random-secret>`。生产模式下未配置 `ONEBOT_WEBHOOK_SECRET` 会直接拒绝 `/onebot` 请求；开发模式保留本地兼容。
-
-如果开启 `/metrics`，建议同时配置：
-
-```env
-METRICS_AUTH_TOKEN=<long-random-token>
-```
-
-访问指标时使用 `Authorization: Bearer <long-random-token>`。`METRICS_PATH` 只支持类似 `/metrics`、`/internal/metrics` 这样的简单路径，不支持通配符或正则路由。
-
-## Special Users 配置示例
-
-`SPECIAL_USERS_JSON` 用来按 `userId` 绑定专属人格策略。示例：
-
-```json
-[
-  {
-    "userId": "123456789",
-    "label": "Scathach",
-    "personaMode": "exclusive_adoration",
-    "toneMode": "flirtatious_favorite",
-    "affectionFloor": 88,
-    "addressUserAs": "斯卡哈",
-    "addressBotAs": "由乃",
-    "knowledgeTags": ["persona", "special_user:scathach", "scathach"],
-    "triggerKeywords": ["教导我", "徒弟", "只看我", "别看别人", "师父"],
-    "memorySeeds": ["约定", "教导", "由乃会记住斯卡哈的一切"],
-    "groupStyle": "群聊里更克制地护短、偏爱和吃醋，不刷屏。",
-    "privateStyle": "私聊里更黏人、更暧昧，喜欢引用记忆和约定，但不进入现实威胁。"
-  }
-]
-```
-
-## 常见检查命令
-
-```bash
-npm test
-npm run eval
-npm run kb:sync
+~~~powershell
 npm run doctor
-npm run smoke
 npm run smoke:mock
-npm run benchmark:reply
-npm run eval:report
-```
+npm test
+~~~
 
-用途分别是：
-
-- `npm test`：跑当前主线和阶段性回归测试
-- `npm run eval`：跑轻量行为评估
-- `npm run eval:report`：跑行为评估并生成 `reports/eval-experience.md` 体验评分卡
-- `npm run kb:sync`：把 `knowledge/` 里的 Markdown 切块、向量化并同步到 Qdrant
-- `npm run doctor`：检查 Mongo、NapCat、LLM、Qdrant、Redis、FFmpeg 是否真的可达；语音关闭和未配置检索显示 `skip` 属于正常状态
-- `npm run smoke`：走真实 `runYunoConversation(...)` 主链，但不外发 QQ、不写会话状态
-- `npm run smoke:mock`：跑不依赖外部服务的轻量 smoke，适合 CI 快速兜底
-- `npm run benchmark:reply`：本地基准脚本，输出 group/private/knowledge 的 P50/P95
-- `npm run automation:ideas`：根据 eval、prompt、命令和 TODO 信号生成体验改进创意
-- `npm run automation:dev-health`：生成开发效率、CI、安全和技术债健康报告
-
-## AstrBot 接入
-
-- `src/yuno-core.js` 是对外稳定入口
-- `src/astrbot-yuno-plugin.js` 是最小 AstrBot 风格包装层
-- `src/astrbot-plugin-router.js` 负责同进程插件路由
-- `deploy/astrbot/` 只放部署模板和接入说明，不 vendoring AstrBot 上游源码
-
-推荐边界：
-
-- AstrBot 负责插件、权限、编排、外部能力
-- Yuno Core 负责触发分析、记忆、情绪、检索、专属用户策略和最终回复风格
-
-## 群聊触发规则
-
-群聊默认是保守模式，只有这些情况才会触发回复：
-
-- 明确 `@bot`
-- 命中触发关键词
-- 显式 `/command` 命令
-- QQ 戳一戳，且目标确实是 bot 本体
-
-私聊保持默认可回复模式，除非你自己通过策略配置覆盖。
-
-## 表情包一期
-
-当前表情包能力拆成了几层：
-
-- 收集：群图片 / 素材入库
-- 检索：按标签、关键词、人物和情绪召回
-- 生成：单条消息仿聊天截图 SVG
-- 决策：判断是收藏、发库存、现做一张，还是这次不发图
-
-默认情况下，自动发图是关闭的。建议先用 `MEME_AUTO_SEND_MODE=suggest` 观察日志和报告，只记录“这轮适合哪张图”但不真正发图；确认匹配质量后，再把 `MEME_AUTO_SEND=true` 和 `MEME_AUTO_SEND_MODE=auto` 打开，并配好 `MEME_ENABLED_GROUPS`、冷却时间和 opt-out 规则。
-
-## 用户文案规范
-
-所有用户可见文案现在都按同一套规则收口，详细约定见 [docs/copy-style.md](./docs/copy-style.md)。
-
-当前默认风格：
-
-- 中文主句，必要技术名词保留英文
-- 由乃视角，轻微观察感和偏爱感
-- 不走控制台面板腔，不用冷冰冰的系统公告口吻
-- 结果要清楚，但不要把气氛全打碎
-
-## 运行与运维说明
-
-`YUNO_ROLE=all` 保留单进程部署，也可以用同一份代码按职责启动：
-
-| 角色 | 职责 | 是否需要 NapCat | 是否强制 Redis |
-|---|---|---:|---:|
-| `api` | `/api/yuno/conversation` capture API | 否 | 否 |
-| `onebot-ingress` | `/onebot` 接入、触发判断、入队 | 否 | 是 |
-| `reply-worker` | 回复生成与 QQ 发送 | 是 | 是 |
-| `persist-worker` | 画像、长期记忆和向量等后处理 | 否 | 是 |
-| `scheduler` | 定时互动、提醒和订阅任务 | 是 | 否 |
-| `all` | 上述职责合并运行 | 是 | 否，可降级 inline |
-
-`api` 角色只允许 capture，拒绝 `responseMode=send`；`onebot-ingress` 会把普通回复和自动化输出都交给 reply queue，不持有 NapCat 发送凭据。拆分角色时，`onebot-ingress`、`reply-worker` 和 `persist-worker` 必须配置 `ENABLE_QUEUE=true` 与 `REDIS_URL`。
-
-- 检索是正式功能，不是占位边界。只有在 `QDRANT_URL` 和 `QDRANT_COLLECTION` 都配置后，并且执行过 `npm run kb:sync`，它才会真正启用。
-- 知识库同步会跳过 `knowledge/README.md`，并把 Markdown 文件头部的 `Tags:`、`Priority:` 继承到子章节；占位片段不会入库。
-- 如果 `ENABLE_QUEUE=false`，或者 BullMQ / Redis 不可用，系统会退回 inline 模式，但队列接口不变。
-- `/ready` 用于检查数据库和队列就绪情况，并返回 voice/qdrant 的降级原因；`/metrics` 暴露 Prometheus 风格指标。
-- 当前唯一活跃运行主线是 `src/message-workflow.js`，旧版群聊工作流已经移除。
-- 安全检查使用 `npm run security:audit` 和 `npm run security:secrets`；依赖告警必须出现在 `security/audit-allowlist.json` 且未过期，否则 CI 会失败。
-- 自动化体验雷达见 [docs/automation-workflows.md](./docs/automation-workflows.md)，可手动运行，也会通过 GitHub Actions 定时生成 eval 体验评分卡、创意报告、健康报告和 Issue。
-
-## 后续扩展点
-
-- 在 `src/tool-config.js` 里新增工具定义
-- 在 `src/query-tools.js` 里补对应执行器
-- 在 `knowledge/` 里继续补设定、FAQ、世界观或业务文档
-- 使用 `YUNO_ROLE=reply-worker` 与 `YUNO_ROLE=persist-worker` 可以分别扩容回复和持久化 worker
+See docs/environment-variables.md and DEPLOYMENT_CHECKLIST.md for the migration rollout and LLBot replacement procedure.

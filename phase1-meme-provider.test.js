@@ -1,212 +1,120 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  getMemeCandidates,
   GLOBAL_MEME_CHAT_ID,
+  MEME_PROVIDER_ONEBOT_FAVORITES,
+  getMemeCandidates,
   resetMemeProviderState,
+  syncOnebotFavoriteMemeCache,
 } from './src/meme-provider.js';
 
 function createFakeMemeModel(seed = []) {
   const docs = new Map(seed.map((item) => [String(item.assetId), { ...item }]));
-  const model = {
+  return {
     docs,
     async find(query) {
-      const allowedChatIds = new Set((query.chatId?.$in || []).map((item) => String(item)));
-      return [...docs.values()].filter((item) => {
-        if (allowedChatIds.size > 0 && !allowedChatIds.has(String(item.chatId || ''))) {
-          return false;
-        }
-        if (query.disabled !== undefined && Boolean(item.disabled) !== Boolean(query.disabled)) {
-          return false;
-        }
-        if (query.safetyStatus && String(item.safetyStatus || '') !== String(query.safetyStatus)) {
-          return false;
-        }
-        if (query.type && String(item.type || '') !== String(query.type)) {
-          return false;
-        }
-        return true;
-      });
+      const allowed = new Set((query.chatId?.$in || []).map(String));
+      return [...docs.values()].filter((item) => (
+        allowed.has(String(item.chatId))
+        && item.disabled === false
+        && item.safetyStatus === 'safe'
+        && item.type === 'image'
+      ));
     },
-    async findOneAndUpdate(query, changes) {
-      const assetId = String(query.assetId || '');
-      const current = docs.get(assetId) || {};
-      const next = {
-        ...changes.$setOnInsert,
-        ...current,
-        ...(changes.$set || {}),
-        assetId,
-      };
-      docs.set(assetId, next);
-      return next;
+    async findOneAndUpdate(query, update) {
+      const assetId = String(query.assetId);
+      const existing = docs.get(assetId) || {};
+      docs.set(assetId, {
+        ...existing,
+        ...update.$setOnInsert,
+        ...update.$set,
+      });
+      return docs.get(assetId);
     },
   };
-  return model;
 }
 
-test('local-cache meme provider returns current chat and global safe assets', async () => {
-  const queries = [];
-  const assets = [
-    { assetId: 'chat-safe', chatId: 'g1', storagePath: 'memes/chat.png', safetyStatus: 'safe', disabled: false },
-    { assetId: 'global-safe', chatId: GLOBAL_MEME_CHAT_ID, storagePath: 'memes/global.png', safetyStatus: 'safe', disabled: false },
-    { assetId: 'disabled', chatId: 'g1', storagePath: 'memes/disabled.png', safetyStatus: 'safe', disabled: true },
-    { assetId: 'unsafe', chatId: GLOBAL_MEME_CHAT_ID, storagePath: 'memes/unsafe.png', safetyStatus: 'blocked', disabled: false },
-    { assetId: 'other-chat', chatId: 'g2', storagePath: 'memes/other.png', safetyStatus: 'safe', disabled: false },
-  ];
-
-  const result = await getMemeCandidates({
-    chatId: 'g1',
-    limit: 10,
-  }, {
-    model: {
-      find: async (query) => {
-        queries.push(query);
-        return assets;
-      },
-    },
-  });
-
-  assert.deepEqual(queries[0].chatId.$in, ['g1', GLOBAL_MEME_CHAT_ID]);
-  assert.deepEqual(result.map((item) => item.assetId), ['chat-safe', 'global-safe']);
-});
-
-test('napcat-favorites provider fetches custom faces from NapCat and caches global assets', async () => {
+test('onebot-favorites synchronizes fetch_custom_face through the protocol adapter', async () => {
   resetMemeProviderState();
+  const model = createFakeMemeModel();
   const actions = [];
-  const model = createFakeMemeModel();
 
-  const result = await getMemeCandidates({
-    chatId: 'g1',
-    provider: 'napcat-favorites',
-    limit: 2,
-  }, {
+  const result = await syncOnebotFavoriteMemeCache({ count: 2, force: true, nowMs: 1000 }, {
     model,
-    postNapcat: async (action, payload) => {
+    callAction: async (action, payload) => {
       actions.push({ action, payload });
-      return {
-        data: {
-          data: [
-            'https://example.com/faces/smile.png',
-            'D:/qq/faces/funny.webp',
-          ],
-        },
-      };
+      return [
+        { file: 'https://example.invalid/a.png', summary: 'A' },
+        { file: 'base64://aGk=', summary: 'B' },
+      ];
     },
-    nowMs: 1000,
   });
 
-  assert.deepEqual(actions, [{ action: 'fetch_custom_face', payload: { count: 48 } }]);
-  assert.equal(result.length, 2);
-  assert.equal(result[0].origin, 'napcat_favorite_cache');
-  assert.equal(result[0].chatId, GLOBAL_MEME_CHAT_ID);
-  assert.equal(result[0].imageUrl, 'https://example.com/faces/smile.png');
-  assert.equal(result[1].storagePath, 'D:/qq/faces/funny.webp');
-  assert.ok([...model.docs.keys()].every((assetId) => assetId.startsWith('napcatfav:')));
+  assert.deepEqual(actions, [{ action: 'fetch_custom_face', payload: { count: 2 } }]);
+  assert.deepEqual(result, { enabled: true, reason: 'synced', count: 2 });
+  assert.equal([...model.docs.values()].every((item) => item.chatId === GLOBAL_MEME_CHAT_ID), true);
+
+  const candidates = await getMemeCandidates({
+    provider: MEME_PROVIDER_ONEBOT_FAVORITES,
+    chatId: 'group-1',
+    limit: 8,
+  }, {
+    model,
+    callAction: async () => [],
+    nowMs: 1001,
+    syncTtlMs: 60_000,
+  });
+  assert.equal(candidates.length, 2);
 });
 
-test('napcat-favorites provider falls back to get_collection_list when custom face list is empty', async () => {
+test('onebot-favorites never falls back to vendor-specific collection actions', async () => {
   resetMemeProviderState();
+  const model = createFakeMemeModel();
   const actions = [];
-  const model = createFakeMemeModel();
 
-  const result = await getMemeCandidates({
-    chatId: 'g1',
-    provider: 'napcat-favorites',
-    limit: 3,
-  }, {
+  const result = await syncOnebotFavoriteMemeCache({ count: 48, force: true, nowMs: 2000 }, {
     model,
-    postNapcat: async (action, payload) => {
-      actions.push({ action, payload });
-      if (action === 'fetch_custom_face') {
-        return { data: { data: [] } };
-      }
-      return {
-        data: {
-          data: [{
-            file: 'https://example.com/collection/reaction.gif',
-            name: 'reaction',
-            md5: 'face-md5',
-          }],
-        },
-      };
+    callAction: async (action) => {
+      actions.push(action);
+      return [];
     },
-    nowMs: 1000,
   });
 
-  assert.deepEqual(actions.map((item) => item.action), ['fetch_custom_face', 'get_collection_list']);
-  assert.equal(result.length, 1);
-  assert.equal(result[0].assetId, 'napcatfav:face-md5');
-  assert.equal(result[0].imageUrl, 'https://example.com/collection/reaction.gif');
-  assert.match(result[0].semanticTags.join(','), /reaction/);
+  assert.deepEqual(result, { enabled: true, reason: 'synced', count: 0 });
+  assert.deepEqual(actions, ['fetch_custom_face']);
 });
 
-test('napcat-favorites provider accepts common nested NapCat favorite fields', async () => {
-  resetMemeProviderState();
-  const model = createFakeMemeModel();
-
-  const result = await getMemeCandidates({
-    chatId: 'g1',
-    provider: 'napcat-favorites',
-    limit: 2,
-  }, {
-    model,
-    postNapcat: async () => ({
-      data: {
-        data: [{
-          data: {
-            file_url: 'https://example.com/nested/favorite.webp',
-          },
-          name: 'nested-favorite',
-          file_md5: 'nested-md5',
-        }, {
-          data: {
-            base64: Buffer.from('gif-data').toString('base64'),
-          },
-          id: 'base64-face',
-        }],
-      },
-    }),
-    nowMs: 1000,
-  });
-
-  assert.equal(result.length, 2);
-  assert.equal(result[0].assetId, 'napcatfav:nested-md5');
-  assert.equal(result[0].imageUrl, 'https://example.com/nested/favorite.webp');
-  assert.match(result[1].imageUrl, /^base64:\/\//);
-});
-
-test('napcat-favorites provider uses cached global assets within sync ttl', async () => {
+test('onebot-favorites cache TTL prevents duplicate protocol calls', async () => {
   resetMemeProviderState();
   const model = createFakeMemeModel();
   let calls = 0;
+  const deps = {
+    model,
+    callAction: async () => {
+      calls += 1;
+      return [{ file: 'https://example.invalid/a.png' }];
+    },
+  };
 
-  await getMemeCandidates({
-    chatId: 'g1',
-    provider: 'napcat-favorites',
-    limit: 1,
-  }, {
-    model,
-    postNapcat: async () => {
-      calls += 1;
-      return { data: { data: ['https://example.com/faces/first.png'] } };
-    },
-    nowMs: 1000,
-    syncTtlMs: 60000,
-  });
-  const second = await getMemeCandidates({
-    chatId: 'g1',
-    provider: 'napcat-favorites',
-    limit: 1,
-  }, {
-    model,
-    postNapcat: async () => {
-      calls += 1;
-      return { data: { data: ['https://example.com/faces/second.png'] } };
-    },
-    nowMs: 2000,
-    syncTtlMs: 60000,
-  });
+  await syncOnebotFavoriteMemeCache({ force: true, nowMs: 3000, syncTtlMs: 60_000 }, deps);
+  const cached = await syncOnebotFavoriteMemeCache({ nowMs: 3001, syncTtlMs: 60_000 }, deps);
 
   assert.equal(calls, 1);
-  assert.deepEqual(second.map((item) => item.imageUrl), ['https://example.com/faces/first.png']);
+  assert.deepEqual(cached, { enabled: true, reason: 'fresh-cache', count: 1 });
+});
+
+test('onebot-favorites reports protocol errors without direct HTTP fallback', async () => {
+  resetMemeProviderState();
+  const result = await syncOnebotFavoriteMemeCache({ force: true, nowMs: 4000 }, {
+    model: createFakeMemeModel(),
+    protocolAdapter: {
+      callAction: async () => {
+        const error = new Error('onebot offline');
+        error.code = 'KOISHI_BOT_OFFLINE';
+        throw error;
+      },
+    },
+  });
+
+  assert.deepEqual(result, { enabled: false, reason: 'onebot-failed', count: 0 });
 });

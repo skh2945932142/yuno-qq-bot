@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeTrigger } from '../src/message-analysis.js';
-import { validateOnebotMessageEvent } from '../src/adapters/onebot-event.js';
+import { adaptKoishiSession } from '../src/koishi-session-adapter.js';
 import { planIncomingTask } from '../src/task-router.js';
 import { parseCommand } from '../src/command-parser.js';
 
@@ -10,6 +10,67 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 const scenariosPath = path.join(__dirname, 'scenarios.json');
+
+function buildScenarioElements(payload = {}) {
+  if (Array.isArray(payload.message)) {
+    return payload.message.map((segment) => ({
+      type: segment.type === 'image' ? 'img' : segment.type,
+      attrs: {
+        ...(segment.data || {}),
+        id: segment.data?.qq || segment.data?.id,
+        src: segment.data?.url || segment.data?.file,
+      },
+    }));
+  }
+
+  const rawMessage = String(payload.raw_message || '');
+  const elements = [];
+  for (const match of rawMessage.matchAll(/\[CQ:at,qq=([^,\]]+)/gi)) {
+    elements.push({ type: 'at', attrs: { id: match[1] } });
+  }
+  for (const match of rawMessage.matchAll(/\[CQ:image,(?:file|url)=([^,\]]+)/gi)) {
+    elements.push({ type: 'img', attrs: { src: match[1] } });
+  }
+  return elements;
+}
+
+function adaptScenarioEvent(payload = {}) {
+  const postType = String(payload.post_type || '').toLowerCase();
+  const isMessage = postType === 'message';
+  const isPoke = postType === 'notice' && payload.notice_type === 'notify' && payload.sub_type === 'poke';
+  const isWelcome = postType === 'notice' && payload.notice_type === 'group_increase';
+  if (!isMessage && !isPoke && !isWelcome) {
+    return { ok: false, errors: ['unsupported Koishi/OneBot scenario event'] };
+  }
+  if (isMessage && !payload.raw_message && !Array.isArray(payload.message)) {
+    return { ok: false, errors: ['missing raw message'] };
+  }
+
+  const isPrivate = payload.message_type === 'private' || payload.detail_type === 'friend';
+  const groupId = String(payload.group_id || '');
+  const session = {
+    type: isMessage ? 'message' : (isWelcome ? 'guild-member-added' : 'notice'),
+    subtype: isMessage ? (isPrivate ? 'private' : 'group') : payload.sub_type,
+    isDirect: isPrivate,
+    selfId: String(payload.self_id || ''),
+    userId: String(payload.user_id || payload.sender?.user_id || ''),
+    guildId: groupId,
+    channelId: isPrivate ? `private:${payload.user_id || payload.sender?.user_id || ''}` : groupId,
+    messageId: String(payload.message_id || ''),
+    timestamp: payload.time ? Number(payload.time) * 1000 : Date.now(),
+    content: String(payload.raw_message || (Array.isArray(payload.message)
+      ? payload.message.filter((segment) => segment.type === 'text').map((segment) => segment.data?.text || '').join('')
+      : '')),
+    elements: buildScenarioElements(payload),
+    author: { name: payload.sender?.nickname || '', member: { nick: payload.sender?.card || '' } },
+    getInternal: () => payload,
+  };
+  const value = adaptKoishiSession(session);
+  if (!value.userId || !value.chatId) {
+    return { ok: false, errors: ['missing chat or sender identity'] };
+  }
+  return { ok: true, value, errors: [] };
+}
 
 async function loadScenarios() {
   const raw = await fs.readFile(scenariosPath, 'utf8');
@@ -322,7 +383,7 @@ async function evaluateScenario(scenario) {
   let task = null;
 
   if (scenario.type === 'schema') {
-    validation = validateOnebotMessageEvent(scenario.event);
+    validation = adaptScenarioEvent(scenario.event);
     error = validation.ok === scenario.expected.valid
       ? null
       : `Expected valid=${scenario.expected.valid}, got ${validation.ok}`;
@@ -333,7 +394,7 @@ async function evaluateScenario(scenario) {
     };
   }
 
-  validation = validateOnebotMessageEvent(scenario.event);
+  validation = adaptScenarioEvent(scenario.event);
   if (!validation.ok) {
     error = `Validation failed unexpectedly: ${validation.errors.join('; ')}`;
     const result = { scenario, validation, analysis, task, error };

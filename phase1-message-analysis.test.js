@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeTrigger } from './src/message-analysis.js';
+import { analyzeTrigger, analyzeTriggerFast, isBotTargetedPokeEvent, isNonTargetPokeEvent } from './src/message-analysis.js';
 
 test('analyzeTrigger defaults to replying in private chat', async () => {
   const result = await analyzeTrigger({
@@ -115,4 +115,17 @@ test('leaving and cold-shoulder language can trigger low-frequency jealousy cont
 
   assert.equal(result.shouldRespond, true);
   assert.match(result.ruleSignals.join(','), /jealousy-topic/);
+});
+
+
+test('fast trigger analysis distinguishes targeted and non-targeted group poke events', () => {
+  const targeted = {
+    platform: 'qq', chatType: 'group', chatId: 'g', userId: 'u', rawText: '/poke', text: '/poke',
+    mentionsBot: true, source: { postType: 'notice', noticeType: 'notify', subType: 'poke' }, selfId: '10000',
+  };
+  const nonTargeted = { ...targeted, mentionsBot: false };
+  assert.equal(isBotTargetedPokeEvent(targeted), true);
+  assert.equal(isNonTargetPokeEvent(nonTargeted), true);
+  assert.equal(analyzeTriggerFast(targeted).shouldRespond, true);
+  assert.equal(analyzeTriggerFast(nonTargeted).reason, 'non-target-poke');
 });

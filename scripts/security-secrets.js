@@ -17,13 +17,11 @@ const patterns = [
 const ignoredPaths = new Set([
   '.env',
   'package-lock.json',
-  'deploy/astrbot/.env',
 ]);
 
 const ignoredDirs = new Set([
   '.git',
   'node_modules',
-  'deploy/astrbot/data',
 ]);
 
 function collectFiles(dir, prefix = '') {

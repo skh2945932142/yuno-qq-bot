@@ -7,7 +7,27 @@ import {
   resolveFfmpegPath,
   transcodeMp3ToSpeechPcm,
 } from '../src/services/audio.js';
-import { sendVoiceWithDeps } from '../src/sender.js';
+import { createKoishiDeliveryAdapter } from '../src/koishi-adapters.js';
+
+function createDeliveryAdapter(options = {}) {
+  const sent = [];
+  const adapter = createKoishiDeliveryAdapter({
+    bots: [{
+      platform: 'onebot',
+      selfId: '10000',
+      async sendMessage(channelId, content) {
+        sent.push({ channelId, content });
+      },
+    }],
+  }, {
+    selfId: '10000',
+    logger: options.logger || { warn: () => {} },
+    resolveFfmpegPath: options.resolveFfmpegPath,
+    transcodeAudioToSpeechPcm: options.transcodeAudioToSpeechPcm,
+    encodeTencentSilk: options.encodeTencentSilk,
+  });
+  return { adapter, sent };
+}
 
 test('resolveFfmpegPath prefers explicit path when it exists', async () => {
   resetFfmpegPathCache();
@@ -76,84 +96,58 @@ test('encodeTencentSilk enables tencent-compatible options', async () => {
   });
 });
 
-test('sendVoiceWithDeps skips voice when ffmpeg is unavailable', async () => {
+test('Koishi delivery skips voice when ffmpeg is unavailable', async () => {
   const logs = [];
-  const sentPayloads = [];
-
-  const success = await sendVoiceWithDeps('12345', Buffer.from('wav-data'), {
-    logger: {
-      info: (...args) => logs.push(['info', ...args]),
-      warn: (...args) => logs.push(['warn', ...args]),
-    },
+  const { adapter, sent } = createDeliveryAdapter({
+    logger: { warn: (...args) => logs.push(args) },
     resolveFfmpegPath: async () => null,
-    postNapcat: async (payload) => {
-      sentPayloads.push(payload);
-    },
   });
 
+  const success = await adapter.sendVoice({ platform: 'qq', chatType: 'private', chatId: '12345' }, Buffer.from('wav-data'));
+
   assert.equal(success, false);
-  assert.equal(sentPayloads.length, 0);
-  assert.equal(logs.some((entry) => entry[2] === 'voice_skipped'), true);
+  assert.equal(sent.length, 0);
+  assert.equal(logs.length, 1);
 });
 
-test('sendVoiceWithDeps skips empty audio without posting', async () => {
-  const sentPayloads = [];
-
-  const success = await sendVoiceWithDeps('12345', Buffer.alloc(0), {
-    logger: {
-      info: () => {},
-      warn: () => {},
-    },
+test('Koishi delivery skips empty audio without sending', async () => {
+  const { adapter, sent } = createDeliveryAdapter({
     resolveFfmpegPath: async () => 'C:\\ffmpeg\\bin\\ffmpeg.exe',
-    postNapcat: async (payload) => {
-      sentPayloads.push(payload);
-    },
   });
 
+  const success = await adapter.sendVoice({ platform: 'qq', chatType: 'private', chatId: '12345' }, Buffer.alloc(0));
+
   assert.equal(success, false);
-  assert.equal(sentPayloads.length, 0);
+  assert.equal(sent.length, 0);
 });
 
-test('sendVoiceWithDeps returns false when silk encoding fails', async () => {
-  const sentPayloads = [];
-
-  const success = await sendVoiceWithDeps('12345', Buffer.from('wav-data'), {
-    logger: {
-      info: () => {},
-      warn: () => {},
-    },
+test('Koishi delivery returns false when Silk encoding fails', async () => {
+  const { adapter, sent } = createDeliveryAdapter({
     resolveFfmpegPath: async () => 'C:\\ffmpeg\\bin\\ffmpeg.exe',
-    transcodeMp3ToSpeechPcm: async () => Buffer.from('wav-data'),
+    transcodeAudioToSpeechPcm: async () => Buffer.from('wav-data'),
     encodeTencentSilk: async () => {
       throw new Error('encode failed');
     },
-    postNapcat: async (payload) => {
-      sentPayloads.push(payload);
-    },
   });
+
+  const success = await adapter.sendVoice({ platform: 'qq', chatType: 'private', chatId: '12345' }, Buffer.from('wav-data'));
 
   assert.equal(success, false);
-  assert.equal(sentPayloads.length, 0);
+  assert.equal(sent.length, 0);
 });
 
-test('sendVoiceWithDeps posts qq-compatible record after transcoding', async () => {
-  const sentPayloads = [];
-
-  const success = await sendVoiceWithDeps('12345', Buffer.from('wav-data'), {
-    logger: {
-      info: () => {},
-      warn: () => {},
-    },
+test('Koishi delivery emits a QQ-compatible Silk record element', async () => {
+  const { adapter, sent } = createDeliveryAdapter({
     resolveFfmpegPath: async () => 'C:\\ffmpeg\\bin\\ffmpeg.exe',
-    transcodeMp3ToSpeechPcm: async () => Buffer.from('wav-data'),
+    transcodeAudioToSpeechPcm: async () => Buffer.from('wav-data'),
     encodeTencentSilk: async () => Buffer.from('silk-data'),
-    postNapcat: async (payload) => {
-      sentPayloads.push(payload);
-    },
   });
 
+  const success = await adapter.sendVoice({ platform: 'qq', chatType: 'private', chatId: '12345' }, Buffer.from('wav-data'));
+
   assert.equal(success, true);
-  assert.equal(sentPayloads.length, 1);
-  assert.equal(sentPayloads[0].message[0].type, 'record');
-  assert.match(sentPayloads[0].message[0].data.file, /^base64:\/\//);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].channelId, 'private:12345');
+  assert.match(sent[0].content, /audio/);
+  assert.match(sent[0].content, /data:audio\/silk;base64,c2lsay1kYXRh/);
 });

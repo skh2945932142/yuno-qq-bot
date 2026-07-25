@@ -157,17 +157,22 @@ async function checkMongo() {
   }
 }
 
-async function checkNapCat() {
-  const headers = config.napcatToken
-    ? { Authorization: config.napcatToken }
+async function checkOneBot(options = {}) {
+  const runtimeConfig = options.config || config;
+  const httpPost = options.httpPost || axios.post;
+  if (!runtimeConfig.onebotEndpoint) {
+    throw new Error('ONEBOT_ENDPOINT is not configured');
+  }
+  const headers = runtimeConfig.onebotToken
+    ? { Authorization: `Token ${runtimeConfig.onebotToken}` }
     : {};
-  const response = await axios.post(
-    `${config.napcatApi}/get_login_info`,
+  const response = await httpPost(
+    `${runtimeConfig.onebotEndpoint}/get_login_info`,
     {},
     {
       headers,
       maxRedirects: 0,
-      timeout: config.requestTimeoutMs,
+      timeout: runtimeConfig.requestTimeoutMs,
     }
   );
 
@@ -355,7 +360,7 @@ async function main() {
   const checks = [
     ['env', checkRuntimeConfig],
     ['mongo', checkMongo],
-    ['napcat', checkNapCat],
+    ['onebot', checkOneBot],
     ['llm', checkLlm],
     ['embedding', checkEmbedding],
     ['qdrant', checkQdrant],
@@ -380,7 +385,7 @@ async function main() {
 export {
   checkRuntimeConfig,
   checkMongo,
-  checkNapCat,
+  checkOneBot,
   checkLlm,
   checkEmbedding,
   checkQdrant,
