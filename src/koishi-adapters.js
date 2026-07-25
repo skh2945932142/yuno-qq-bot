@@ -9,7 +9,16 @@ import {
 
 const require = createRequire(import.meta.url);
 const { h } = require('koishi');
+const { Status } = require('@satorijs/protocol');
 const PRIVATE_CHANNEL_PREFIX = 'private:';
+
+function isBotOnline(status) {
+  return status === undefined
+    || status === null
+    || status === ''
+    || status === Status.ONLINE
+    || String(status).trim().toLowerCase() === 'online';
+}
 
 function resolveBot(context, options = {}) {
   const bots = Array.isArray(context?.bots) ? context.bots : [];
@@ -25,7 +34,7 @@ function resolveBot(context, options = {}) {
     error.code = expectedSelfId ? 'KOISHI_CONFIGURED_BOT_UNAVAILABLE' : 'KOISHI_BOT_UNAVAILABLE';
     throw error;
   }
-  if (selected.status && selected.status !== 'online') {
+  if (!isBotOnline(selected.status)) {
     const error = new Error('KOISHI_BOT_OFFLINE');
     error.code = 'KOISHI_BOT_OFFLINE';
     throw error;
@@ -159,6 +168,7 @@ export function createKoishiProtocolAdapter(context, options = {}) {
 export {
   PRIVATE_CHANNEL_PREFIX,
   buildVoiceElement,
+  isBotOnline,
   renderOutputs,
   resolveBot,
   resolveImageSource,

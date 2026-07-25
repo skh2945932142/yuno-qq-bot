@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createKoishiDeliveryAdapter,
   createKoishiProtocolAdapter,
+  isBotOnline,
   renderOutputs,
   resolveBot,
   resolveImageSource,
@@ -54,6 +55,29 @@ test('Koishi delivery selects SELF_QQ and maps group/private targets', async () 
   assert.match(sent[1].content, /before/);
   assert.match(sent[1].content, /data:image\/png;base64,aGk=/);
   assert.match(sent[1].content, /after/);
+});
+
+test('Koishi delivery accepts uppercase and numeric online bot states', async () => {
+  assert.equal(isBotOnline('ONLINE'), true);
+  assert.equal(isBotOnline(1), true);
+  assert.equal(isBotOnline('offline'), false);
+
+  for (const status of ['ONLINE', 1]) {
+    const sent = [];
+    const adapter = createKoishiDeliveryAdapter({
+      bots: [{
+        platform: 'onebot',
+        selfId: '10000',
+        status,
+        async sendMessage(channelId, content) {
+          sent.push({ channelId, content });
+        },
+      }],
+    }, { selfId: '10000' });
+
+    await adapter.sendReply({ platform: 'qq', chatType: 'private', chatId: '20000' }, 'ok');
+    assert.deepEqual(sent, [{ channelId: 'private:20000', content: 'ok' }]);
+  }
 });
 
 test('Koishi delivery exposes bot availability and OneBot send failures as unified errors', async () => {
