@@ -66,6 +66,15 @@ function isConfiguredBotOnline(bots = [], selfQq = '') {
   });
 }
 
+function describeBotStates(bots = []) {
+  return bots.map((bot) => ({
+    selfId: String(bot.selfId || ''),
+    platform: String(bot.platform || ''),
+    status: bot.status,
+    statusName: typeof bot.status === 'number' ? Status[bot.status] || '' : String(bot.status || ''),
+  }));
+}
+
 function installOperationalRoutes(ctx, runtimeConfig = config) {
   ctx.server.get('/health', (koa) => {
     koa.body = 'Yuno online';
@@ -79,6 +88,7 @@ function installOperationalRoutes(ctx, runtimeConfig = config) {
     koa.body = {
       ...status,
       bot: botOnline,
+      botStates: describeBotStates(ctx.bots),
       ready,
     };
   });
@@ -150,6 +160,7 @@ export async function stopKoishiApplication(ctx) {
 export {
   buildKoishiMongoConfig,
   buildOneBotConfig,
+  describeBotStates,
   installOperationalRoutes,
   isConfiguredBotOnline,
   requireKoishiConfig,

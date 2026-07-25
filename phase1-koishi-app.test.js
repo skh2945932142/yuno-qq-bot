@@ -4,6 +4,7 @@ import {
   buildKoishiMongoConfig,
   buildOneBotConfig,
   createKoishiApplication,
+  describeBotStates,
   requireKoishiConfig,
   isConfiguredBotOnline,
 } from './src/koishi-app.js';
@@ -35,6 +36,14 @@ test('Koishi readiness recognizes the Satori online status enum', () => {
   assert.equal(isConfiguredBotOnline([{ selfId: '10000', status: 'online' }], '10000'), true);
   assert.equal(isConfiguredBotOnline([{ selfId: '10000', status: 0 }], '10000'), false);
   assert.equal(isConfiguredBotOnline([{ selfId: '99999', status: 1 }], '10000'), false);
+});
+
+test('Koishi readiness reports non-sensitive bot state diagnostics', () => {
+  assert.deepEqual(describeBotStates([
+    { selfId: '10000', platform: 'onebot', status: 2 },
+  ]), [{
+    selfId: '10000', platform: 'onebot', status: 2, statusName: 'CONNECT',
+  }]);
 });
 
 test('Koishi configuration requires the OneBot bot and console credentials when enabled', () => {
