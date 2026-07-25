@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { metrics } from './metrics.js';
@@ -16,7 +16,6 @@ const Mongo = require('@koishijs/plugin-database-mongo').default;
 const { Status } = require('@satorijs/protocol');
 const OneBotAdapter = require('koishi-plugin-adapter-onebot');
 const OneBot = OneBotAdapter.default;
-const { HttpServer, OneBot: OneBotProtocol } = OneBotAdapter;
 
 function constantTimeEquals(actual, expected) {
   const actualBuffer = Buffer.from(String(actual || ''));
@@ -28,6 +27,7 @@ function requireKoishiConfig(runtimeConfig = config) {
   const required = [
     ['SELF_QQ', runtimeConfig.selfQq],
     ['ONEBOT_ENDPOINT', runtimeConfig.onebotEndpoint],
+    ['ONEBOT_TOKEN', runtimeConfig.onebotToken],
     ['KOISHI_MONGODB_URI', runtimeConfig.koishiMongoUri],
   ];
   if (runtimeConfig.koishiConsoleEnabled) {
@@ -50,73 +50,16 @@ function buildKoishiMongoConfig(uri) {
 }
 
 function buildOneBotConfig(runtimeConfig = config) {
-  const onebotConfig = {
+  return {
     selfId: runtimeConfig.selfQq,
-    protocol: 'http',
+    protocol: runtimeConfig.onebotTransport,
     endpoint: runtimeConfig.onebotEndpoint,
     token: runtimeConfig.onebotToken,
-    path: '/onebot',
-    secret: runtimeConfig.onebotSecret || undefined,
   };
-
-  // NapCat accepts Bearer authentication or an access_token query parameter,
-  // while Koishi's HTTP adapter sends its token with the legacy Token scheme.
-  if (runtimeConfig.onebotToken) {
-    onebotConfig.params = { access_token: runtimeConfig.onebotToken };
-  }
-  return onebotConfig;
 }
 function isConfiguredBotOnline(bots = [], selfQq = '') {
   return bots.some((bot) => String(bot.selfId) === String(selfQq) && bot.status === Status.ONLINE);
 }
-
-function verifyOneBotSignature({ body, rawBody, signature, secret }) {
-  if (!secret || !signature || !body) return false;
-  const payload = rawBody || JSON.stringify(body);
-  const expected = `sha1=${createHmac('sha1', secret).update(payload).digest('hex')}`;
-  return constantTimeEquals(signature, expected);
-}
-
-let oneBotHttpIngressPatched = false;
-
-function installOneBotHttpIngressCompatibility() {
-  if (oneBotHttpIngressPatched) return;
-  oneBotHttpIngressPatched = true;
-
-  // koishi-plugin-adapter-onebot 6.9.4 reads ctx.body, but current Koishi
-  // stores parsed request payloads on ctx.request.body. Keep HMAC validation
-  // on the unparsed bytes so NapCat's signature remains authoritative.
-  HttpServer.prototype.connect = async function connect(bot) {
-    const { secret, path = '/onebot' } = bot.config;
-    this.ctx.server.post(path, async (koa) => {
-      const body = koa.request?.body;
-      const rawBody = body?.[Symbol.for('unparsedBody')];
-      if (!body || typeof body !== 'object') {
-        koa.status = 400;
-        return;
-      }
-      if (secret && !verifyOneBotSignature({
-        body,
-        rawBody,
-        signature: koa.headers['x-signature'],
-        secret,
-      })) {
-        koa.status = koa.headers['x-signature'] ? 403 : 401;
-        return;
-      }
-      const selfId = String(koa.headers['x-self-id'] || '');
-      const targetBot = this.bots.find((candidate) => candidate.selfId === selfId);
-      if (!targetBot) {
-        koa.status = 403;
-        return;
-      }
-      targetBot.logger.debug('[receive] %o', body);
-      await OneBotProtocol.dispatchSession(targetBot, body);
-      koa.status = 204;
-    });
-  };
-}
-
 
 function installOperationalRoutes(ctx, runtimeConfig = config) {
   ctx.server.get('/health', (koa) => {
@@ -155,7 +98,6 @@ export function createKoishiApplication(options = {}) {
   const runtimeConfig = { ...config, ...(options.config || {}) };
   requireKoishiConfig(runtimeConfig);
 
-  installOneBotHttpIngressCompatibility();
   const ctx = new Context();
   ctx.plugin(Server, {
     host: options.host || '0.0.0.0',
@@ -205,7 +147,5 @@ export {
   buildOneBotConfig,
   installOperationalRoutes,
   isConfiguredBotOnline,
-  installOneBotHttpIngressCompatibility,
   requireKoishiConfig,
-  verifyOneBotSignature,
 };

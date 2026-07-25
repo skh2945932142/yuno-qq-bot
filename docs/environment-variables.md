@@ -6,9 +6,9 @@
 |---|---|
 | SELF_QQ | QQ account selected for delivery and protocol actions. |
 | ADMIN_QQ | User allowed to run /koishi management commands. |
-| ONEBOT_ENDPOINT | OneBot HTTP API base URL. |
-| ONEBOT_TOKEN | OneBot HTTP API access token. |
-| ONEBOT_SECRET | OneBot event callback signature secret. |
+| ONEBOT_TRANSPORT | Final runtime transport; use ws for LLBot. |
+| ONEBOT_ENDPOINT | LLBot private OneBot WebSocket URL. |
+| ONEBOT_TOKEN | LLBot OneBot WebSocket Bearer token. |
 | KOISHI_PORT | Server port, default 5140. |
 | KOISHI_MONGODB_URI | Koishi database URI, normally /koishi. |
 | KOISHI_CONSOLE_ENABLED, KOISHI_CONSOLE_ADMIN, KOISHI_CONSOLE_PASSWORD | Private Console configuration. |
@@ -26,8 +26,8 @@
 | ENABLE_VOICE and TTS variables | Optional voice delivery. |
 | METRICS_AUTH_TOKEN | Required token for x-yuno-metrics-token. |
 
-## QQ favorite memes
+## Meme cache
 
-Use MEME_PROVIDER=onebot-favorites, MEME_FAVORITES_COUNT, and MEME_FAVORITES_SYNC_TTL_MS. Sync uses fetch_custom_face through the Koishi Protocol Adapter.
+Use MEME_PROVIDER=local-cache to keep existing stored assets and collect safe incoming images. LLBot migration does not use fetch_custom_face.
 
-Removed variables: YUNO_ROLE, NAPCAT_API, NAPCAT_TOKEN, ONEBOT_WEBHOOK_SECRET, WEBHOOK_BODY_LIMIT, YUNO_API_URL, and YUNO_API_SECRET.
+Removed variables: ONEBOT_SECRET, YUNO_ROLE, NAPCAT_API, NAPCAT_TOKEN, ONEBOT_WEBHOOK_SECRET, WEBHOOK_BODY_LIMIT, YUNO_API_URL, and YUNO_API_SECRET.

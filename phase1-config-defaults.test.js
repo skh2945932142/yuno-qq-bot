@@ -377,13 +377,13 @@ test('config clamps meme auto-send probability to a safe range', async () => {
 
 test('config exposes Koishi OneBot and metrics security defaults', async () => {
   const { config } = await loadConfigModule({
-    ONEBOT_SECRET: '',
+    ONEBOT_TRANSPORT: 'invalid',
     METRICS_AUTH_TOKEN: '',
     METRICS_PATH: '/metrics',
     KOISHI_PORT: '5140',
   });
 
-  assert.equal(config.onebotSecret, '');
+  assert.equal(config.onebotTransport, 'ws');
   assert.equal(config.metricsAuthToken, '');
   assert.equal(config.metricsPath, '/metrics');
   assert.equal(config.koishiPort, 5140);

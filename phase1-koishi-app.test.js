@@ -1,13 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
 import {
   buildKoishiMongoConfig,
   buildOneBotConfig,
   createKoishiApplication,
   requireKoishiConfig,
   isConfiguredBotOnline,
-  verifyOneBotSignature,
 } from './src/koishi-app.js';
 
 test('Koishi Mongo config derives the database name from the URI', () => {
@@ -17,40 +15,19 @@ test('Koishi Mongo config derives the database name from the URI', () => {
   });
 });
 
-test('Koishi OneBot HTTP config uses NapCat access_token query authentication', () => {
+test('Koishi OneBot config uses the LLBot positive WebSocket transport', () => {
   const onebotConfig = buildOneBotConfig({
     selfQq: '10000',
-    onebotEndpoint: 'http://napcat:3000',
-    onebotToken: 'napcat-token',
-    onebotSecret: 'event-secret',
+    onebotTransport: 'ws',
+    onebotEndpoint: 'ws://llbot:3000',
+    onebotToken: 'llbot-token',
   });
-
   assert.deepEqual(onebotConfig, {
     selfId: '10000',
-    protocol: 'http',
-    endpoint: 'http://napcat:3000',
-    token: 'napcat-token',
-    path: '/onebot',
-    secret: 'event-secret',
-    params: { access_token: 'napcat-token' },
+    protocol: 'ws',
+    endpoint: 'ws://llbot:3000',
+    token: 'llbot-token',
   });
-  assert.equal('params' in buildOneBotConfig({
-    selfQq: '10000',
-    onebotEndpoint: 'http://napcat:3000',
-    onebotToken: '',
-    onebotSecret: '',
-  }), false);
-});
-
-test('Koishi OneBot ingress validates the NapCat HMAC over raw request bytes', () => {
-  const body = { post_type: 'message', self_id: 10000, raw_message: 'hello' };
-  const rawBody = Buffer.from(JSON.stringify(body));
-  const secret = 'event-secret';
-  const signature = `sha1=${createHmac('sha1', secret).update(rawBody).digest('hex')}`;
-
-  assert.equal(verifyOneBotSignature({ body, rawBody, signature, secret }), true);
-  assert.equal(verifyOneBotSignature({ body, rawBody, signature: 'sha1=invalid', secret }), false);
-  assert.equal(verifyOneBotSignature({ body, rawBody: Buffer.from('{"changed":true}'), signature, secret }), false);
 });
 
 test('Koishi readiness recognizes the Satori online status enum', () => {
@@ -62,7 +39,7 @@ test('Koishi readiness recognizes the Satori online status enum', () => {
 test('Koishi configuration requires the OneBot bot and console credentials when enabled', () => {
   assert.throws(
     () => requireKoishiConfig({ selfQq: '', onebotEndpoint: '', koishiMongoUri: '', koishiConsoleEnabled: false }),
-    /SELF_QQ, ONEBOT_ENDPOINT, KOISHI_MONGODB_URI/
+    /SELF_QQ, ONEBOT_ENDPOINT, ONEBOT_TOKEN, KOISHI_MONGODB_URI/
   );
   assert.throws(
     () => requireKoishiConfig({ selfQq: '10000', onebotEndpoint: 'http://onebot:3001', koishiMongoUri: 'mongodb://mongo:27017/koishi', koishiConsoleEnabled: true }),
@@ -75,9 +52,9 @@ test('Koishi application constructs the fixed server, database, OneBot, and Yuno
     mode: 'shadow',
     config: {
       selfQq: '10000',
-      onebotEndpoint: 'http://onebot:3001',
-      onebotToken: '',
-      onebotSecret: '',
+      onebotTransport: 'ws',
+      onebotEndpoint: 'ws://llbot:3000',
+      onebotToken: 'llbot-token',
       koishiMongoUri: 'mongodb://mongo:27017/koishi',
       koishiPort: 5140,
       koishiConsoleEnabled: false,

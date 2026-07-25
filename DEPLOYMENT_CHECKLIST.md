@@ -1,22 +1,23 @@
-# Unified Koishi + Yuno Deployment Checklist
+# LLBot and Koishi/Yuno Deployment Checklist
 
-## Before cutover
+## Phase A: LLBot replaces NapCat
 
-- [ ] Back up the previous image and record its Git revision.
-- [ ] Configure separate MongoDB databases for koishi and yuno.
-- [ ] Set SELF_QQ, ADMIN_QQ, ONEBOT_ENDPOINT, ONEBOT_TOKEN, ONEBOT_SECRET, console credentials, and METRICS_AUTH_TOKEN.
-- [ ] Validate shadow mode with group/private, mention, reply, image, voice, video, file, face, poke, and member-added events.
+- [ ] Create LLBot with a persistent data volume, DNS preflight, LLBOT_AUTH_TOKEN, and QR login.
+- [ ] Configure LLBot reverse WebSocket to AstrBot with array messages and self-message reporting.
+- [ ] Stop NapCat only after LLBot is ready to log in; verify AstrBot receives and replies through LLBot.
+- [ ] Validate group/private, mention, reply, image, voice, video, file, face, poke, member-added, reminders, and proactive delivery.
+- [ ] Delete NapCat service and residual cache/log volume after AstrBot is stable on LLBot.
 
-## Active cutover
+## Phase B: Koishi/Yuno replaces AstrBot
 
-- [ ] Stop AstrBot and the old Yuno HTTP runtime.
-- [ ] Deploy the unified image with YUNO_PLUGIN_MODE=active.
-- [ ] Point the protocol event callback only to /onebot on the Koishi application.
-- [ ] Verify /health, /ready, /metrics, /koishi status, normal reply, and scheduled delivery.
-- [ ] Confirm no duplicate scheduler or queue worker exists.
+- [ ] Configure ONEBOT_TRANSPORT=ws, ONEBOT_ENDPOINT=ws://llbot:3000, ONEBOT_TOKEN, and separate koishi/yuno Mongo databases.
+- [ ] Run Koishi/Yuno shadow mode against LLBot and validate the complete Session mapping without replies.
+- [ ] Deploy the unified image with YUNO_PLUGIN_MODE=active and verify /health, /ready, /metrics, /koishi status, normal replies, media delivery, and scheduled delivery.
+- [ ] Disable LLBot's AstrBot reverse WebSocket before stopping AstrBot to prevent duplicate replies.
+- [ ] Confirm no duplicate scheduler, queue worker, or delivery ledger claim exists.
 
-## LLBot migration
+## Final cleanup
 
-- [ ] Record a 24-hour NapCat memory baseline.
-- [ ] Change only the protocol service and ONEBOT_ENDPOINT.
-- [ ] Verify normal delivery, proactive delivery, and fetch_custom_face for 24 hours before finalizing.
+- [ ] Delete AstrBot and yuno-koishi-shadow services and their residual volumes.
+- [ ] Drop only MongoDB koishi-shadow; retain yuno, koishi, Qdrant, and MemeAsset data.
+- [ ] Retain only mongodb, llbot, yuno-qq-bot, and Qdrant-omiste services.
