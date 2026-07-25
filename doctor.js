@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import axios from 'axios';
 import OpenAI from 'openai';
 import Redis from 'ioredis';
+import WebSocket from 'ws';
 import { pathToFileURL } from 'node:url';
 import { config, describeHttpBaseUrlProblem, validateRuntimeConfig } from './src/config.js';
 import { resolveFfmpegPath } from './src/services/audio.js';
@@ -157,26 +158,91 @@ async function checkMongo() {
   }
 }
 
+async function callOneBotWebSocketAction(endpoint, token, timeoutMs, options = {}) {
+  const WebSocketImpl = options.WebSocket || WebSocket;
+  const echo = 'yuno-doctor:get-login-info';
+
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocketImpl(endpoint, token ? {
+      headers: { Authorization: `Bearer ${token}` },
+    } : undefined);
+    let settled = false;
+
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (socket.readyState === WebSocketImpl.OPEN || socket.readyState === WebSocketImpl.CONNECTING) {
+        socket.close();
+      }
+      if (error) reject(error);
+      else resolve(value);
+    };
+
+    const timer = setTimeout(() => {
+      finish(new Error('OneBot WebSocket request timed out'));
+    }, Math.max(1000, Number(timeoutMs || 8000)));
+
+    socket.once('open', () => {
+      socket.send(JSON.stringify({
+        action: 'get_login_info',
+        params: {},
+        echo,
+      }));
+    });
+    socket.on('message', (payload) => {
+      let body;
+      try {
+        body = JSON.parse(String(payload));
+      } catch {
+        return;
+      }
+      if (body?.echo !== echo) return;
+      if (body.status === 'failed' || Number(body.retcode || 0) !== 0) {
+        finish(new Error(`OneBot action failed with retcode ${body.retcode ?? 'unknown'}`));
+        return;
+      }
+      finish(null, body.data || body);
+    });
+    socket.once('error', (error) => finish(error));
+    socket.once('close', (code) => {
+      if (!settled) finish(new Error(`OneBot WebSocket closed before response (${code})`));
+    });
+  });
+}
+
 async function checkOneBot(options = {}) {
   const runtimeConfig = options.config || config;
-  const httpPost = options.httpPost || axios.post;
   if (!runtimeConfig.onebotEndpoint) {
     throw new Error('ONEBOT_ENDPOINT is not configured');
   }
-  const headers = runtimeConfig.onebotToken
-    ? { Authorization: `Token ${runtimeConfig.onebotToken}` }
-    : {};
-  const response = await httpPost(
-    `${runtimeConfig.onebotEndpoint}/get_login_info`,
-    {},
-    {
-      headers,
-      maxRedirects: 0,
-      timeout: runtimeConfig.requestTimeoutMs,
-    }
-  );
 
-  const body = response.data?.data || response.data || {};
+  const endpoint = new URL(runtimeConfig.onebotEndpoint);
+  let body;
+  if (endpoint.protocol === 'ws:' || endpoint.protocol === 'wss:') {
+    const callWebSocketAction = options.callWebSocketAction || callOneBotWebSocketAction;
+    body = await callWebSocketAction(
+      runtimeConfig.onebotEndpoint,
+      runtimeConfig.onebotToken,
+      runtimeConfig.requestTimeoutMs
+    );
+  } else {
+    const httpPost = options.httpPost || axios.post;
+    const headers = runtimeConfig.onebotToken
+      ? { Authorization: `Token ${runtimeConfig.onebotToken}` }
+      : {};
+    const response = await httpPost(
+      `${runtimeConfig.onebotEndpoint}/get_login_info`,
+      {},
+      {
+        headers,
+        maxRedirects: 0,
+        timeout: runtimeConfig.requestTimeoutMs,
+      }
+    );
+    body = response.data?.data || response.data || {};
+  }
+
   const nickname = body.nickname || body.nick_name || '';
   const userId = body.user_id || body.userId || '';
   return {
@@ -386,6 +452,7 @@ export {
   checkRuntimeConfig,
   checkMongo,
   checkOneBot,
+  callOneBotWebSocketAction,
   checkLlm,
   checkEmbedding,
   checkQdrant,

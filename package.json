@@ -47,7 +47,8 @@
     "mongoose": "^9.3.0",
     "node-cron": "^4.2.1",
     "openai": "^6.27.0",
-    "silk-sdk": "^0.2.2"
+    "silk-sdk": "^0.2.2",
+    "ws": "8.21.1"
   },
   "devDependencies": {
     "c8": "^10.1.3"

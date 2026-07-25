@@ -1,6 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkEmbedding, checkQdrant, checkVoiceRuntime, runCheck } from './doctor.js';
+import { checkEmbedding, checkOneBot, checkQdrant, checkVoiceRuntime, runCheck } from './doctor.js';
+
+test('doctor supports OneBot WebSocket transport', async () => {
+  let captured;
+  const result = await checkOneBot({
+    config: {
+      onebotEndpoint: 'ws://llbot:3000',
+      onebotTransport: 'ws',
+      onebotToken: 'test-token',
+      requestTimeoutMs: 1000,
+    },
+    callWebSocketAction: async (endpoint, token, timeoutMs) => {
+      captured = { endpoint, token, timeoutMs };
+      return { nickname: 'Yuno', user_id: 3847566155 };
+    },
+  });
+
+  assert.deepEqual(captured, {
+    endpoint: 'ws://llbot:3000',
+    token: 'test-token',
+    timeoutMs: 1000,
+  });
+  assert.match(result.detail, /Yuno/);
+});
 
 test('doctor marks voice as skip when voice is disabled', async () => {
   const result = await checkVoiceRuntime({
