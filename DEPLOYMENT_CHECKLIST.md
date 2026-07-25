@@ -1,27 +1,31 @@
-# LLBot and Koishi/Yuno Deployment Checklist
+# Koishi/Yuno Production Checklist
 
-## Phase A: LLBot replaces NapCat
+## Final service topology
 
-- [ ] Deploy `deploy/llbot/zeabur-template.yaml`; it pins LLBot 8.1.0 by OCI digest and mounts `/app/llbot/data`.
-- [ ] Store the acquired token only as the Zeabur Secret `LLBOT_AUTH_TOKEN`, then map the container variable `AUTH_TOKEN` to that secret.
-- [ ] Keep the LLBot WebUI on port 3080 private or temporarily access-controlled; never publish the auth token.
-- [ ] Resolve required external QQ/LLBot hosts plus `mongodb`, `Qdrant-omiste`, and `AstrBot` from the LLBot container before stopping anything.
-- [ ] Confirm the LLBot WebUI reports a valid auth token, then complete QR login and verify the actual QQ matches `SELF_QQ`.
-- [ ] Configure LLBot reverse WebSocket to AstrBot with array messages and self-message reporting.
-- [ ] Stop NapCat only after LLBot is ready to log in; verify AstrBot receives and replies through LLBot.
-- [ ] Validate group/private, mention, reply, image, voice, video, file, face, poke, member-added, reminders, and proactive delivery.
-- [ ] Delete NapCat service and residual cache/log volume after AstrBot is stable on LLBot.
+- [ ] Zeabur contains only `mongodb`, `llbot`, `yuno-qq-bot`, and `Qdrant-omiste`.
+- [ ] `llbot` uses the pinned OCI digest from `deploy/llbot/zeabur-template.yaml` and persists `/app/llbot/data`.
+- [ ] LLBot OneBot 11 listens only on the private network at port `3000`; the WebUI has no public domain.
+- [ ] Only one QQ protocol process owns the bot session.
 
-## Phase B: Koishi/Yuno replaces AstrBot
+## LLBot
 
-- [ ] Configure ONEBOT_TRANSPORT=ws, ONEBOT_ENDPOINT=ws://llbot:3000, ONEBOT_TOKEN, and separate koishi/yuno Mongo databases.
-- [ ] Run Koishi/Yuno shadow mode against LLBot and validate the complete Session mapping without replies.
-- [ ] Deploy the unified image with YUNO_PLUGIN_MODE=active and verify /health, /ready, /metrics, /koishi status, normal replies, media delivery, and scheduled delivery.
-- [ ] Disable LLBot's AstrBot reverse WebSocket before stopping AstrBot to prevent duplicate replies.
-- [ ] Confirm no duplicate scheduler, queue worker, or delivery ledger claim exists.
+- [ ] The logged-in QQ equals `SELF_QQ`.
+- [ ] OneBot uses array messages, a non-empty token, and positive WebSocket mode.
+- [ ] `AUTH_TOKEN`, the WebUI password, and `ONEBOT_TOKEN` are stored only as deployment secrets.
+- [ ] Login session files are retained; expired QR images and runtime logs are removed after cutover.
 
-## Final cleanup
+## Koishi/Yuno
 
-- [ ] Delete AstrBot and yuno-koishi-shadow services and their residual volumes.
-- [ ] Drop only MongoDB koishi-shadow; retain yuno, koishi, Qdrant, and MemeAsset data.
-- [ ] Retain only mongodb, llbot, yuno-qq-bot, and Qdrant-omiste services.
+- [ ] `ONEBOT_TRANSPORT=ws` and `ONEBOT_ENDPOINT=ws://llbot.zeabur.internal:3000`.
+- [ ] `YUNO_PLUGIN_MODE=active`, `MEME_PROVIDER=local-cache`, and production runs one application replica.
+- [ ] `/ready` returns HTTP 200 with MongoDB, Bot, Queue, and Scheduler ready.
+- [ ] `/metrics` rejects missing credentials and succeeds with `x-yuno-metrics-token`.
+- [ ] Group/private, mention, reply, image, voice, video, file, face, poke, and member-added events are accepted.
+- [ ] A real reply completes `send-text` once and its Delivery Ledger record is `sent` with one attempt.
+- [ ] `/koishi status` is limited to `ADMIN_QQ`; reminders and scheduled delivery use the same Koishi adapter.
+
+## Data retention
+
+- [ ] Retain the production Koishi and Yuno MongoDB databases, Qdrant collections, MemeAsset records, and LLBot session data.
+- [ ] Remove only temporary shadow databases, legacy service volumes, expired login QR files, and obsolete logs/caches.
+- [ ] Do not restore HTTP OneBot callbacks, direct Yuno OneBot delivery, standalone workers, or a second scheduler.

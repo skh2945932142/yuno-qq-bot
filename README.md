@@ -53,4 +53,4 @@ npm run smoke:mock
 npm test
 ~~~
 
-See docs/environment-variables.md and DEPLOYMENT_CHECKLIST.md for the migration rollout and LLBot replacement procedure.
+See `docs/environment-variables.md` and `DEPLOYMENT_CHECKLIST.md` for the final production topology and verification procedure.

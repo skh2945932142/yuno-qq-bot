@@ -826,7 +826,7 @@ async function loadMemeCandidatesForReply({ event, trace, memoryContext }, deps)
   }
 }
 
-function createWorkflowDeps(deps = {}, options = {}) {
+export function createWorkflowDeps(deps = {}, options = {}) {
   const runtimeServices = getRuntimeServices();
   const deliveryLedgerEnabled = options.responseMode !== 'capture' && deps.disableDeliveryLedger !== true;
   const runtimeDelivery = deliveryLedgerEnabled

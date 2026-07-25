@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  createWorkflowDeps as createProductionWorkflowDeps,
   normalizeVoiceTtsText,
   processIncomingMessage,
   processReplyJob,
@@ -27,6 +28,21 @@ function createEvent(overrides = {}) {
     ...overrides,
   };
 }
+
+test('createWorkflowDeps fills scheduler tool context dependencies', () => {
+  const ensureRelation = async () => ({ affection: 0 });
+  const deps = createProductionWorkflowDeps({ ensureRelation }, { responseMode: 'send' });
+
+  assert.equal(deps.ensureRelation, ensureRelation);
+  for (const name of [
+    'ensureUserState',
+    'ensureUserProfileMemory',
+    'getConversationState',
+    'retrieveMemoryContext',
+  ]) {
+    assert.equal(typeof deps[name], 'function');
+  }
+});
 
 function createPrecomputedContext(event, overrides = {}) {
   return {

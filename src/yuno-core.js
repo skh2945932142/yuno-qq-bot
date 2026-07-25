@@ -1,5 +1,6 @@
 import {
   buildWorkflowContext,
+  createWorkflowDeps,
   processIncomingMessage,
   shouldRespondToEvent,
 } from './message-workflow.js';
@@ -178,15 +179,18 @@ function createRuntimeDeps(output, options = {}) {
 }
 
 async function formatStructuredToolReply(event, options, output) {
-  const deps = {
+  const providedDeps = {
     ...(options.deps || {}),
   };
-  if (typeof deps.retrieveMemoryContext !== 'function') {
-    deps.retrieveMemoryContext = async () => ({
+  if (typeof providedDeps.retrieveMemoryContext !== 'function') {
+    providedDeps.retrieveMemoryContext = async () => ({
       eventMemories: [],
       memeMemories: [],
     });
   }
+  const deps = createWorkflowDeps(providedDeps, {
+    responseMode: options.responseMode,
+  });
   const trace = options.trace || createTraceContext('tool-result', {
     chatType: event.chatType,
     chatId: event.chatId,

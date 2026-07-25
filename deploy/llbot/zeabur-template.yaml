@@ -4,7 +4,7 @@ kind: Template
 metadata:
   name: LLBot
 spec:
-  description: LLBot 8.1.0 pinned for the Yuno QQ bot migration.
+  description: LLBot 8.1.0 pinned for the production Koishi/Yuno QQ bot.
   services:
     - name: llbot
       icon: https://cdn.zeabur.com/prebuilt.svg
@@ -28,7 +28,7 @@ spec:
             default: Asia/Shanghai
           WEBUI_PORT:
             default: "3080"
-          # Set AUTH_TOKEN from the Zeabur Secret named LLBOT_AUTH_TOKEN.
-          # Keep the token out of this template, Git, deployment logs, and chat.
+          # Store AUTH_TOKEN as a Zeabur secret.
+          # Keep it out of this template, Git, deployment logs, and chat.
           AUTH_TOKEN:
             default: ""
