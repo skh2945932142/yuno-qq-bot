@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import {
   buildKoishiMongoConfig,
   buildOneBotConfig,
   createKoishiApplication,
   requireKoishiConfig,
+  verifyOneBotSignature,
 } from './src/koishi-app.js';
 
 test('Koishi Mongo config derives the database name from the URI', () => {
@@ -37,6 +39,17 @@ test('Koishi OneBot HTTP config uses NapCat access_token query authentication', 
     onebotToken: '',
     onebotSecret: '',
   }), false);
+});
+
+test('Koishi OneBot ingress validates the NapCat HMAC over raw request bytes', () => {
+  const body = { post_type: 'message', self_id: 10000, raw_message: 'hello' };
+  const rawBody = Buffer.from(JSON.stringify(body));
+  const secret = 'event-secret';
+  const signature = `sha1=${createHmac('sha1', secret).update(rawBody).digest('hex')}`;
+
+  assert.equal(verifyOneBotSignature({ body, rawBody, signature, secret }), true);
+  assert.equal(verifyOneBotSignature({ body, rawBody, signature: 'sha1=invalid', secret }), false);
+  assert.equal(verifyOneBotSignature({ body, rawBody: Buffer.from('{"changed":true}'), signature, secret }), false);
 });
 
 test('Koishi configuration requires the OneBot bot and console credentials when enabled', () => {

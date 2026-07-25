@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { metrics } from './metrics.js';
@@ -13,7 +13,9 @@ const Http = require('@koishijs/plugin-http').default;
 const Console = require('@koishijs/plugin-console').default;
 const Auth = require('@koishijs/plugin-auth').default;
 const Mongo = require('@koishijs/plugin-database-mongo').default;
-const OneBot = require('koishi-plugin-adapter-onebot').default;
+const OneBotAdapter = require('koishi-plugin-adapter-onebot');
+const OneBot = OneBotAdapter.default;
+const { HttpServer, OneBot: OneBotProtocol } = OneBotAdapter;
 
 function constantTimeEquals(actual, expected) {
   const actualBuffer = Buffer.from(String(actual || ''));
@@ -63,6 +65,53 @@ function buildOneBotConfig(runtimeConfig = config) {
   }
   return onebotConfig;
 }
+function verifyOneBotSignature({ body, rawBody, signature, secret }) {
+  if (!secret || !signature || !body) return false;
+  const payload = rawBody || JSON.stringify(body);
+  const expected = `sha1=${createHmac('sha1', secret).update(payload).digest('hex')}`;
+  return constantTimeEquals(signature, expected);
+}
+
+let oneBotHttpIngressPatched = false;
+
+function installOneBotHttpIngressCompatibility() {
+  if (oneBotHttpIngressPatched) return;
+  oneBotHttpIngressPatched = true;
+
+  // koishi-plugin-adapter-onebot 6.9.4 reads ctx.body, but current Koishi
+  // stores parsed request payloads on ctx.request.body. Keep HMAC validation
+  // on the unparsed bytes so NapCat's signature remains authoritative.
+  HttpServer.prototype.connect = async function connect(bot) {
+    const { secret, path = '/onebot' } = bot.config;
+    this.ctx.server.post(path, async (koa) => {
+      const body = koa.request?.body;
+      const rawBody = body?.[Symbol.for('unparsedBody')];
+      if (!body || typeof body !== 'object') {
+        koa.status = 400;
+        return;
+      }
+      if (secret && !verifyOneBotSignature({
+        body,
+        rawBody,
+        signature: koa.headers['x-signature'],
+        secret,
+      })) {
+        koa.status = koa.headers['x-signature'] ? 403 : 401;
+        return;
+      }
+      const selfId = String(koa.headers['x-self-id'] || '');
+      const targetBot = this.bots.find((candidate) => candidate.selfId === selfId);
+      if (!targetBot) {
+        koa.status = 403;
+        return;
+      }
+      targetBot.logger.debug('[receive] %o', body);
+      await OneBotProtocol.dispatchSession(targetBot, body);
+      koa.status = 204;
+    });
+  };
+}
+
 
 function installOperationalRoutes(ctx, runtimeConfig = config) {
   ctx.server.get('/health', (koa) => {
@@ -101,6 +150,7 @@ export function createKoishiApplication(options = {}) {
   const runtimeConfig = { ...config, ...(options.config || {}) };
   requireKoishiConfig(runtimeConfig);
 
+  installOneBotHttpIngressCompatibility();
   const ctx = new Context();
   ctx.plugin(Server, {
     host: options.host || '0.0.0.0',
@@ -149,5 +199,7 @@ export {
   buildKoishiMongoConfig,
   buildOneBotConfig,
   installOperationalRoutes,
+  installOneBotHttpIngressCompatibility,
   requireKoishiConfig,
+  verifyOneBotSignature,
 };
