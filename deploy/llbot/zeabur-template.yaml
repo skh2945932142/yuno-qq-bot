@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://schema.zeabur.app/template.json
+apiVersion: zeabur.com/v1
+kind: Template
+metadata:
+  name: LLBot
+spec:
+  description: LLBot 8.1.0 pinned for the Yuno QQ bot migration.
+  services:
+    - name: llbot
+      icon: https://cdn.zeabur.com/prebuilt.svg
+      template: PREBUILT_V2
+      spec:
+        id: llbot
+        source:
+          image: linyuchen/llbot@sha256:a09486c0c0626dae1f4623f4b0ede1e8a7d63a4be51094fd48c52004eda82d85
+        ports:
+          - id: onebot-ws
+            port: 3000
+            type: HTTP
+          - id: webui
+            port: 3080
+            type: HTTP
+        volumes:
+          - id: llbot-data
+            dir: /app/llbot/data
+        env:
+          TZ:
+            default: Asia/Shanghai
+          WEBUI_PORT:
+            default: "3080"
+          # Set AUTH_TOKEN from the Zeabur Secret named LLBOT_AUTH_TOKEN.
+          # Keep the token out of this template, Git, deployment logs, and chat.
+          AUTH_TOKEN:
+            default: ""

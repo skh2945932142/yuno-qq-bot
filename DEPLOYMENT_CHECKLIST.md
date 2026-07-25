@@ -2,7 +2,11 @@
 
 ## Phase A: LLBot replaces NapCat
 
-- [ ] Create LLBot with a persistent data volume, DNS preflight, LLBOT_AUTH_TOKEN, and QR login.
+- [ ] Deploy `deploy/llbot/zeabur-template.yaml`; it pins LLBot 8.1.0 by OCI digest and mounts `/app/llbot/data`.
+- [ ] Store the acquired token only as the Zeabur Secret `LLBOT_AUTH_TOKEN`, then map the container variable `AUTH_TOKEN` to that secret.
+- [ ] Keep the LLBot WebUI on port 3080 private or temporarily access-controlled; never publish the auth token.
+- [ ] Resolve required external QQ/LLBot hosts plus `mongodb`, `Qdrant-omiste`, and `AstrBot` from the LLBot container before stopping anything.
+- [ ] Confirm the LLBot WebUI reports a valid auth token, then complete QR login and verify the actual QQ matches `SELF_QQ`.
 - [ ] Configure LLBot reverse WebSocket to AstrBot with array messages and self-message reporting.
 - [ ] Stop NapCat only after LLBot is ready to log in; verify AstrBot receives and replies through LLBot.
 - [ ] Validate group/private, mention, reply, image, voice, video, file, face, poke, member-added, reminders, and proactive delivery.
