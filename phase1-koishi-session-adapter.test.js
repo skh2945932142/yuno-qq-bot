@@ -44,6 +44,33 @@ test('Koishi Session adapter maps group messages, mentions, replies, and attachm
   assert.equal(event.source.adapter, 'koishi');
   assert.equal(event.source.transport, 'onebot');
 });
+test('Koishi Session adapter reads the OneBot payload attached by Satori', () => {
+  const onebot = {
+    post_type: 'message',
+    message_type: 'group',
+    group_id: 30000,
+    self_id: 10000,
+    user_id: 20000,
+    message_id: 12345,
+    time: 1_700_000_000,
+  };
+  const event = adaptKoishiSession({
+    type: 'message-created',
+    subtype: 'group',
+    selfId: '10000',
+    userId: '20000',
+    guildId: '30000',
+    channelId: '30000',
+    messageId: '12345',
+    content: 'live payload',
+    onebot,
+  });
+
+  assert.equal(resolveOnebotPayload({ onebot }), onebot);
+  assert.equal(event.source.postType, 'message');
+  assert.equal(event.source.sessionType, 'message-created');
+  assert.equal(event.timestamp, 1_700_000_000_000);
+});
 
 test('Koishi Session adapter removes the private channel prefix', () => {
   const event = adaptKoishiSession({

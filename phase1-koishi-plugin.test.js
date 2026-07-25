@@ -117,6 +117,27 @@ test('shadow Koishi plugin observes the Koishi message session without invoking 
     },
   }]);
 });
+test('shadow Koishi plugin accepts Satori message-created sessions with attached OneBot metadata', async () => {
+  const ctx = createContext();
+  const logs = [];
+  createYunoKoishiPlugin({
+    mode: 'shadow',
+    config: { selfQq: '10000', adminQq: '90000', yunoPluginMode: 'shadow' },
+    logger: {
+      info: (category, message, meta) => logs.push({ category, message, meta }),
+      warn() {},
+      error() {},
+    },
+  })(ctx);
+
+  const session = groupSession();
+  session.type = 'message-created';
+  delete session.getInternal;
+  session.onebot = { post_type: 'message', message_type: 'group', group_id: 30000 };
+  await ctx.middlewares[0](session, async () => undefined);
+
+  assert.equal(logs.some((entry) => entry.message === 'shadow_event'), true);
+});
 
 test('shadow Koishi plugin never initializes Yuno runtime or sends replies', async () => {
   const ctx = createContext();

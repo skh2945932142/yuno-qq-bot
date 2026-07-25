@@ -21,6 +21,7 @@ function isAdmin(session = {}, runtimeConfig = config) {
 
 function isYunoSessionEligible(event = {}) {
   if (event.source?.postType === 'message') return true;
+  if (event.source?.sessionType === 'message-created') return true;
   if (event.rawText === '/poke' || event.rawText === '/welcome') return true;
   return false;
 }

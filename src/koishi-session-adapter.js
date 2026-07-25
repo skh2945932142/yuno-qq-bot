@@ -48,6 +48,8 @@ function stripPrivateChannelPrefix(value = '') {
 }
 
 function resolveOnebotPayload(session = {}) {
+  const attachedPayload = session.onebot || (session.event?._type === 'onebot' ? session.event._data : null);
+  if (attachedPayload && typeof attachedPayload === 'object') return attachedPayload;
   if (typeof session.getInternal === 'function') {
     return session.getInternal('onebot') || {};
   }
