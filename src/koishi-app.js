@@ -13,6 +13,7 @@ const Http = require('@koishijs/plugin-http').default;
 const Console = require('@koishijs/plugin-console').default;
 const Auth = require('@koishijs/plugin-auth').default;
 const Mongo = require('@koishijs/plugin-database-mongo').default;
+const { Status } = require('@satorijs/protocol');
 const OneBotAdapter = require('koishi-plugin-adapter-onebot');
 const OneBot = OneBotAdapter.default;
 const { HttpServer, OneBot: OneBotProtocol } = OneBotAdapter;
@@ -65,6 +66,10 @@ function buildOneBotConfig(runtimeConfig = config) {
   }
   return onebotConfig;
 }
+function isConfiguredBotOnline(bots = [], selfQq = '') {
+  return bots.some((bot) => String(bot.selfId) === String(selfQq) && bot.status === Status.ONLINE);
+}
+
 function verifyOneBotSignature({ body, rawBody, signature, secret }) {
   if (!secret || !signature || !body) return false;
   const payload = rawBody || JSON.stringify(body);
@@ -120,7 +125,7 @@ function installOperationalRoutes(ctx, runtimeConfig = config) {
 
   ctx.server.get('/ready', (koa) => {
     const status = getYunoRuntimeStatus();
-    const botOnline = ctx.bots.some((bot) => String(bot.selfId) === runtimeConfig.selfQq && bot.status === 'online');
+    const botOnline = isConfiguredBotOnline(ctx.bots, runtimeConfig.selfQq);
     const ready = status.ready && botOnline;
     koa.status = ready ? 200 : 503;
     koa.body = {
@@ -199,6 +204,7 @@ export {
   buildKoishiMongoConfig,
   buildOneBotConfig,
   installOperationalRoutes,
+  isConfiguredBotOnline,
   installOneBotHttpIngressCompatibility,
   requireKoishiConfig,
   verifyOneBotSignature,

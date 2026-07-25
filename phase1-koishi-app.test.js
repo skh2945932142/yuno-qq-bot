@@ -6,6 +6,7 @@ import {
   buildOneBotConfig,
   createKoishiApplication,
   requireKoishiConfig,
+  isConfiguredBotOnline,
   verifyOneBotSignature,
 } from './src/koishi-app.js';
 
@@ -50,6 +51,12 @@ test('Koishi OneBot ingress validates the NapCat HMAC over raw request bytes', (
   assert.equal(verifyOneBotSignature({ body, rawBody, signature, secret }), true);
   assert.equal(verifyOneBotSignature({ body, rawBody, signature: 'sha1=invalid', secret }), false);
   assert.equal(verifyOneBotSignature({ body, rawBody: Buffer.from('{"changed":true}'), signature, secret }), false);
+});
+
+test('Koishi readiness recognizes the Satori online status enum', () => {
+  assert.equal(isConfiguredBotOnline([{ selfId: '10000', status: 1 }], '10000'), true);
+  assert.equal(isConfiguredBotOnline([{ selfId: '10000', status: 0 }], '10000'), false);
+  assert.equal(isConfiguredBotOnline([{ selfId: '99999', status: 1 }], '10000'), false);
 });
 
 test('Koishi configuration requires the OneBot bot and console credentials when enabled', () => {
