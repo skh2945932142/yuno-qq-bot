@@ -12,4 +12,5 @@ test('docker build context includes reply style examples without shipping all ru
   assert.equal(lines.includes('data/*'), true);
   assert.equal(lines.includes('!data/reply-style/'), true);
   assert.equal(lines.includes('!data/reply-style/examples.jsonl'), true);
+  assert.equal(lines.includes('doctor.js'), false);
 });
