@@ -32,6 +32,7 @@ test('Koishi OneBot config uses the LLBot positive WebSocket transport', () => {
 
 test('Koishi readiness recognizes the Satori online status enum', () => {
   assert.equal(isConfiguredBotOnline([{ selfId: '10000', status: 1 }], '10000'), true);
+  assert.equal(isConfiguredBotOnline([{ selfId: '10000', status: 'online' }], '10000'), true);
   assert.equal(isConfiguredBotOnline([{ selfId: '10000', status: 0 }], '10000'), false);
   assert.equal(isConfiguredBotOnline([{ selfId: '99999', status: 1 }], '10000'), false);
 });

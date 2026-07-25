@@ -58,7 +58,12 @@ function buildOneBotConfig(runtimeConfig = config) {
   };
 }
 function isConfiguredBotOnline(bots = [], selfQq = '') {
-  return bots.some((bot) => String(bot.selfId) === String(selfQq) && bot.status === Status.ONLINE);
+  return bots.some((bot) => {
+    if (String(bot.selfId) !== String(selfQq)) return false;
+    const status = bot.status;
+    return status === Status.ONLINE
+      || String(status || '').trim().toLowerCase() === 'online';
+  });
 }
 
 function installOperationalRoutes(ctx, runtimeConfig = config) {
