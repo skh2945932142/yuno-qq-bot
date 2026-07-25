@@ -26,7 +26,7 @@ test('delivery ledger permits retry after a failed delivery', async () => {
   const ledger = createDeliveryLedger({ records, now: () => now });
 
   const first = await ledger.claim('delivery-2');
-  await ledger.markFailed('delivery-2', first.claimToken, new Error('napcat unavailable'));
+  await ledger.markFailed('delivery-2', first.claimToken, new Error('onebot delivery unavailable'));
   now = new Date('2026-07-23T12:00:01Z');
   const retry = await ledger.claim('delivery-2');
 

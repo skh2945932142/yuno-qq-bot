@@ -478,7 +478,7 @@ test('processIncomingMessage retries a local meme file as base64 when file send 
         sendStructuredReply: async (_target, outputs) => {
           structuredReplies.push(outputs);
           if (outputs[1]?.image?.file === filePath) {
-            throw new Error('napcat cannot read local file');
+            throw new Error('onebot adapter cannot read local file');
           }
           return true;
         },
@@ -825,11 +825,11 @@ test('processIncomingMessage does not hide a text sender failure', async () => {
   await assert.rejects(
     () => processIncomingMessage(event, createPrecomputedContext(event), {
       deps: createWorkflowDeps({
-        sendReply: async () => { throw new Error('napcat unavailable'); },
+        sendReply: async () => { throw new Error('onebot delivery unavailable'); },
         chat: async () => JSON.stringify({ text: 'cannot deliver', sendVoice: false, voiceText: '' }),
       }),
     }),
-    /napcat unavailable/
+    /onebot delivery unavailable/
   );
 });
 
