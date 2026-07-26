@@ -101,7 +101,9 @@ export function createKoishiDeliveryAdapter(context, options = {}) {
     if (!content) return false;
     try {
       const bot = resolve(target);
-      await bot.sendMessage(toChannelId(target), content);
+      const quoteId = String(target?.quoteMessageId || '').trim();
+      const payload = quoteId ? `${h.quote(quoteId)}${content}` : content;
+      await bot.sendMessage(toChannelId(target), payload);
       return true;
     } catch (error) {
       throw toDeliveryError(error, target);

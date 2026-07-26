@@ -41,7 +41,12 @@ test('Koishi delivery selects SELF_QQ and maps group/private targets', async () 
   const { context, sent } = createContext();
   const adapter = createKoishiDeliveryAdapter(context, { selfId: '10000' });
 
-  await adapter.sendReply({ platform: 'qq', chatType: 'group', chatId: '30000' }, 'group text');
+  await adapter.sendReply({
+    platform: 'qq',
+    chatType: 'group',
+    chatId: '30000',
+    quoteMessageId: 'quoted-message',
+  }, 'group text');
   await adapter.sendStructuredReply({ platform: 'qq', chatType: 'private', chatId: '20000' }, [
     { type: 'text', text: 'before' },
     { type: 'image', image: { base64: 'aGk=' } },
@@ -52,6 +57,9 @@ test('Koishi delivery selects SELF_QQ and maps group/private targets', async () 
     ['primary', '30000'],
     ['primary', 'private:20000'],
   ]);
+  assert.match(sent[0].content, /quote/);
+  assert.match(sent[0].content, /quoted-message/);
+  assert.match(sent[0].content, /group text/);
   assert.match(sent[1].content, /before/);
   assert.match(sent[1].content, /data:image\/png;base64,aGk=/);
   assert.match(sent[1].content, /after/);

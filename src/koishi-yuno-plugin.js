@@ -9,6 +9,7 @@ import {
   shutdownYunoRuntime,
 } from './yuno-runtime.js';
 import { runYunoConversation } from './yuno-core.js';
+import { createPrivateMessageAggregator } from './message-aggregator.js';
 
 function isKoishiAdminCommand(session = {}) {
   return /^\s*\/koishi(?:\s|$)/i.test(String(session.content || ''));
@@ -55,6 +56,8 @@ export function createYunoKoishiPlugin(options = {}) {
     });
     let runtime = null;
     let acceptingMessages = false;
+    const privateMessageAggregator = options.privateMessageAggregator
+      || createPrivateMessageAggregator({ runtimeConfig });
 
     // Shadow mode records the Session boundary without invoking any Yuno service.
     if (mode === 'shadow') {
@@ -88,9 +91,15 @@ export function createYunoKoishiPlugin(options = {}) {
     });
 
     ctx.middleware(async (session, next) => {
+      const event = adaptKoishiSession(session);
+      const reservation = event.chatType === 'private' && event.userId && event.chatId
+        ? privateMessageAggregator.reserve(event)
+        : null;
+
       if (isKoishiAdminCommand(session)) {
         if (!isAdmin(session, runtimeConfig)) {
           await session.send('没有这个管理权限。');
+          if (reservation) await privateMessageAggregator.submit(reservation, { accepted: false });
           return '';
         }
         const command = String(session.content || '').trim().split(/\s+/)[1] || 'status';
@@ -99,17 +108,30 @@ export function createYunoKoishiPlugin(options = {}) {
         } else {
           await session.send('可用命令：/koishi status');
         }
+        if (reservation) await privateMessageAggregator.submit(reservation, { accepted: false });
         return '';
       }
 
-      const downstream = await next();
+      let downstream;
+      try {
+        downstream = await next();
+      } catch (error) {
+        if (reservation) await privateMessageAggregator.submit(reservation, { accepted: false });
+        throw error;
+      }
       if (downstream !== undefined && downstream !== null && downstream !== '') {
+        if (reservation) await privateMessageAggregator.submit(reservation, { accepted: false });
         return downstream;
       }
 
-      const event = adaptKoishiSession(session);
-      if (!event.userId || !event.chatId || !isYunoSessionEligible(event)) return '';
-      if (event.selfId && event.userId === event.selfId) return '';
+      if (!event.userId || !event.chatId || !isYunoSessionEligible(event)) {
+        if (reservation) await privateMessageAggregator.submit(reservation, { accepted: false });
+        return '';
+      }
+      if (event.selfId && event.userId === event.selfId) {
+        if (reservation) await privateMessageAggregator.submit(reservation, { accepted: false });
+        return '';
+      }
       if (mode === 'shadow') {
         runtimeLogger.info('koishi', 'shadow_event', {
           chatType: event.chatType,
@@ -120,6 +142,7 @@ export function createYunoKoishiPlugin(options = {}) {
           mentionsBot: event.mentionsBot,
           sessionType: event.source?.sessionType,
         });
+        if (reservation) await privateMessageAggregator.submit(reservation, { accepted: false });
         return '';
       }
       if (!runtime || !acceptingMessages || !isRuntimeAccepting()) {
@@ -127,20 +150,31 @@ export function createYunoKoishiPlugin(options = {}) {
           chatId: event.chatId,
           messageId: event.messageId,
         });
+        if (reservation) await privateMessageAggregator.submit(reservation, { accepted: false });
         return '';
       }
 
+      const processConversation = (conversationEvent) => runConversation(conversationEvent, {
+        responseMode: 'send',
+        runtimeConfig,
+        deps: {
+          deliveryAdapter,
+          protocolAdapter,
+          sendReply: deliveryAdapter.sendReply.bind(deliveryAdapter),
+          sendStructuredReply: deliveryAdapter.sendStructuredReply.bind(deliveryAdapter),
+          sendVoice: deliveryAdapter.sendVoice.bind(deliveryAdapter),
+        },
+      });
+
       try {
-        await runConversation(event, {
-          responseMode: 'send',
-          deps: {
-            deliveryAdapter,
-            protocolAdapter,
-            sendReply: deliveryAdapter.sendReply.bind(deliveryAdapter),
-            sendStructuredReply: deliveryAdapter.sendStructuredReply.bind(deliveryAdapter),
-            sendVoice: deliveryAdapter.sendVoice.bind(deliveryAdapter),
-          },
-        });
+        if (reservation) {
+          await privateMessageAggregator.submit(reservation, {
+            accepted: true,
+            process: processConversation,
+          });
+        } else {
+          await processConversation(event);
+        }
       } catch (error) {
         runtimeLogger.error('koishi', 'Yuno message processing failed', {
           message: error.message,
@@ -154,6 +188,7 @@ export function createYunoKoishiPlugin(options = {}) {
 
     ctx.on('dispose', async () => {
       acceptingMessages = false;
+      await privateMessageAggregator.close({ flush: true });
       if (runtime) {
         await shutdownRuntime();
         runtime = null;

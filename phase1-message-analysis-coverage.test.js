@@ -116,6 +116,7 @@ test('analyzeTriggerFast covers private, mention, command, keyword, and deny rou
   assert.equal(analyzeTriggerFast(groupEvent({ rawText: 'yuno help', text: 'yuno help' }), {
     triggerPolicy: { keywords: ['help'] },
   }).reason, 'keyword-trigger');
+  assert.equal(analyzeTriggerFast(groupEvent({ rawText: '由乃，看看群状态', text: '由乃，看看群状态' })).reason, 'keyword-trigger');
   assert.equal(analyzeTriggerFast(groupEvent()).reason, 'explicit-trigger-required');
 });
 

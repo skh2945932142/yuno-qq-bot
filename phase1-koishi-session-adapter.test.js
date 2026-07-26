@@ -29,7 +29,11 @@ test('Koishi Session adapter maps group messages, mentions, replies, and attachm
       { type: 'file', attrs: { src: 'https://example.invalid/a.txt' } },
       { type: 'face', attrs: { id: '14' } },
     ],
-    quote: { messageId: 'quoted-1' },
+    quote: {
+      messageId: 'quoted-1',
+      content: '前面这条 <at id="30001"/> 具体是什么意思？',
+      user: { name: 'Bob' },
+    },
     author: { name: '昵称', member: { nick: '群名片' } },
     getInternal: () => ({ post_type: 'message', message_type: 'group', time: 1_700_000_000 }),
   });
@@ -39,6 +43,9 @@ test('Koishi Session adapter maps group messages, mentions, replies, and attachm
   assert.equal(event.userName, '群名片');
   assert.equal(event.mentionsBot, true);
   assert.equal(event.replyTo, 'quoted-1');
+  assert.equal(event.replyToText, '前面这条 具体是什么意思？');
+  assert.equal(event.replyToUserId, '');
+  assert.equal(event.replyToUserName, 'Bob');
   assert.equal(event.timestamp, 1_700_000_000_000);
   assert.deepEqual(event.attachments.map((item) => item.type), ['image', 'record', 'video', 'file', 'face']);
   assert.equal(event.source.adapter, 'koishi');
@@ -70,6 +77,30 @@ test('Koishi Session adapter reads the OneBot payload attached by Satori', () =>
   assert.equal(event.source.postType, 'message');
   assert.equal(event.source.sessionType, 'message-created');
   assert.equal(event.timestamp, 1_700_000_000_000);
+});
+
+test('Koishi Session adapter treats a reply to the bot as an explicit mention', () => {
+  const event = adaptKoishiSession({
+    type: 'message',
+    subtype: 'group',
+    selfId: '10000',
+    userId: '20000',
+    guildId: '30000',
+    channelId: '30000',
+    messageId: 'm-reply',
+    content: '为什么？',
+    elements: [{ type: 'text', attrs: { content: '为什么？' } }],
+    quote: {
+      messageId: 'bot-message',
+      content: '上一条由乃回复',
+      user: { id: '10000', name: '由乃' },
+    },
+    getInternal: () => ({ post_type: 'message', message_type: 'group', group_id: 30000 }),
+  });
+
+  assert.equal(event.mentionsBot, true);
+  assert.equal(event.replyToUserId, '10000');
+  assert.equal(event.replyToText, '上一条由乃回复');
 });
 
 test('Koishi Session adapter removes the private channel prefix', () => {

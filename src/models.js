@@ -250,6 +250,8 @@ const DeliveryRecordSchema = new mongoose.Schema({
   lockedUntil: { type: Date, default: null },
   attempts: { type: Number, default: 0 },
   lastError: { type: String, default: '' },
+  deliveryPlan: { type: mongoose.Schema.Types.Mixed, default: null },
+  completedParts: { type: Number, default: 0 },
   sentAt: { type: Date, default: null },
 }, {
   minimize: false,

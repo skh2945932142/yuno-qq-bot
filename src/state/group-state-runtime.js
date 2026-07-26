@@ -215,19 +215,28 @@ export async function updateGroupStateFromAnalysis({
   }
 
   const state = await GroupState.findOneAndUpdate(
-    { groupId },
     {
-      mood: nextMood,
-      moodIntensity: nextIntensity,
-      activityLevel: nextActivity,
-      recentTopics: topicSet,
-      styleProfile: nextStyleProfile,
-      lastMessageAt: now,
-      lastActiveWindowAt: nextActivity >= 60 ? now : existing.lastActiveWindowAt,
-      lastInteractionSummary: summary || existing.lastInteractionSummary,
+      groupId,
+      $or: [
+        { lastMessageAt: { $lte: now } },
+        { lastMessageAt: { $exists: false } },
+      ],
     },
-    { upsert: true, returnDocument: 'after' }
+    {
+      $set: {
+        mood: nextMood,
+        moodIntensity: nextIntensity,
+        activityLevel: nextActivity,
+        recentTopics: topicSet,
+        styleProfile: nextStyleProfile,
+        lastMessageAt: now,
+        lastActiveWindowAt: nextActivity >= 60 ? now : existing.lastActiveWindowAt,
+        lastInteractionSummary: summary || existing.lastInteractionSummary,
+      },
+    },
+    { returnDocument: 'after' }
   );
+  if (!state) return existing;
   return setCached(groupStateCache, groupId, state, GROUP_STATE_CACHE_TTL_MS);
 }
 

@@ -22,6 +22,8 @@ await import('./phase1-reply-intent-plan.test.js');
 await import('./phase1-workflow-coverage.test.js');
 await import('./phase1-memory-retrieval-coverage.test.js');
 await import('./phase1-reply-style-retrieval.test.js');
+await import('./phase1-reply-segmenter.test.js');
+await import('./phase1-chat-context.test.js');
 await import('./phase1-reply-naturalness.test.js');
 await import('./phase1-reply-sanitization.test.js');
 await import('./phase1-group-style-memory.test.js');

@@ -339,6 +339,14 @@ test('config exposes companion experience and external enhancement knobs', async
   assert.equal(config.memeVisionEnabled, true);
   assert.equal(config.maxActiveRemindersPerUser, 20);
   assert.equal(config.maxActiveSubscriptionsPerUser, 10);
+  assert.equal(config.replySegmentationEnabled, true);
+  assert.equal(config.replySegmentMaxCount, 3);
+  assert.equal(config.replySegmentMinDelayMs, 600);
+  assert.equal(config.replySegmentMaxDelayMs, 1400);
+  assert.equal(config.privateMessageAggregationEnabled, true);
+  assert.equal(config.privateMessageAggregationWindowMs, 1200);
+  assert.equal(config.privateMessageAggregationMaxWindowMs, 5000);
+  assert.equal(config.groupReplyQuoteEnabled, true);
 });
 
 test('config exposes contextual meme auto-send controls', async () => {

@@ -7,7 +7,6 @@ import { analyzeTrigger, analyzeTriggerFast } from './message-analysis.js';
 import { resolveEmotion, shouldSendVoiceForEmotion } from './emotion-engine.js';
 import { resolveDailyMood } from './daily-mood.js';
 import {
-  canUseAdvancedGroupFeatures,
   ensureGroupState,
   getRecentEvents,
   recordGroupEvent,
@@ -22,7 +21,7 @@ import {
 import { getConversationState, appendConversationMessages } from './conversation-memory.js';
 import { ensureUserProfileMemory, updateUserProfileMemory } from './profile-memory.js';
 import { retrieveKnowledge } from './knowledge-base.js';
-import { buildReplyContext } from './prompt-builder.js';
+import { buildReplyContext, buildUserTurnContext } from './prompt-builder.js';
 import { createTraceContext, failTrace, finalizeTrace, withTraceSpan } from './runtime-tracing.js';
 import { planIncomingTask } from './task-router.js';
 import { registerQueryTools } from './query-tools.js';
@@ -49,12 +48,22 @@ import {
   inspectReplyNaturalness,
   polishReplyNaturalness,
 } from './reply-naturalness.js';
+import {
+  resolveSegmentDelayMs,
+  shouldSegmentReply,
+  splitReplyIntoSegments,
+} from './reply-segmenter.js';
 import { withConversationExecution } from './conversation-executor.js';
 import { executeTrackedDelivery as executeDeliveryTask } from './delivery-ledger.js';
 
 registerQueryTools(toolRegistry);
 
-const ALLOWED_SOFT_EMOJIS = new Set(['\u2764', '\u2665', '\u{1F495}', '\u{1F49E}', '\u2728']);
+const ALLOWED_SOFT_EMOJIS = new Set([
+  '\u2764', '\u2665', '\u{1F495}', '\u{1F49E}', '\u2728',
+  '\u{1F602}', '\u{1F923}', '\u{1F60A}', '\u{1F605}', '\u{1F914}',
+  '\u{1F644}', '\u{1F62E}', '\u{1F97A}', '\u{1F624}', '\u{1F634}',
+  '\u{1F44D}', '\u{1F44C}', '\u{1F389}', '\u{1F31F}', '\u{1F308}',
+]);
 const EMOJI_REGEX = /\p{Extended_Pictographic}/gu;
 const THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*?<\/\1>/gi;
 const OPEN_THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*$/i;
@@ -910,25 +919,21 @@ function shouldUseLightweightContext(event, analysis = null) {
     return true;
   }
 
-  if (
-    event?.chatType === 'group'
-    && ['basic-direct-mention-pass', 'keyword-pass'].includes(analysis?.reason)
-  ) {
-    return true;
-  }
-
   const normalizedText = stripCqCodes(event?.rawText || event?.text || '');
   return event?.source?.postType === 'message' && /^\/\S+/.test(normalizedText);
 }
 
 export async function buildWorkflowContext(event, trace, deps, options = {}) {
+  const runtimeConfig = options.runtimeConfig || config;
   const session = {
     platform: event.platform,
     chatType: event.chatType,
     chatId: event.chatId,
     userId: event.userId,
   };
-  const isAdvanced = event.chatType === 'group' && canUseAdvancedGroupFeatures(event.chatId);
+  const isAdvanced = event.chatType === 'group'
+    && Boolean(runtimeConfig.targetGroupId)
+    && String(event.chatId) === String(runtimeConfig.targetGroupId);
   const lightweight = Boolean(options.lightweight);
   const specialUser = getSpecialUserByUserId(event.userId);
 
@@ -941,7 +946,7 @@ export async function buildWorkflowContext(event, trace, deps, options = {}) {
       deps.ensureUserProfileMemory({ platform: event.platform, userId: event.userId, userName: event.userName, specialUser }),
       deps.getConversationState(session),
       isAdvanced && !lightweight ? deps.ensureGroupState(event.chatId) : Promise.resolve(null),
-      isAdvanced && !lightweight ? deps.getRecentEvents(event.chatId, 5) : Promise.resolve([]),
+      event.chatType === 'group' && !lightweight ? deps.getRecentEvents(event.chatId, 5) : Promise.resolve([]),
       deps.retrieveMemoryContext({
         userId: event.userId,
         chatId: event.chatId,
@@ -959,6 +964,7 @@ export async function buildWorkflowContext(event, trace, deps, options = {}) {
   return {
     event,
     session,
+    runtimeConfig,
     relation,
     userState,
     userProfile,
@@ -967,7 +973,7 @@ export async function buildWorkflowContext(event, trace, deps, options = {}) {
     recentEvents,
     memoryContext: memoryContext || { eventMemories: [], memeMemories: [] },
     specialUser,
-    isAdmin: event.userId === config.adminQq,
+    isAdmin: event.userId === runtimeConfig.adminQq,
     isAdvanced,
     contextMode: lightweight ? 'lightweight' : 'full',
   };
@@ -984,6 +990,7 @@ async function resolveContext(event, precomputed, trace, deps, options) {
 
   const context = await buildWorkflowContext(event, trace, deps, {
     lightweight: shouldUseLightweightContext(event, precomputed?.analysis),
+    runtimeConfig: options.runtimeConfig,
   });
   if (precomputed?.analysis) {
     return {
@@ -1054,7 +1061,9 @@ export async function shouldRespondToEvent(event, options = {}) {
       };
     }
 
-    const context = await buildWorkflowContext(normalizedEvent, trace, deps);
+    const context = await buildWorkflowContext(normalizedEvent, trace, deps, {
+      runtimeConfig: options.runtimeConfig,
+    });
     const analysis = await withTraceSpan(
       trace,
       'analyze-trigger',
@@ -1109,7 +1118,7 @@ async function runToolTask(task, context, trace, deps) {
       memoryContext: context.memoryContext,
       analysis: context.analysis,
       event: context.event,
-      adminQq: config.adminQq,
+      adminQq: context.runtimeConfig?.adminQq || config.adminQq,
     },
     trace
   ), { toolName: task.toolName });
@@ -1517,6 +1526,11 @@ export async function processIncomingMessage(event, precomputed = null, options 
     };
     const rawText = normalizedEvent.rawText || '';
     const userTurn = resolveUserTurn(normalizedEvent);
+    const modelUserTurn = buildUserTurnContext({
+      event: normalizedEvent,
+      recentEvents: workflowContext.recentEvents,
+      userTurn,
+    });
     const summary = summarizeIncomingMessage(normalizedEvent.userName, rawText);
     const analysis = workflowContext.analysis;
     const configuredReplyBudgetMs = options.replyTimeBudgetMs
@@ -1565,6 +1579,11 @@ export async function processIncomingMessage(event, precomputed = null, options 
           platform: normalizedEvent.platform,
           chatType: normalizedEvent.chatType,
           chatId: normalizedEvent.chatId,
+          ...((options.runtimeConfig?.groupReplyQuoteEnabled ?? config.groupReplyQuoteEnabled)
+            && normalizedEvent.chatType === 'group'
+            && normalizedEvent.messageId
+            ? { quoteMessageId: normalizedEvent.messageId }
+            : {}),
         };
 
         let replyText = toolResult?.text || toolResult?.summary || '已经处理好了。';
@@ -1789,7 +1808,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => runReplyWithBudget(() => deps.chat(
         replyMessages,
         systemPrompt,
-        userTurn,
+        modelUserTurn,
         {
           ...primaryReplyOptions,
           timeoutMs: modelTimeoutMs || undefined,
@@ -1872,7 +1891,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
               () => deps.chat(
                 replyMessages,
                 systemPrompt,
-                userTurn,
+                modelUserTurn,
                 {
                   ...primaryReplyOptions,
                   operation: 'reply-fallback-model',
@@ -2097,6 +2116,12 @@ export async function processIncomingMessage(event, precomputed = null, options 
       platform: normalizedEvent.platform,
       chatType: normalizedEvent.chatType,
       chatId: normalizedEvent.chatId,
+      ...((options.runtimeConfig?.groupReplyQuoteEnabled ?? config.groupReplyQuoteEnabled)
+        && normalizedEvent.chatType === 'group'
+        && normalizedEvent.messageId
+        && task.category !== 'poke'
+        ? { quoteMessageId: normalizedEvent.messageId }
+        : {}),
     };
     const memeCandidates = await loadMemeCandidatesForReply({
       event: normalizedEvent,
@@ -2146,84 +2171,158 @@ export async function processIncomingMessage(event, precomputed = null, options 
     ];
 
     await withTraceSpan(trace, 'send-text', async () => {
-      if (memeDecision.shouldSend && memeDecision.asset) {
-        let memeSent = false;
-        let sendError = null;
-        try {
-          const imageOutput = await deps.buildMemeImageOutput(memeDecision.asset);
-          const delivery = await executeTrackedDelivery(deps, normalizedEvent, 'primary', () => (
-            deps.sendStructuredReply(replyTarget, [
-              { type: 'text', text: replyText },
-              imageOutput,
-            ])
-          ), options.deliveryKey);
-          if (!delivery.sent && !delivery.deduplicated) {
-            throw new Error('structured-meme-message-empty');
+      const segmentationConfig = options.runtimeConfig || config;
+      const segments = shouldSegmentReply({
+        event: normalizedEvent,
+        route: task,
+        text: replyText,
+        runtimeConfig: segmentationConfig,
+      })
+        ? splitReplyIntoSegments(replyText, { maxCount: segmentationConfig.replySegmentMaxCount })
+        : [replyText];
+      const candidatePlan = memeDecision.shouldSend && memeDecision.asset
+        ? {
+            type: 'structured-meme',
+            text: replyText,
+            asset: {
+              assetId: memeDecision.asset.assetId || '',
+              storagePath: memeDecision.asset.storagePath || '',
+              imageUrl: memeDecision.asset.imageUrl || '',
+            },
           }
-          memeSent = true;
-        } catch (error) {
-          sendError = error;
-        }
+        : {
+            type: segments.length > 1 ? 'segmented-text' : 'text',
+            text: replyText,
+            segments,
+          };
 
-        if (!memeSent && memeDecision.asset.storagePath) {
+      const delivery = await executeTrackedDelivery(deps, normalizedEvent, 'primary', async (deliveryContext) => {
+        const prepared = await deliveryContext.preparePlan(candidatePlan);
+        let plan = prepared?.plan || candidatePlan;
+        const completedParts = Math.max(0, Number(prepared?.completedParts || 0));
+        const plannedReplyText = String(
+          plan.text
+          || (Array.isArray(plan.segments) ? plan.segments.join('') : '')
+          || replyText
+        );
+        if (plannedReplyText !== replyText) {
+          replyText = plannedReplyText;
+          voiceText = plannedReplyText;
+          replyDecision = {
+            ...replyDecision,
+            text: plannedReplyText,
+            voiceText: plannedReplyText,
+            sendVoice: false,
+          };
+        }
+        nextMessages[1].content = replyText;
+
+        if (plan.type === 'structured-meme' && plan.asset) {
+          if (completedParts >= 1) return { plan };
+          let memeError = null;
           try {
-            const imageOutput = await deps.buildMemeImageOutput(memeDecision.asset, { preferBase64: true });
-            if (!imageOutput?.image?.base64) {
-              throw sendError || new Error('meme-base64-fallback-unavailable');
-            }
-            const delivery = await executeTrackedDelivery(deps, normalizedEvent, 'primary', () => (
-              deps.sendStructuredReply(replyTarget, [
-                { type: 'text', text: replyText },
-                imageOutput,
-              ])
-            ), options.deliveryKey);
-            if (!delivery.sent && !delivery.deduplicated) {
-              throw new Error('structured-meme-message-empty');
-            }
-            memeSent = true;
+            const imageOutput = await deps.buildMemeImageOutput(plan.asset);
+            const sent = await deps.sendStructuredReply(replyTarget, [
+              { type: 'text', text: plannedReplyText },
+              imageOutput,
+            ]);
+            if (sent === false) throw new Error('structured-meme-message-empty');
           } catch (error) {
-            sendError = error;
+            memeError = error;
+            if (plan.asset.storagePath) {
+              try {
+                const imageOutput = await deps.buildMemeImageOutput(plan.asset, { preferBase64: true });
+                if (!imageOutput?.image?.base64) throw error;
+                const sent = await deps.sendStructuredReply(replyTarget, [
+                  { type: 'text', text: plannedReplyText },
+                  imageOutput,
+                ]);
+                if (sent === false) throw new Error('structured-meme-message-empty');
+                memeError = null;
+              } catch (fallbackError) {
+                memeError = fallbackError;
+              }
+            }
           }
+          if (!memeError) {
+            await deliveryContext.markPartCompleted(1);
+            return { plan };
+          }
+
+          recordWorkflowMetric('yuno_meme_auto_skipped_total', 1, {
+            chat_type: normalizedEvent.chatType,
+            reason: 'send-failed',
+          });
+          deps.logger.warn('meme', 'Contextual meme send failed; using immutable text fallback', {
+            traceId: trace.traceId,
+            assetId: plan.asset.assetId || '',
+            message: memeError.message,
+          });
+          const fallbackSegments = shouldSegmentReply({
+            event: normalizedEvent,
+            route: task,
+            text: plannedReplyText,
+            runtimeConfig: segmentationConfig,
+          })
+            ? splitReplyIntoSegments(plannedReplyText, { maxCount: segmentationConfig.replySegmentMaxCount })
+            : [plannedReplyText];
+          const replacement = await deliveryContext.replacePlanBeforeDelivery({
+            type: fallbackSegments.length > 1 ? 'segmented-text' : 'text',
+            text: plannedReplyText,
+            segments: fallbackSegments,
+          });
+          plan = replacement.plan;
         }
 
-        if (memeSent) {
-          memeDecision.recordSent?.();
-          recordWorkflowMetric('yuno_meme_auto_sent_total', 1, {
+        const plannedSegments = Array.isArray(plan.segments) && plan.segments.length > 0
+          ? plan.segments
+          : [plannedReplyText];
+        if (plannedSegments.length > 1) {
+          recordWorkflowMetric('yuno_reply_segmented_total', 1, {
             chat_type: normalizedEvent.chatType,
-            reason: memeDecision.reason || 'unknown',
+            segments: String(plannedSegments.length),
           });
-          await deps.markMemeUsed(memeDecision.asset.assetId).catch((error) => {
+        }
+        for (let index = Math.min(completedParts, plannedSegments.length); index < plannedSegments.length; index += 1) {
+          const segment = plannedSegments[index];
+          if (index > 0) {
+            await new Promise((resolve) => setTimeout(resolve, resolveSegmentDelayMs(segment, {
+              minDelayMs: segmentationConfig.replySegmentMinDelayMs,
+              maxDelayMs: segmentationConfig.replySegmentMaxDelayMs,
+            })));
+          }
+          const segmentTarget = index === 0
+            ? replyTarget
+            : { ...replyTarget, quoteMessageId: undefined };
+          const sent = await deps.sendReply(segmentTarget, segment);
+          if (sent === false) throw new Error('segment-delivery-not-sent');
+          await deliveryContext.markPartCompleted(index + 1);
+        }
+        return { plan };
+      }, options.deliveryKey);
+
+      const deliveredPlan = delivery.value?.plan || candidatePlan;
+      if (delivery.sent && deliveredPlan.type === 'structured-meme') {
+        memeDecision.recordSent?.();
+        recordWorkflowMetric('yuno_meme_auto_sent_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          reason: memeDecision.reason || 'restored-plan',
+        });
+        if (deliveredPlan.asset?.assetId) {
+          await deps.markMemeUsed(deliveredPlan.asset.assetId).catch((error) => {
             logger.warn('meme', 'Failed to record meme usage', {
               traceId: trace.traceId,
-              assetId: memeDecision.asset.assetId,
+              assetId: deliveredPlan.asset.assetId,
               message: error.message,
             });
           });
-          return;
         }
-
-        recordWorkflowMetric('yuno_meme_auto_skipped_total', 1, {
-          chat_type: normalizedEvent.chatType,
-          reason: 'send-failed',
-        });
-        logger.warn('meme', 'Contextual meme send failed; falling back to text reply', {
-          traceId: trace.traceId,
-          chatType: normalizedEvent.chatType,
-          chatId: normalizedEvent.chatId,
-          userId: normalizedEvent.userId,
-          assetId: memeDecision.asset.assetId,
-          message: sendError?.message || 'unknown-error',
-        });
       } else if (memeDecision.reason && !['mode-off', 'disabled', 'no-candidate'].includes(memeDecision.reason)) {
         recordWorkflowMetric('yuno_meme_auto_skipped_total', 1, {
           chat_type: normalizedEvent.chatType,
           reason: memeDecision.reason,
         });
       }
-
-      await executeTrackedDelivery(deps, normalizedEvent, 'primary', () => (
-        deps.sendReply(replyTarget, replyText)
-      ), options.deliveryKey);
     });
 
     const persistJobData = buildPersistJobData(workflowContext, {

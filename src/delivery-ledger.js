@@ -52,8 +52,8 @@ export async function executeTrackedDelivery({
   explicitKey = '',
 }) {
   const deliveryKey = buildDeliveryKey(event, kind, explicitKey);
-  const run = async () => {
-    const value = await task();
+  const run = async (deliveryContext = {}) => {
+    const value = await task(deliveryContext);
     if (value === false) {
       const error = new Error(`Delivery did not send: ${kind}`);
       error.code = 'DELIVERY_NOT_SENT';
@@ -63,11 +63,34 @@ export async function executeTrackedDelivery({
   };
 
   if (typeof executeDelivery !== 'function') {
+    let deliveryPlan = null;
+    let completedParts = 0;
+    const deliveryContext = {
+      deliveryKey,
+      status: 'untracked',
+      preparePlan: async (plan) => {
+        deliveryPlan ||= structuredClone(plan);
+        return { plan: structuredClone(deliveryPlan), completedParts };
+      },
+      replacePlanBeforeDelivery: async (plan) => {
+        if (completedParts > 0) {
+          const error = new Error(`Delivery plan already started: ${deliveryKey}`);
+          error.code = 'DELIVERY_PLAN_STARTED';
+          throw error;
+        }
+        deliveryPlan = structuredClone(plan);
+        return { plan: structuredClone(deliveryPlan), completedParts };
+      },
+      markPartCompleted: async (count) => {
+        completedParts = Math.max(completedParts, Number(count || 0));
+        return { deliveryPlan, completedParts };
+      },
+    };
     return {
       sent: true,
       deduplicated: false,
       status: 'sent',
-      value: await run(),
+      value: await run(deliveryContext),
       deliveryKey,
     };
   }
@@ -165,6 +188,114 @@ export function createDeliveryLedger(options = {}) {
     }
   }
 
+  function raiseClaimLost(deliveryKey) {
+    const error = new Error(`Delivery claim lost: ${deliveryKey}`);
+    error.code = 'DELIVERY_CLAIM_LOST';
+    throw error;
+  }
+
+  async function preparePlan(deliveryKey, claimToken, plan = {}) {
+    const normalizedKey = String(deliveryKey || '').trim();
+    if (!normalizedKey) return { plan, completedParts: 0 };
+
+    if (records) {
+      const record = records.find((item) => item.deliveryKey === normalizedKey
+        && (!claimToken || item.claimToken === claimToken));
+      if (!record) return raiseClaimLost(normalizedKey);
+      if (!record.deliveryPlan) record.deliveryPlan = structuredClone(plan);
+      return {
+        plan: structuredClone(record.deliveryPlan),
+        completedParts: Number(record.completedParts || 0),
+      };
+    }
+
+    const ownershipQuery = { deliveryKey: normalizedKey };
+    if (claimToken) ownershipQuery.claimToken = claimToken;
+    const existing = toRecord(await model.findOne(ownershipQuery));
+    if (!existing) return raiseClaimLost(normalizedKey);
+    if (existing.deliveryPlan) {
+      return {
+        plan: existing.deliveryPlan,
+        completedParts: Number(existing.completedParts || 0),
+      };
+    }
+
+    const query = {
+      ...ownershipQuery,
+      $or: [
+        { deliveryPlan: null },
+        { deliveryPlan: { $exists: false } },
+      ],
+    };
+    const updated = await model.findOneAndUpdate(
+      query,
+      { $set: { deliveryPlan: plan } },
+      { returnDocument: 'after' }
+    );
+    const record = toRecord(updated);
+    if (!record) return raiseClaimLost(normalizedKey);
+    return {
+      plan: record.deliveryPlan || plan,
+      completedParts: Number(record.completedParts || 0),
+    };
+  }
+
+  async function replacePlanBeforeDelivery(deliveryKey, claimToken, plan = {}) {
+    const normalizedKey = String(deliveryKey || '').trim();
+    if (!normalizedKey) return { plan, completedParts: 0 };
+
+    if (records) {
+      const record = records.find((item) => item.deliveryKey === normalizedKey
+        && (!claimToken || item.claimToken === claimToken));
+      if (!record) return raiseClaimLost(normalizedKey);
+      if (Number(record.completedParts || 0) > 0) {
+        const error = new Error(`Delivery plan already started: ${normalizedKey}`);
+        error.code = 'DELIVERY_PLAN_STARTED';
+        throw error;
+      }
+      record.deliveryPlan = structuredClone(plan);
+      return { plan: structuredClone(record.deliveryPlan), completedParts: 0 };
+    }
+
+    const query = {
+      deliveryKey: normalizedKey,
+      completedParts: { $in: [0, null] },
+    };
+    if (claimToken) query.claimToken = claimToken;
+    const updated = await model.findOneAndUpdate(
+      query,
+      { $set: { deliveryPlan: plan } },
+      { returnDocument: 'after' }
+    );
+    if (!updated) return raiseClaimLost(normalizedKey);
+    const record = toRecord(updated);
+    return { plan: record.deliveryPlan || plan, completedParts: 0 };
+  }
+
+  async function markPartCompleted(deliveryKey, claimToken, completedParts) {
+    const normalizedKey = String(deliveryKey || '').trim();
+    if (!normalizedKey) return null;
+    const normalizedCompletedParts = Math.max(0, Number(completedParts || 0));
+
+    if (records) {
+      const record = records.find((item) => item.deliveryKey === normalizedKey
+        && (!claimToken || item.claimToken === claimToken));
+      if (!record) return raiseClaimLost(normalizedKey);
+      record.completedParts = Math.max(Number(record.completedParts || 0), normalizedCompletedParts);
+      return { ...record };
+    }
+
+    const query = { deliveryKey: normalizedKey };
+    if (claimToken) query.claimToken = claimToken;
+    const updated = await model.findOneAndUpdate(
+      query,
+      { $max: { completedParts: normalizedCompletedParts } },
+      { returnDocument: 'after' }
+    );
+    if (!updated) return raiseClaimLost(normalizedKey);
+    return toRecord(updated);
+  }
+
   async function markSent(deliveryKey, claimToken) {
     const normalizedKey = String(deliveryKey || '').trim();
     if (!normalizedKey) return null;
@@ -173,7 +304,7 @@ export function createDeliveryLedger(options = {}) {
     if (records) {
       const record = records.find((item) => item.deliveryKey === normalizedKey
         && (!claimToken || item.claimToken === claimToken));
-      if (!record) return null;
+      if (!record) return raiseClaimLost(normalizedKey);
       record.status = 'sent';
       record.claimToken = '';
       record.lockedUntil = null;
@@ -198,7 +329,8 @@ export function createDeliveryLedger(options = {}) {
       },
       { returnDocument: 'after' }
     );
-    return updated ? toRecord(updated) : null;
+    if (!updated) return raiseClaimLost(normalizedKey);
+    return toRecord(updated);
   }
 
   async function markFailed(deliveryKey, claimToken, error) {
@@ -242,8 +374,17 @@ export function createDeliveryLedger(options = {}) {
       return { sent: false, deduplicated: true, status: deliveryClaim.status, value: null };
     }
 
+    const deliveryContext = {
+      deliveryKey,
+      claimToken: deliveryClaim.claimToken,
+      status: deliveryClaim.status,
+      preparePlan: (plan) => preparePlan(deliveryKey, deliveryClaim.claimToken, plan),
+      replacePlanBeforeDelivery: (plan) => replacePlanBeforeDelivery(deliveryKey, deliveryClaim.claimToken, plan),
+      markPartCompleted: (count) => markPartCompleted(deliveryKey, deliveryClaim.claimToken, count),
+    };
+
     try {
-      const value = await task();
+      const value = await task(deliveryContext);
       await markSent(deliveryKey, deliveryClaim.claimToken);
       return { sent: true, deduplicated: false, status: 'sent', value };
     } catch (error) {
@@ -252,5 +393,13 @@ export function createDeliveryLedger(options = {}) {
     }
   }
 
-  return { claim, markSent, markFailed, execute };
+  return {
+    claim,
+    preparePlan,
+    replacePlanBeforeDelivery,
+    markPartCompleted,
+    markSent,
+    markFailed,
+    execute,
+  };
 }

@@ -77,6 +77,44 @@ test('handleInboundEvent runs group observation and automation through the share
   assert.equal(calls.includes('reply'), false);
 });
 
+test('handleInboundEvent waits for group observation before trigger analysis', async () => {
+  const calls = [];
+  const result = await handleInboundEvent(createEvent(), {
+    deps: createDeps({
+      observeGroupEvent: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        calls.push('observe');
+      },
+      shouldRespondToEvent: async (event) => {
+        calls.push('decision');
+        return { event, analysis: { shouldRespond: true, reason: 'allow' } };
+      },
+      onReplyApproved: async () => calls.push('reply'),
+    }),
+  });
+
+  assert.equal(result.suppressed, false);
+  assert.deepEqual(calls, ['observe', 'decision', 'reply']);
+});
+
+test('handleInboundEvent degrades after a group observation timeout', async () => {
+  const calls = [];
+  const result = await handleInboundEvent(createEvent(), {
+    deps: createDeps({
+      observationTimeoutMs: 20,
+      observeGroupEvent: async () => new Promise(() => {}),
+      shouldRespondToEvent: async (event) => {
+        calls.push('decision');
+        return { event, analysis: { shouldRespond: true, reason: 'allow' } };
+      },
+      onReplyApproved: async () => calls.push('reply'),
+    }),
+  });
+
+  assert.equal(result.suppressed, false);
+  assert.deepEqual(calls, ['decision', 'reply']);
+});
+
 test('handleInboundEvent delegates approved replies without owning delivery semantics', async () => {
   const event = createEvent({ chatType: 'private', chatId: 'user-1' });
   const result = await handleInboundEvent(event, {

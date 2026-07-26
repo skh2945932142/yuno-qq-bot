@@ -31,6 +31,16 @@ function collectAttachments(elements = []) {
   return attachments;
 }
 
+function collectText(elements = []) {
+  return elements.flatMap((rawElement) => {
+    const element = normalizeElement(rawElement);
+    const ownText = element.type === 'text'
+      ? String(element.attrs.content || element.attrs.text || '')
+      : '';
+    return [ownText, collectText(element.children)];
+  }).join('');
+}
+
 function hasAtSelf(elements = [], selfId = '') {
   if (!selfId) return false;
   return elements.some((rawElement) => {
@@ -88,10 +98,36 @@ export function adaptKoishiSession(session = {}) {
   const noticeText = resolveNoticeText(session, onebotPayload);
   const rawText = noticeText || content;
   const targetId = String(onebotPayload.target_id || session.targetId || '').trim();
+  const quote = session.quote || session.message?.quote || {};
+  const quoteText = stripCqCodes(String(
+    quote.content
+    || quote.message?.content
+    || collectText(asArray(quote.elements || quote.message?.elements))
+    || ''
+  ))
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+  const quoteUserId = String(
+    quote.user?.id
+    || quote.author?.id
+    || quote.userId
+    || quote.user_id
+    || ''
+  ).trim();
+  const quoteUserName = String(
+    quote.member?.nick
+    || quote.user?.nick
+    || quote.user?.name
+    || quote.author?.nick
+    || quote.author?.name
+    || ''
+  ).trim();
   const mentionsBot = hasAtSelf(elements, selfId)
     || new RegExp(`<at[^>]+(?:id|qq)=['\"]${selfId}['\"]`, 'i').test(content)
-    || (noticeText === '/poke' && Boolean(selfId) && targetId === selfId);
-  const quote = session.quote || session.message?.quote || {};
+    || (noticeText === '/poke' && Boolean(selfId) && targetId === selfId)
+    || (Boolean(selfId) && Boolean(quoteUserId) && quoteUserId === selfId);
   const sender = {
     userId,
     nickname: session.username || session.author?.name || session.author?.user?.name || onebotPayload.sender?.nickname || userId,
@@ -108,6 +144,9 @@ export function adaptKoishiSession(session = {}) {
     userName: sender.card || sender.nickname || userId,
     messageId: String(session.messageId || session.message?.id || session.id || onebotPayload.message_id || '').trim(),
     replyTo: String(quote.messageId || quote.id || quote.message_id || '').trim(),
+    replyToText: quoteText,
+    replyToUserId: quoteUserId,
+    replyToUserName: quoteUserName,
     rawText,
     text: noticeText || stripCqCodes(content).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
     mentionsBot,
@@ -131,6 +170,7 @@ export function adaptKoishiSession(session = {}) {
 export {
   PRIVATE_CHANNEL_PREFIX,
   collectAttachments,
+  collectText,
   hasAtSelf,
   resolveNoticeText,
   resolveOnebotPayload,

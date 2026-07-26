@@ -109,7 +109,7 @@ test('delivery ledger treats a duplicate-key race as an existing active delivery
   assert.equal(result.status, 'sent');
 });
 
-test('delivery ledger never marks a Mongo record sent with a mismatched claim token', async () => {
+test('delivery ledger fences a Mongo worker with a mismatched claim token', async () => {
   let capturedQuery = null;
   const model = {
     findOneAndUpdate: async (query) => {
@@ -119,11 +119,57 @@ test('delivery ledger never marks a Mongo record sent with a mismatched claim to
   };
   const ledger = createDeliveryLedger({ DeliveryRecord: model });
 
-  const result = await ledger.markSent('token-delivery', 'claim-token');
-
-  assert.equal(result, null);
+  await assert.rejects(
+    () => ledger.markSent('token-delivery', 'claim-token'),
+    (error) => error.code === 'DELIVERY_CLAIM_LOST'
+  );
   assert.deepEqual(capturedQuery, {
     deliveryKey: 'token-delivery',
     claimToken: 'claim-token',
   });
+});
+
+test('delivery ledger persists and resumes an immutable multipart plan', async () => {
+  const records = [];
+  const ledger = createDeliveryLedger({ records });
+  const firstClaim = await ledger.claim('planned-delivery');
+  const first = await ledger.preparePlan('planned-delivery', firstClaim.claimToken, {
+    type: 'segmented-text',
+    text: 'firstsecond',
+    segments: ['first', 'second'],
+  });
+  await ledger.markPartCompleted('planned-delivery', firstClaim.claimToken, 1);
+  await ledger.markFailed('planned-delivery', firstClaim.claimToken, new Error('temporary failure'));
+
+  const retryClaim = await ledger.claim('planned-delivery');
+  const resumed = await ledger.preparePlan('planned-delivery', retryClaim.claimToken, {
+    type: 'text',
+    text: 'different',
+    segments: ['different'],
+  });
+
+  assert.deepEqual(first.plan.segments, ['first', 'second']);
+  assert.deepEqual(resumed.plan.segments, ['first', 'second']);
+  assert.equal(resumed.completedParts, 1);
+});
+
+test('delivery ledger rejects stale multipart progress after lease takeover', async () => {
+  let now = new Date('2026-07-27T00:00:00Z');
+  const records = [];
+  const ledger = createDeliveryLedger({ records, now: () => now, leaseMs: 1000 });
+  const stale = await ledger.claim('fenced-plan');
+  await ledger.preparePlan('fenced-plan', stale.claimToken, {
+    type: 'segmented-text', segments: ['a', 'b'],
+  });
+  now = new Date('2026-07-27T00:00:02Z');
+  const current = await ledger.claim('fenced-plan');
+
+  await assert.rejects(
+    () => ledger.markPartCompleted('fenced-plan', stale.claimToken, 1),
+    (error) => error.code === 'DELIVERY_CLAIM_LOST'
+  );
+  const resumed = await ledger.preparePlan('fenced-plan', current.claimToken, {
+    type: 'text', segments: ['different'],
+  });
+  assert.deepEqual(resumed.plan.segments, ['a', 'b']);
 });

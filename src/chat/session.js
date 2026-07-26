@@ -41,6 +41,7 @@ export function buildReplyTarget(target, chatType = 'group') {
       platform: normalizePlatform(target.platform),
       chatType: normalizeChatType(target.chatType),
       chatId: String(target.chatId || '').trim(),
+      ...(target.quoteMessageId ? { quoteMessageId: String(target.quoteMessageId).trim() } : {}),
     };
   }
 
@@ -92,6 +93,9 @@ export function normalizeLegacyMessageEvent(event = {}) {
     userName,
     messageId: String(event.messageId || event.message_id || '').trim(),
     replyTo: String(event.replyTo || event.reply_to || '').trim(),
+    replyToText: String(event.replyToText || '').trim(),
+    replyToUserId: String(event.replyToUserId || '').trim(),
+    replyToUserName: String(event.replyToUserName || '').trim(),
     text: typeof event.text === 'string' ? event.text : rawText,
     rawText,
     mentionsBot: Boolean(event.mentionsBot),

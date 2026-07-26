@@ -3,5 +3,6 @@ node_modules/
 reports/
 coverage/
 .playwright-mcp/
+.claude/
 test-results.txt
 src/prompt-builder.js.bak

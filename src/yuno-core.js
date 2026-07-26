@@ -151,28 +151,31 @@ function createRuntimeDeps(output, options = {}) {
   return {
     executeDelivery: deliveryLedgerEnabled ? (options.deps?.executeDelivery || runtimeDelivery) : null,
     sendReply: async (target, text) => {
-      appendStructuredOutputs(output, target, [{ type: 'text', text }]);
       if (responseMode === 'send') {
-        await replySender(target, text);
+        const sent = await replySender(target, text);
+        if (sent === false) return false;
       }
+      appendStructuredOutputs(output, target, [{ type: 'text', text }]);
       return true;
     },
     sendStructuredReply: async (target, outputsToSend) => {
-      appendStructuredOutputs(output, target, outputsToSend);
       if (responseMode === 'send') {
-        await structuredSender(target, outputsToSend);
+        const sent = await structuredSender(target, outputsToSend);
+        if (sent === false) return false;
       }
+      appendStructuredOutputs(output, target, outputsToSend);
       return true;
     },
     sendVoice: async (target, audio) => {
+      if (responseMode === 'send') {
+        const sent = await voiceSender(target, audio);
+        if (sent === false) return false;
+      }
       output.voices.push({
         type: 'voice',
         target,
         audio,
       });
-      if (responseMode === 'send') {
-        await voiceSender(target, audio);
-      }
       return true;
     },
   };
@@ -300,13 +303,19 @@ export async function runYunoConversation(input, options = {}) {
   const shouldRespond = options.engine?.shouldRespondToEvent || shouldRespondToEvent;
   const deferPostReplyEffects = options.deferPostReplyEffects ?? options.responseMode !== 'send';
   const processMessage = options.engine?.processIncomingMessage || processIncomingMessage;
-  const processApprovedReply = async ({ decision }) => processMessage(event, decision, {
-    ...options,
-    trace,
-    deps: mergedDeps,
-    persistInline: !deferPostReplyEffects,
-    deferPostReplyEffects,
-  });
+  const processApprovedReply = async ({ decision }) => processMessage(
+    event,
+    event.chatType === 'group'
+      ? { analysis: decision.analysis, trace: decision.trace }
+      : decision,
+    {
+      ...options,
+      trace,
+      deps: mergedDeps,
+      persistInline: !deferPostReplyEffects,
+      deferPostReplyEffects,
+    }
+  );
 
   let lifecycleResult;
   if (shouldUseInboundLifecycle(options)) {
@@ -324,6 +333,7 @@ export async function runYunoConversation(input, options = {}) {
         evaluateGroupAutomation: options.deps?.evaluateGroupAutomation,
         recordWorkflowMetric: options.deps?.recordWorkflowMetric,
         logger: options.deps?.logger,
+        observationTimeoutMs: options.runtimeConfig?.externalToolTimeoutMs,
         shouldRespondToEvent: (normalizedEvent, decisionOptions) => shouldRespond(normalizedEvent, {
           ...decisionOptions,
           deps: mergedDeps,

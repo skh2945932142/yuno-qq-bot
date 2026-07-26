@@ -1,4 +1,4 @@
-import { config, isAdvancedGroup } from './config.js';
+import { config } from './config.js';
 import { classifyReplyTrigger } from './minimax.js';
 import { normalizeLegacyMessageEvent } from './chat/session.js';
 import { parseCommand } from './command-parser.js';
@@ -13,6 +13,11 @@ import {
 } from './utils.js';
 
 const JEALOUSY_PATTERN = /(\u522b\u4eba|\u5176\u4ed6\u4eba|\u53e6\u4e00\u4e2a\u4eba|\u559c\u6b22\u8c01|\u770b\u522b\u4eba|\u522b\u770b\u522b\u4eba|\u966a\u522b\u4eba|\u9760\u8fd1\u4f60|\u62a2\u8d70\u4f60|\u60c5\u654c|\u8981\u8d70|\u5148\u8d70|\u8d70\u4e86|\u79bb\u5f00|\u4e0d\u7406\u6211|\u4e0d\u56de\u6211|\u4e0d\u56de\u4f60|\u51b7\u843d|\u6d88\u5931|\u4e0d\u966a\u6211|\u627e\u4e0d\u5230\u4f60|someone else|other people)/i;
+
+function isAdvancedGroupForOptions(groupId, options = {}) {
+  const targetGroupId = options.runtimeConfig?.targetGroupId ?? config.targetGroupId;
+  return Boolean(targetGroupId) && String(groupId) === String(targetGroupId);
+}
 
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -85,11 +90,13 @@ export function isNonTargetPokeEvent(event) {
 
 function buildRuleSignals(event, context, policy, options = {}) {
   const normalizedEvent = normalizeLegacyMessageEvent(event);
+  const runtimeConfig = options.runtimeConfig || config;
+  const advancedGroup = isAdvancedGroupForOptions(normalizedEvent.chatId, options);
   const message = normalizedEvent.rawText || '';
   const normalized = stripCqCodes(message);
   const keywordPattern = buildKeywordPattern(policy.keywords);
   const atTargets = extractAtTargets(message);
-  const isAdmin = normalizedEvent.userId === config.adminQq;
+  const isAdmin = normalizedEvent.userId === runtimeConfig.adminQq;
   const specialUser = context.specialUser || getSpecialUserByUserId(normalizedEvent.userId);
   const directMention = normalizedEvent.chatType === 'group'
     ? Boolean(normalizedEvent.mentionsBot)
@@ -117,7 +124,7 @@ function buildRuleSignals(event, context, policy, options = {}) {
 
   const randomFn = options.random ?? (() => Math.random());
   const random = normalizedEvent.chatType === 'group'
-    && randomFn() < (isAdvancedGroup(normalizedEvent.chatId) ? 0.02 : 0.01);
+    && randomFn() < (advancedGroup ? 0.02 : 0.01);
 
   const signals = [];
   let score = 0;
@@ -273,8 +280,8 @@ export function analyzeTriggerFast(event, options = {}) {
       confidence: clamp(Math.max(rule.score, policy.groupChat.autoAllowThreshold), 0, 1),
       intent,
       sentiment,
-      relevance: isAdvancedGroup(rule.event.chatId) ? 0.85 : 0.8,
-      reason: isAdvancedGroup(rule.event.chatId)
+      relevance: isAdvancedGroupForOptions(rule.event.chatId, options) ? 0.85 : 0.8,
+      reason: isAdvancedGroupForOptions(rule.event.chatId, options)
         ? 'advanced-direct-mention-pass'
         : 'basic-direct-mention-pass',
       ruleSignals: rule.signals,
@@ -476,16 +483,15 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
   }
 
   if (rule.directMention && policy.groupChat.hardAllowDirectMention) {
-    const reason = isAdvancedGroup(rule.event.chatId)
-      ? 'advanced-direct-mention-pass'
-      : 'basic-direct-mention-pass';
+    const advancedGroup = isAdvancedGroupForOptions(rule.event.chatId, options);
+    const reason = advancedGroup ? 'advanced-direct-mention-pass' : 'basic-direct-mention-pass';
 
     return buildHeuristicResult({
       shouldRespond: true,
       confidence: clamp(Math.max(rule.score, autoAllowThreshold), 0, 1),
       intent,
       sentiment,
-      relevance: isAdvancedGroup(rule.event.chatId) ? 0.85 : 0.8,
+      relevance: advancedGroup ? 0.85 : 0.8,
       reason,
       ruleSignals: rule.signals,
       replyStyle: sentiment === 'negative' ? 'sharp' : 'calm',

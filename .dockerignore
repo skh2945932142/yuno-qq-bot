@@ -17,3 +17,4 @@ data/*
 !data/reply-style/examples.jsonl
 .circleci
 .github
+.claude

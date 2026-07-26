@@ -35,6 +35,22 @@ function groupSession(content = 'hello') {
   };
 }
 
+function privateSession(content, messageId) {
+  return {
+    type: 'message',
+    subtype: 'private',
+    isDirect: true,
+    selfId: '10000',
+    userId: '20000',
+    channelId: 'private:20000',
+    messageId,
+    content,
+    elements: [{ type: 'text', attrs: { content } }],
+    getInternal: () => ({ post_type: 'message', message_type: 'private', user_id: 20000 }),
+    async send() {},
+  };
+}
+
 test('active Koishi plugin initializes runtime and sends each eligible event to Yuno exactly once', async () => {
   const ctx = createContext();
   const calls = [];
@@ -62,6 +78,116 @@ test('active Koishi plugin initializes runtime and sends each eligible event to 
   assert.equal(calls[0].options.responseMode, 'send');
   await ctx.handlers.dispose[0]();
   assert.equal(calls.at(-1), 'shutdown');
+});
+
+test('active Koishi plugin aggregates rapid private messages in arrival order', async () => {
+  const ctx = createContext();
+  const calls = [];
+  createYunoKoishiPlugin({
+    mode: 'active',
+    config: {
+      selfQq: '10000',
+      adminQq: '90000',
+      yunoPluginMode: 'active',
+      privateMessageAggregationEnabled: true,
+      privateMessageAggregationWindowMs: 20,
+      privateMessageAggregationMaxWindowMs: 100,
+    },
+    deliveryAdapter: {
+      sendReply: async () => true,
+      sendStructuredReply: async () => true,
+      sendVoice: async () => true,
+    },
+    protocolAdapter: { callAction: async () => [] },
+    initializeYunoRuntime: async () => ({ started: true }),
+    shutdownYunoRuntime: async () => {},
+    isYunoRuntimeAcceptingMessages: () => true,
+    runYunoConversation: async (event) => calls.push(event),
+  })(ctx);
+
+  await ctx.handlers.ready[0]();
+  const first = ctx.middlewares[0](privateSession('first', 'm-1'), async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+  const second = ctx.middlewares[0](privateSession('second', 'm-2'), async () => undefined);
+  await Promise.all([first, second]);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].rawText, 'first\nsecond');
+  assert.deepEqual(calls[0].aggregatedMessageIds, ['m-1', 'm-2']);
+  await ctx.handlers.dispose[0]();
+});
+
+test('active Koishi plugin releases a reservation when downstream middleware throws', async () => {
+  const ctx = createContext();
+  const calls = [];
+  createYunoKoishiPlugin({
+    mode: 'active',
+    config: {
+      selfQq: '10000',
+      adminQq: '90000',
+      yunoPluginMode: 'active',
+      privateMessageAggregationEnabled: true,
+      privateMessageAggregationWindowMs: 20,
+      privateMessageAggregationMaxWindowMs: 100,
+    },
+    deliveryAdapter: {
+      sendReply: async () => true,
+      sendStructuredReply: async () => true,
+      sendVoice: async () => true,
+    },
+    protocolAdapter: { callAction: async () => [] },
+    initializeYunoRuntime: async () => ({ started: true }),
+    shutdownYunoRuntime: async () => {},
+    isYunoRuntimeAcceptingMessages: () => true,
+    runYunoConversation: async (event) => calls.push(event.rawText),
+  })(ctx);
+
+  await ctx.handlers.ready[0]();
+  await assert.rejects(
+    () => ctx.middlewares[0](privateSession('broken', 'm-broken'), async () => {
+      throw new Error('downstream failed');
+    }),
+    /downstream failed/
+  );
+  await ctx.middlewares[0](privateSession('next', 'm-next'), async () => undefined);
+
+  assert.deepEqual(calls, ['next']);
+  await ctx.handlers.dispose[0]();
+});
+
+test('active Koishi plugin flushes pending private messages before runtime shutdown', async () => {
+  const ctx = createContext();
+  const calls = [];
+  createYunoKoishiPlugin({
+    mode: 'active',
+    config: {
+      selfQq: '10000',
+      adminQq: '90000',
+      yunoPluginMode: 'active',
+      privateMessageAggregationEnabled: true,
+      privateMessageAggregationWindowMs: 100,
+      privateMessageAggregationMaxWindowMs: 500,
+    },
+    deliveryAdapter: {
+      sendReply: async () => true,
+      sendStructuredReply: async () => true,
+      sendVoice: async () => true,
+    },
+    protocolAdapter: { callAction: async () => [] },
+    initializeYunoRuntime: async () => ({ started: true }),
+    shutdownYunoRuntime: async () => calls.push('shutdown'),
+    isYunoRuntimeAcceptingMessages: () => true,
+    runYunoConversation: async (event) => calls.push(event.messageId),
+  })(ctx);
+
+  await ctx.handlers.ready[0]();
+  const pending = ctx.middlewares[0](privateSession('pending', 'm-pending'), async () => undefined);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await ctx.handlers.dispose[0]();
+  await pending;
+
+  assert.deepEqual(calls, ['m-pending', 'shutdown']);
 });
 
 test('Koishi management command is admin-only and never enters Yuno', async () => {

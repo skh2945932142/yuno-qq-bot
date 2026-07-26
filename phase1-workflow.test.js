@@ -893,7 +893,13 @@ test('processIncomingMessage suppresses a precomputed deny without sending or pe
 
 test('processIncomingMessage sends structured tool results and preserves image outputs', async () => {
   const sent = [];
-  const event = createEvent({ rawText: '/help' });
+  const targets = [];
+  const event = createEvent({
+    chatType: 'group',
+    chatId: '20001',
+    messageId: 'tool-message-1',
+    rawText: '/help',
+  });
   const result = await processIncomingMessage(event, createPrecomputedContext(event), {
     deps: createWorkflowDeps({
       planIncomingTask: () => ({ type: 'tool', category: 'command', toolName: 'get_help', toolArgs: {} }),
@@ -904,12 +910,16 @@ test('processIncomingMessage sends structured tool results and preserves image o
           summary: 'one image',
         }),
       },
-      sendStructuredReply: async (_target, outputs) => sent.push(outputs),
+      sendStructuredReply: async (target, outputs) => {
+        targets.push(target);
+        sent.push(outputs);
+      },
     }),
   });
   assert.match(result, /合适/);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].some((item) => item.type === 'image'), true);
+  assert.equal(targets[0].quoteMessageId, 'tool-message-1');
 });
 
 test('processIncomingMessage sends plain tool text without formatter output', async () => {
@@ -954,6 +964,52 @@ test('processIncomingMessage continues with no style examples when retrieval fai
   });
   assert.equal(result, 'still replies');
   assert.deepEqual(sent, ['still replies']);
+});
+
+test('segmented reply retry resumes the immutable first-generation plan', async () => {
+  const records = [];
+  const visible = [];
+  const ledger = createDeliveryLedger({ records });
+  const event = createEvent({
+    messageId: 'segmented-retry-1',
+    rawText: '讲完整一点',
+    text: '讲完整一点',
+  });
+  let modelCalls = 0;
+  let failSecondPart = true;
+  const firstReply = '第一段先把结论说清楚，这个方向可以继续。第二段补充关键风险，连接不稳定时要保留重试空间。第三段最后收住，先小范围验证再逐步放开。';
+  const secondReply = '这是重试时模型生成的完全不同的新回复。它不应该和第一次已经送达的前半段混在一起。';
+  const deps = createWorkflowDeps({
+    executeDelivery: ledger.execute,
+    retrieveReplyStyleExamples: async () => [],
+    chat: async () => JSON.stringify({
+      text: modelCalls++ === 0 ? firstReply : secondReply,
+      sendVoice: false,
+      voiceText: '',
+    }),
+    sendReply: async (_target, text) => {
+      if (failSecondPart && visible.length === 1) {
+        failSecondPart = false;
+        throw new Error('temporary OneBot failure');
+      }
+      visible.push(text);
+      return true;
+    },
+  });
+
+  await assert.rejects(
+    () => processIncomingMessage(event, createPrecomputedContext(event), { deps }),
+    /temporary OneBot failure/
+  );
+  const retried = await processIncomingMessage(event, createPrecomputedContext(event), { deps });
+
+  assert.equal(modelCalls, 2);
+  assert.equal(retried, firstReply);
+  assert.equal(visible.join(''), firstReply);
+  assert.doesNotMatch(visible.join(''), /重试时模型生成/);
+  assert.equal(records[0].deliveryPlan.segments.join(''), firstReply);
+  assert.equal(records[0].completedParts, records[0].deliveryPlan.segments.length);
+  assert.equal(records[0].status, 'sent');
 });
 
 test('processIncomingMessage commits conversation history before deferring optional post-reply effects', async () => {

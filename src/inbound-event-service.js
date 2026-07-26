@@ -5,6 +5,20 @@ import { recordInboundGroupObservation } from './group-ops.js';
 import { evaluateGroupAutomation } from './group-automation.js';
 import { shouldRespondToEvent } from './message-workflow.js';
 
+const groupObservationTails = new Map();
+
+function withObservationTimeout(task, timeoutMs = 4000) {
+  let timer = null;
+  return Promise.race([
+    Promise.resolve(task),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve({ timedOut: true }), Math.max(100, Number(timeoutMs || 4000)));
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 function createInboundDeps(deps = {}) {
   return {
     isNonTargetPokeEvent: deps.isNonTargetPokeEvent || isNonTargetPokeEvent,
@@ -15,28 +29,51 @@ function createInboundDeps(deps = {}) {
     onReplyApproved: deps.onReplyApproved || (async ({ decision }) => decision),
     recordWorkflowMetric: deps.recordWorkflowMetric || recordWorkflowMetric,
     logger: deps.logger || logger,
+    observationTimeoutMs: Number(deps.observationTimeoutMs || 4000),
   };
 }
 
 function startGroupObservation(event, deps) {
-  try {
-    const observation = deps.observeGroupEvent(event);
-    Promise.resolve(observation).catch((error) => {
+  const groupId = String(event.chatId || 'unknown');
+  const previous = groupObservationTails.get(groupId) || Promise.resolve();
+  const deadline = Date.now() + deps.observationTimeoutMs;
+  const observation = previous
+    .catch(() => {})
+    .then(() => {
+      const remainingMs = Math.max(100, deadline - Date.now());
+      if (Date.now() >= deadline) return { timedOut: true };
+      return withObservationTimeout(
+        deps.observeGroupEvent(event),
+        remainingMs
+      );
+    })
+    .then((result) => {
+      if (result?.timedOut) {
+        deps.logger.warn('group-ops', 'Group observation timed out; continuing without it', {
+          chatId: event.chatId,
+          userId: event.userId,
+          messageId: event.messageId,
+          timeoutMs: deps.observationTimeoutMs,
+        });
+      }
+      return result;
+    })
+    .catch((error) => {
       deps.logger.warn('group-ops', 'Failed to record inbound group observation', {
         message: error.message,
         chatId: event.chatId,
         userId: event.userId,
         messageId: event.messageId,
       });
+      return null;
     });
-  } catch (error) {
-    deps.logger.warn('group-ops', 'Failed to start inbound group observation', {
-      message: error.message,
-      chatId: event.chatId,
-      userId: event.userId,
-      messageId: event.messageId,
-    });
-  }
+  groupObservationTails.set(groupId, observation);
+  observation.finally(() => {
+    if (groupObservationTails.get(groupId) === observation) {
+      groupObservationTails.delete(groupId);
+    }
+  });
+  return observation;
 }
 
 async function evaluateAutomation(event, deps) {
@@ -103,8 +140,9 @@ export async function handleInboundEvent(event, options = {}) {
   }
 
   let automationPromise = null;
+  let observationPromise = null;
   if (event.chatType === 'group') {
-    startGroupObservation(event, deps);
+    observationPromise = startGroupObservation(event, deps);
     automationPromise = evaluateAutomation(event, deps);
 
     if (event.source?.noticeType === 'group_increase') {
@@ -117,7 +155,9 @@ export async function handleInboundEvent(event, options = {}) {
     }
   }
 
-  const decisionPromise = deps.shouldRespondToEvent(event, options.decisionOptions || {});
+  const decisionPromise = observationPromise
+    ? observationPromise.then(() => deps.shouldRespondToEvent(event, options.decisionOptions || {}))
+    : deps.shouldRespondToEvent(event, options.decisionOptions || {});
   const [decision, automationDecision] = await Promise.all([
     decisionPromise,
     automationPromise || Promise.resolve(null),
