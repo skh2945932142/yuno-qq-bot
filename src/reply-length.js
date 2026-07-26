@@ -60,7 +60,7 @@ function buildGenerationProfile({
   performanceProfile,
 }) {
   let historyLimit = isPrivate ? 5 : 4;
-  let temperature = isPrivate ? 0.62 : 0.52;
+  let temperature = isPrivate ? 0.7 : 0.6;
   let promptProfile = 'standard';
   let reasoningEffort = config.replyLlmReasoningEffort;
 
@@ -71,22 +71,22 @@ function buildGenerationProfile({
     reasoningEffort = config.replyLlmKnowledgeReasoningEffort;
   } else if (routeCategory === 'follow_up' && hasRecentContext) {
     historyLimit = isPrivate ? 5 : 4;
-    temperature = isPrivate ? 0.6 : 0.52;
+    temperature = isPrivate ? 0.68 : 0.6;
     promptProfile = 'standard';
   } else if (routeCategory === 'cold_start') {
     historyLimit = isPrivate ? 4 : 3;
-    temperature = isPrivate ? 0.66 : 0.54;
+    temperature = isPrivate ? 0.72 : 0.62;
     promptProfile = 'standard';
   } else if (routeCategory === 'poke') {
     historyLimit = 3;
-    temperature = 0.48;
+    temperature = 0.55;
     promptProfile = 'compact';
     reasoningEffort = 'minimal';
   }
 
   if (needsSupport(analysis)) {
     historyLimit = Math.max(historyLimit, isPrivate ? 5 : 4);
-    temperature = Math.min(temperature, 0.54);
+    temperature = Math.min(temperature, 0.58);
     promptProfile = 'standard';
   }
 

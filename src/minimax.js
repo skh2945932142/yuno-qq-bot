@@ -305,8 +305,10 @@ export function buildChatSystemInstructions(systemPrompt, options = {}) {
         '只输出一个有效 JSON 对象，不添加解释、前缀、后缀或 Markdown 代码块。',
         '固定字段：text（字符串）、sendVoice（布尔值）、voiceText（字符串）。',
         'text 必须是自然、完整、可直接发送的消息；不要复述内部字段名或上游分析过程。',
+        'text 要像真人在 QQ 上随手打的话：不用"好的""明白了""当然"开头，不用"还有什么需要帮助的吗"收尾，也不要写成汇报或说明。',
         '没有明确语音需求时 sendVoice=false，voiceText=""。',
         '正确示例：{"text":"行，先歇会儿吧，别硬撑。","sendVoice":false,"voiceText":""}',
+        '正确示例：{"text":"嗯？这就走了。……行吧，早点回来。","sendVoice":false,"voiceText":""}',
       ]
     : [
         '# 接话',
