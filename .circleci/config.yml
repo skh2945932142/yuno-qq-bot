@@ -3,7 +3,7 @@ version: 2.1
 jobs:
   test-and-security:
     docker:
-      - image: cimg/node:20.18
+      - image: cimg/node:20.19
     steps:
       - checkout
       - restore_cache:
@@ -20,6 +20,18 @@ jobs:
       - run:
           name: Run unit and integration tests
           command: npm test
+      - run:
+          name: Run coverage gates
+          command: npm run test:coverage:ci
+      - store_artifacts:
+          path: coverage
+          destination: coverage
+      - run:
+          name: Run behavior evals
+          command: npm run eval
+      - run:
+          name: Run reply style evals
+          command: npm run eval:style
       - run:
           name: Run mock smoke test
           command: npm run smoke:mock

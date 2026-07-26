@@ -12,7 +12,7 @@ This repo includes lightweight automations that turn existing code signals into 
 
 ## GitHub Actions
 
-- `CI` keeps the correctness and security gate: tests, mock smoke, dependency audit, and secret scan.
+- `CI` keeps the correctness and security gate: tests, coverage, behavior and style evals, mock smoke, dependency audit, and secret scan.
 - `Experience Radar` runs every Monday and can also be triggered manually.
 - The scheduled radar run uploads markdown reports and opens a GitHub issue with the eval experience scorecard, concrete product ideas, and developer-efficiency risks.
 
