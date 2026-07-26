@@ -67,7 +67,9 @@ export async function runSingleAutomationTask(task, now, options = {}) {
   const groupId = task.groupId || (task.chatType === 'group' ? task.chatId : '');
   if (groupId) {
     const rules = await listRules(groupId, { enabled: true });
-    if (withinQuietHours(groupId, now, rules)) {
+    if (withinQuietHours(groupId, now, rules, {
+      timeZone: options.timeZone || config.dailyMoodTimezone,
+    })) {
       recordWorkflowMetric('yuno_automation_tasks_deferred_total', 1, {
         task_type: task.taskType,
         reason: 'quiet-hours',
@@ -150,6 +152,7 @@ export async function runScheduledInteraction(groupId) {
       groupState,
       recentEvents,
       dateContext: new Date(),
+      timeZone: config.dailyMoodTimezone,
     });
 
     if (!plan.shouldSend) {

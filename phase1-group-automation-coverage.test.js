@@ -32,7 +32,7 @@ test('group automation matches blocked, welcome, keyword, quiet, and unrelated r
   ];
   const event = {
     chatType: 'group', chatId: 'g1', userId: 'u1', userName: 'Alice', rawText: '[CQ:at,qq=1] deploy',
-    timestamp: new Date('2026-07-23T23:30:00'), source: { noticeType: 'group_increase' },
+    timestamp: new Date('2026-07-23T23:30:00+08:00'), source: { noticeType: 'group_increase' },
   };
   const matches = await findMatchingGroupRules(event, { rules });
   assert.equal(matches.length, 4);
@@ -46,7 +46,7 @@ test('group automation matches blocked, welcome, keyword, quiet, and unrelated r
 });
 
 test('group automation quiet-hours handles same-hour, forward, reverse, and disabled ranges', () => {
-  const date = new Date('2026-07-23T10:30:00');
+  const date = new Date('2026-07-23T10:30:00+08:00');
   assert.equal(isWithinQuietHours('g1', date, [{ groupId: 'g1', ruleType: 'quiet_hours', enabled: true, config: { startHour: 10, endHour: 10 } }]), true);
   assert.equal(isWithinQuietHours('g1', date, [{ groupId: 'g1', ruleType: 'quiet_hours', enabled: true, config: { startHour: 9, endHour: 11 } }]), true);
   assert.equal(isWithinQuietHours('g1', date, [{ groupId: 'g1', ruleType: 'quiet_hours', enabled: true, config: { startHour: 23, endHour: 7 } }]), false);

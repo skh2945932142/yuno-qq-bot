@@ -3,6 +3,7 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import { recordWorkflowMetric } from './metrics.js';
 import { GroupAutomationRule } from './models.js';
+import { getHourInTimeZone } from './time-utils.js';
 import { stripCqCodes } from './utils.js';
 
 function buildRuleId() {
@@ -127,8 +128,8 @@ export async function markRuleTriggered(ruleId, now = new Date(), deps = {}) {
   return updated ? safeRule(updated) : null;
 }
 
-function isWithinHourRange(now, startHour, endHour) {
-  const hour = asDate(now).getHours();
+function isWithinHourRange(now, startHour, endHour, timeZone) {
+  const hour = getHourInTimeZone(asDate(now), timeZone);
   if (startHour === endHour) {
     return true;
   }
@@ -138,13 +139,14 @@ function isWithinHourRange(now, startHour, endHour) {
   return hour >= startHour || hour < endHour;
 }
 
-export function isWithinQuietHours(groupId, now = new Date(), rules = []) {
+export function isWithinQuietHours(groupId, now = new Date(), rules = [], options = {}) {
+  const timeZone = options.timeZone || config.dailyMoodTimezone;
   for (const rule of rules) {
     if (normalizeGroupId(rule.groupId) !== normalizeGroupId(groupId)) continue;
     if (!rule.enabled || rule.ruleType !== 'quiet_hours') continue;
     const startHour = Number(rule.config?.startHour ?? 0);
     const endHour = Number(rule.config?.endHour ?? 0);
-    if (isWithinHourRange(now, startHour, endHour)) {
+    if (isWithinHourRange(now, startHour, endHour, timeZone)) {
       return true;
     }
   }
@@ -187,7 +189,9 @@ export async function findMatchingGroupRules(event, deps = {}) {
       continue;
     }
 
-    if (rule.ruleType === 'quiet_hours' && isWithinQuietHours(groupId, event.timestamp, [rule])) {
+    if (rule.ruleType === 'quiet_hours' && isWithinQuietHours(groupId, event.timestamp, [rule], {
+      timeZone: deps.timeZone || deps.config?.dailyMoodTimezone || config.dailyMoodTimezone,
+    })) {
       matches.push(rule);
     }
   }

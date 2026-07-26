@@ -99,7 +99,7 @@ test('chat builds bounded conversations and records model usage', async () => {
   }), '...');
   assert.match(fallbackPrompt.calls[0].messages[1].content, /自然、简洁/);
   assert.match(buildChatSystemInstructions('context', { expectStructuredReply: true }), /有效 JSON/);
-  assert.match(buildChatSystemInstructions('context'), /默认使用中文/);
+  assert.match(buildChatSystemInstructions('context'), /默认中文/);
 });
 
 test('chat aborts the underlying OpenAI request when its timeout expires', async () => {
@@ -167,6 +167,7 @@ test('analyzeMessage handles empty, structured, malformed, and provider failure 
   }));
   const classified = await analyzeMessage('由乃怎么看？', { affection: 50 }, {
     client: structured.client,
+    model: 'test-model',
     operation: 'analysis-test',
   });
   assert.equal(classified.reason, 'classified');
@@ -174,10 +175,16 @@ test('analyzeMessage handles empty, structured, malformed, and provider failure 
   assert.deepEqual(classified.topics, ['one', 'two']);
 
   const malformed = createChatClient('not-json');
-  assert.equal((await analyzeMessage('帮我一下', {}, { client: malformed.client })).reason, 'fallback-heuristic');
+  assert.equal((await analyzeMessage('帮我一下', {}, {
+    client: malformed.client,
+    model: 'test-model',
+  })).reason, 'fallback-heuristic');
 
   const failed = createChatClient('', { error: Object.assign(new Error('provider failed'), { code: 'EFAIL' }) });
-  assert.equal((await analyzeMessage('普通消息', {}, { client: failed.client })).reason, 'fallback-heuristic');
+  assert.equal((await analyzeMessage('普通消息', {}, {
+    client: failed.client,
+    model: 'test-model',
+  })).reason, 'fallback-heuristic');
 });
 
 test('classifyReplyTrigger handles empty, structured, malformed, and provider failure paths', async () => {
@@ -188,15 +195,24 @@ test('classifyReplyTrigger handles empty, structured, malformed, and provider fa
   const structured = createChatClient(JSON.stringify({
     shouldRespond: true, confidence: 0.88, category: 'follow_up', reason: 'relevant',
   }));
-  const result = await classifyReplyTrigger('怎么做？', { heuristicScore: 0.4 }, { client: structured.client });
+  const result = await classifyReplyTrigger('怎么做？', { heuristicScore: 0.4 }, {
+    client: structured.client,
+    model: 'test-model',
+  });
   assert.equal(result.reason, 'relevant');
   assert.equal(result.shouldRespond, true);
 
   const malformed = createChatClient('{');
-  assert.equal((await classifyReplyTrigger('帮助', {}, { client: malformed.client })).reason, 'fallback-trigger-classifier');
+  assert.equal((await classifyReplyTrigger('帮助', {}, {
+    client: malformed.client,
+    model: 'test-model',
+  })).reason, 'fallback-trigger-classifier');
 
   const failed = createChatClient('', { error: new Error('provider failed') });
-  const fallback = await classifyReplyTrigger('随便聊聊', {}, { client: failed.client });
+  const fallback = await classifyReplyTrigger('随便聊聊', {}, {
+    client: failed.client,
+    model: 'test-model',
+  });
   assert.equal(fallback.reason, 'fallback-trigger-classifier');
   assert.equal(fallback.shouldRespond, false);
 });

@@ -309,10 +309,11 @@ export function buildChatSystemInstructions(systemPrompt, options = {}) {
         '正确示例：{"text":"行，先歇会儿吧，别硬撑。","sendVoice":false,"voiceText":""}',
       ]
     : [
-        '# 最终任务',
-        '综合上面的上下文，只输出本轮直接发给用户的最终回复。',
-        '默认使用中文，不输出分析过程、规则说明、角色标签或 <think>/<thinking>。',
-        '除非用户明确要求，否则不使用 Markdown。',
+        '# 接话',
+        '综合上面的信息，用由乃的方式自然接这句话，像真人聊天一样直接说出来。',
+        '不要开头"好的"、"当然"、"明白了"，也不要结尾"还有什么需要帮助的吗"——那是AI助手腔，不是由乃。',
+        '直接输出你要说的内容，不带分析过程、规则说明、角色标签或 <think>/<thinking>。',
+        '默认中文。不使用 Markdown。',
       ];
 
   return [
@@ -455,6 +456,7 @@ export async function analyzeMessage(text, context = {}, options = {}) {
       maxTokens: 180,
       traceContext: options.traceContext,
       client: options.client,
+      model: options.model,
       promptVersion: options.promptVersion || 'message-analysis/v1',
       operation: options.operation || 'analysis',
     });
@@ -544,6 +546,7 @@ export async function classifyReplyTrigger(text, context = {}, options = {}) {
       maxTokens: options.maxTokens ?? 180,
       traceContext: options.traceContext,
       client: options.client,
+      model: options.model,
       promptVersion: options.promptVersion || 'trigger-classifier/v1',
       operation: options.operation || 'trigger-classifier',
     });

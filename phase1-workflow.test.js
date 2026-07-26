@@ -768,6 +768,7 @@ test('processIncomingMessage does not throttle consecutive group replies from th
   assert.equal(sentReplies.length, 3);
   assert.equal(sentReplies.some((text) => text.includes('慢一点说')), false);
   assert.equal(persistedMessages.length, 3);
+});
 
 test('processReplyJob forwards queue metadata and keeps text delivery separate from persistence', async () => {
   const sentReplies = [];
@@ -870,7 +871,6 @@ test('processIncomingMessage continues with text when TTS fails', async () => {
 
   assert.equal(reply, 'text first');
   assert.deepEqual(sentReplies, ['text first']);
-});
 });
 
 test('processIncomingMessage suppresses a precomputed deny without sending or persisting', async () => {

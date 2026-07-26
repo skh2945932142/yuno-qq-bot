@@ -4,6 +4,7 @@ import { GroupEvent, GroupState } from '../models.js';
 import { clamp } from '../utils.js';
 import { recordWorkflowMetric } from '../metrics.js';
 import { updateGroupStyleProfile } from '../group-style-memory.js';
+import { getHourInTimeZone } from '../time-utils.js';
 
 const GROUP_STATE_CACHE_TTL_MS = 15_000;
 const RECENT_EVENTS_CACHE_TTL_MS = 10_000;
@@ -239,13 +240,18 @@ export async function markProactiveSent(groupId, now = new Date()) {
   return setCached(groupStateCache, groupId, state, GROUP_STATE_CACHE_TTL_MS);
 }
 
-export function planScheduledInteraction({ groupState, recentEvents, dateContext = new Date() }) {
+export function planScheduledInteraction({
+  groupState,
+  recentEvents,
+  dateContext = new Date(),
+  timeZone = config.dailyMoodTimezone,
+}) {
   if (!groupState) {
     return { shouldSend: false, reason: 'missing-group-state' };
   }
 
   const now = new Date(dateContext);
-  const hour = now.getHours();
+  const hour = getHourInTimeZone(now, timeZone);
   const msSinceLastMessage = groupState.lastMessageAt
     ? now - new Date(groupState.lastMessageAt)
     : Number.MAX_SAFE_INTEGER;

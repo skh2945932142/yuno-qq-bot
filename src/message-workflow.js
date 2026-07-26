@@ -1109,6 +1109,7 @@ async function runToolTask(task, context, trace, deps) {
       memoryContext: context.memoryContext,
       analysis: context.analysis,
       event: context.event,
+      adminQq: config.adminQq,
     },
     trace
   ), { toolName: task.toolName });

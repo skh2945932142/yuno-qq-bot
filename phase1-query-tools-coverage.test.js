@@ -75,7 +75,10 @@ test('query tools cover memory/style validation and admin-only debug access', as
   assert.equal(invalidStyle.payload.updated, false);
 
   await assert.rejects(() => execute(definitions, 'debug_why', {}, privateContext), /管理员权限/);
-  const adminContext = context('private', { event: { ...privateContext.event, userId: config.adminQq || 'admin' } });
+  const adminContext = context('private', {
+    adminQq: 'admin',
+    event: { ...privateContext.event, userId: 'admin' },
+  });
   const debug = await execute(definitions, 'debug_why', {}, adminContext);
   assert.equal(debug.tool, 'debug_why');
   assert.equal(debug.payload.shouldRespond, true);

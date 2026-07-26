@@ -39,7 +39,8 @@ function ensureGroupContext(context, toolName) {
 }
 
 function ensureAdmin(context, toolName) {
-  if (String(context.event?.userId || '') !== String(config.adminQq || '')) {
+  const adminQq = context.adminQq ?? context.runtimeConfig?.adminQq ?? config.adminQq;
+  if (!adminQq || String(context.event?.userId || '') !== String(adminQq)) {
     throw new Error(`${toolName} 需要管理员权限`);
   }
 }
