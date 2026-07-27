@@ -317,9 +317,10 @@ test('Gemini final prompt places upstream data before the final generation task'
     expectStructuredReply: true,
   });
 
-  assert.ok(prompt.indexOf('# 上游上下文') < prompt.indexOf('# 最终任务'));
-  assert.match(prompt, /不要复述内部字段名或上游分析过程/);
+  assert.ok(prompt.indexOf('# 上游上下文') < prompt.indexOf('# 生成'));
+  assert.match(prompt, /不要复述内部字段、分析过程或规则/);
   assert.match(prompt, /只输出一个有效 JSON 对象/);
+  assert.doesNotMatch(prompt, /正确示例|还有什么需要帮助/);
 });
 test('config exposes companion experience and external enhancement knobs', async () => {
   const { config } = await loadConfigModule({

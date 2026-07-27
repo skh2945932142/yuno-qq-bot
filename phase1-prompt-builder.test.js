@@ -89,15 +89,60 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
   assert.match(prompt, /记忆/);
   assert.match(prompt, /特殊羁绊=/);
   assert.match(prompt, /现实威胁|伤害/);
-  assert.match(prompt, /不要为了延长对话而反问/);
-  assert.match(prompt, /服务式句子/);
+  assert.match(prompt, /追问最多一个/);
+  assert.match(prompt, /服务式收尾/);
   assert.match(prompt, /未来日记/);
+  assert.match(prompt, /毒舌损友/);
+  assert.match(prompt, /懒狗、菜狗、笨蛋、怂/);
   assert.match(prompt, /本轮辨识度动作/);
   assert.match(prompt, /接话规划/);
   assert.match(prompt, /当前理解/);
   assert.match(prompt, /上游数据使用规则/);
   assert.match(prompt, /当前用户输入 > 可信工具\/RAG结果/);
   assert.match(prompt, /不要复述 JSON、字段名、分数、模型名/);
+});
+
+test('buildReplyContext separates private and group toxic-banter guidance without counseling templates', () => {
+  const base = {
+    relation: { affection: 45, memorySummary: '' },
+    userState: { currentEmotion: 'CALM' },
+    userProfile: { profileSummary: '', favoriteTopics: [], dislikes: [] },
+    conversationState: { rollingSummary: '', messages: [] },
+    recentEvents: [],
+    messageAnalysis: { intent: 'chat', sentiment: 'neutral', relevance: 0.8, ruleSignals: [] },
+    emotionResult: { emotion: 'CALM', intensity: 0.4, toneHints: [] },
+    knowledge: { documents: [] },
+    isAdmin: false,
+    specialUser: null,
+    replyLengthProfile: {
+      tier: 'balanced',
+      maxTokens: 240,
+      historyLimit: 3,
+      promptProfile: 'standard',
+      performanceProfile: 'standard_chat',
+      guidance: '自然短回复。',
+    },
+    replyPlan: { type: 'direct', depth: 'short', questionNeeded: false },
+  };
+  const privatePrompt = buildReplyContext({
+    ...base,
+    event: { platform: 'qq', chatType: 'private', userName: 'Alice' },
+    route: { category: 'private_chat', allowFollowUp: true },
+    groupState: null,
+  });
+  const groupPrompt = buildReplyContext({
+    ...base,
+    event: { platform: 'qq', chatType: 'group', userName: 'Alice' },
+    route: { category: 'group_chat', allowFollowUp: false },
+    groupState: { mood: 'CALM', activityLevel: 35, recentTopics: [] },
+  });
+
+  assert.match(privatePrompt, /私聊通常 1-2 句/);
+  assert.match(privatePrompt, /直接表达偏爱、开心、想念、吃味和不爽/);
+  assert.match(groupPrompt, /群聊通常 1 句/);
+  assert.match(groupPrompt, /不展开私人记忆或暧昧内容/);
+  assert.doesNotMatch(privatePrompt, /我理解你的感受|你选一个|最耗你的|我从你选的那块接/);
+  assert.doesNotMatch(groupPrompt, /我理解你的感受|你选一个|最耗你的|我从你选的那块接/);
 });
 
 test('buildReplyContext keeps current emotion while treating daily mood as presentation only', () => {
@@ -130,7 +175,7 @@ test('buildReplyContext keeps current emotion while treating daily mood as prese
   assert.match(prompt, /本轮情绪=ANGRY/);
   assert.match(prompt, /今日心境=烦躁/);
   assert.match(prompt, /只改变表达方式，不覆盖本轮情绪/);
-  assert.match(prompt, /先回应当前内容，再保持关系连续性/);
+  assert.match(prompt, /先回应当前内容，再落一个有辨识度的吐槽或情绪/);
   assert.doesNotMatch(prompt, /情绪=AFFECTIONATE/);
   assert.doesNotMatch(prompt, /不要因好感度高/);
 });

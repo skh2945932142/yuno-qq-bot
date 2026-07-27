@@ -109,3 +109,26 @@ test('retrieveReplyStyleExamples prefers direct attention over generic comfort f
 
   assert.equal(selected[0].id, 'direct-attention');
 });
+
+test('production reply style corpus retrieves toxic technical samples without counseling templates', async () => {
+  const selected = await retrieveReplyStyleExamples({
+    event: { chatType: 'private' },
+    route: { category: 'knowledge_qa' },
+    analysis: {
+      intent: 'help',
+      sentiment: 'neutral',
+      ruleSignals: ['private-chat'],
+      topics: ['technical'],
+    },
+    emotionResult: { emotion: 'CALM' },
+    userTurn: 'Docker 容器为什么一启动就退出',
+    replyLengthProfile: { promptProfile: 'standard' },
+  });
+
+  assert.equal(selected.length, 3);
+  assert.equal(selected[0].tags.includes('toxic-banter'), true);
+  assert.equal(selected[0].tags.includes('technical'), true);
+  for (const example of selected) {
+    assert.doesNotMatch(example.humanReply, /我理解你的感受|先不逼你解释|你选一个|最耗你的|我从你选的那块接/);
+  }
+});

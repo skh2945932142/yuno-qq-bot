@@ -55,6 +55,30 @@ test('polishReplyNaturalness leaves normal direct attention wording unchanged', 
   assert.equal(text, '行，这会儿我先听你的。你从最烦的那一件开始。');
 });
 
+test('inspectReplyNaturalness allows light toxic banter but keeps severe attacks blocked', () => {
+  const options = {
+    event: { chatType: 'private' },
+    route: { category: 'private_chat' },
+    messageAnalysis: { intent: 'help', sentiment: 'neutral' },
+    replyPlan: { questionNeeded: true },
+    personalityStrategy: { signatureMove: { key: 'sharp_answer' } },
+    conversationState: { messages: [] },
+  };
+
+  for (const reply of [
+    '早什么早，懒狗。',
+    '菜狗又把代码写炸了？日志交出来。',
+    '你脑子是真会给自己加班。先去歇会儿。',
+  ]) {
+    const result = inspectReplyNaturalness(reply, options);
+    assert.equal(result.flags.includes('personal-attack'), false, reply);
+  }
+
+  const severe = inspectReplyNaturalness('闭嘴，蠢货。', options);
+  assert.equal(severe.flags.includes('personal-attack'), true);
+  assert.equal(severe.rewriteRecommended, true);
+});
+
 test('production accusatory replies are rejected for motive attribution and interrogation', () => {
   const replies = [
     '你自己硬要凑过来，倒是一秒就把账全算到我头上。你这是在怪我，还是单纯想找个借口赖着？',

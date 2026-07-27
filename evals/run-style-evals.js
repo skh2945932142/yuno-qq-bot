@@ -8,6 +8,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 const scenariosPath = path.join(__dirname, 'reply-style-scenarios.json');
+export const DEFAULT_FORBIDDEN_REPLY_PHRASES = [
+  '我理解你的感受',
+  '我能理解你的感受',
+  '先不逼你解释',
+  '你选一个',
+  '最耗你的',
+  '我从你选的那块接',
+  '还有什么需要帮助',
+];
 
 function parseArgs(argv = process.argv.slice(2)) {
   const args = {
@@ -27,15 +36,16 @@ function parseArgs(argv = process.argv.slice(2)) {
   return args;
 }
 
-async function loadScenarios() {
+export async function loadStyleScenarios() {
   return JSON.parse(await fs.readFile(scenariosPath, 'utf8'));
 }
 
-function defaultContext(scenario = {}) {
+export function buildStyleEvalContext(scenario = {}) {
   const context = scenario.context || {};
+  const isGroup = context.event?.chatType === 'group';
   return {
     event: { chatType: 'private', ...(context.event || {}) },
-    route: { category: context.event?.chatType === 'group' ? 'group_chat' : 'private_chat', ...(context.route || {}) },
+    route: { category: isGroup ? 'group_chat' : 'private_chat', ...(context.route || {}) },
     analysis: {
       intent: 'chat',
       sentiment: 'neutral',
@@ -45,29 +55,76 @@ function defaultContext(scenario = {}) {
     },
     emotionResult: { emotion: 'CALM', ...(context.emotionResult || {}) },
     replyPlan: context.replyPlan || null,
-    replyLengthProfile: context.replyLengthProfile || { promptProfile: 'standard' },
+    replyLengthProfile: {
+      tier: 'balanced',
+      maxTokens: isGroup ? 180 : 240,
+      historyLimit: 4,
+      promptProfile: 'standard',
+      performanceProfile: 'standard_chat',
+      temperature: 0.72,
+      reasoningEffort: 'low',
+      guidance: isGroup ? '群聊短接话。' : '私聊一到两句。',
+      ...(context.replyLengthProfile || {}),
+    },
+    knowledge: context.knowledge || { documents: [] },
   };
 }
 
-function buildNotes({ naturalness, styleExamples, expected }) {
+function includesAny(value, patterns = []) {
+  const text = String(value || '');
+  return patterns.some((pattern) => text.includes(String(pattern || '')));
+}
+
+function buildNotes({ reply, naturalness, styleExamples, expected }) {
   const notes = [];
   if (naturalness.flags.length > expected.maxNaturalnessFlags) {
     notes.push(`naturalness flags=${naturalness.flags.join(',') || 'none'}`);
   }
+  for (const flag of expected.requiredNaturalnessFlags) {
+    if (!naturalness.flags.includes(flag)) notes.push(`missing naturalness flag=${flag}`);
+  }
   if (styleExamples.length < expected.minStyleExamples) {
     notes.push(`style examples=${styleExamples.length}`);
+  }
+  for (const tag of expected.requiredExampleTags) {
+    if (!styleExamples.some((example) => example.tags?.includes(tag))) {
+      notes.push(`missing style tag=${tag}`);
+    }
+  }
+  const forbiddenReplyPhrases = expected.allowMechanicalPhrases
+    ? expected.forbiddenReplyPhrases
+    : [...DEFAULT_FORBIDDEN_REPLY_PHRASES, ...expected.forbiddenReplyPhrases];
+  const matchedForbidden = forbiddenReplyPhrases.filter((phrase) => String(reply || '').includes(phrase));
+  if (matchedForbidden.length > 0) {
+    notes.push(`forbidden reply phrases=${matchedForbidden.join(',')}`);
+  }
+  if (expected.requiredReplyAny.length > 0 && !includesAny(reply, expected.requiredReplyAny)) {
+    notes.push(`missing reply signal=${expected.requiredReplyAny.join('/')}`);
+  }
+  if (Number.isFinite(expected.maxReplyLength) && String(reply || '').length > expected.maxReplyLength) {
+    notes.push(`reply length=${String(reply || '').length}`);
+  }
+  if (styleExamples.some((example) => includesAny(example.humanReply, DEFAULT_FORBIDDEN_REPLY_PHRASES))) {
+    notes.push('retrieved mechanical style example');
   }
   return notes;
 }
 
 export async function evaluateStyleScenario(scenario, deps = {}) {
-  const context = defaultContext(scenario);
+  const context = buildStyleEvalContext(scenario);
   const expected = {
     maxNaturalnessFlags: 0,
     minStyleExamples: 0,
+    requiredNaturalnessFlags: [],
+    requiredExampleTags: [],
+    forbiddenReplyPhrases: [],
+    requiredReplyAny: [],
+    maxReplyLength: null,
+    allowMechanicalPhrases: false,
     ...(scenario.expected || {}),
   };
-  const naturalness = inspectReplyNaturalness(scenario.reply || '', {
+  const reply = scenario.reply || '';
+  const naturalness = inspectReplyNaturalness(reply, {
     event: context.event,
     route: context.route,
     replyLengthProfile: context.replyLengthProfile,
@@ -81,7 +138,7 @@ export async function evaluateStyleScenario(scenario, deps = {}) {
     userTurn: scenario.input || '',
     replyLengthProfile: context.replyLengthProfile,
   }, deps);
-  const notes = buildNotes({ naturalness, styleExamples, expected });
+  const notes = buildNotes({ reply, naturalness, styleExamples, expected });
   const passed = notes.length === 0;
 
   return {
@@ -151,7 +208,7 @@ async function writeReport(reportPath, results) {
 
 async function main() {
   const args = parseArgs();
-  const scenarios = await loadScenarios();
+  const scenarios = await loadStyleScenarios();
   const results = [];
 
   for (const scenario of scenarios) {

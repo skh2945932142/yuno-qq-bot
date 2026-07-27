@@ -99,7 +99,7 @@ test('chat builds bounded conversations and records model usage', async () => {
   }), '...');
   assert.match(fallbackPrompt.calls[0].messages[1].content, /自然、简洁/);
   assert.match(buildChatSystemInstructions('context', { expectStructuredReply: true }), /有效 JSON/);
-  assert.match(buildChatSystemInstructions('context'), /默认中文/);
+  assert.match(buildChatSystemInstructions('context'), /最终可发送消息/);
 });
 
 test('chat aborts the underlying OpenAI request when its timeout expires', async () => {

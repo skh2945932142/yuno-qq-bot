@@ -58,7 +58,7 @@ test('group default stays brief and low possessiveness', () => {
   assert.equal(strategy.relationshipStage, 'familiar');
   assert.equal(strategy.possessiveness, 'none');
   assert.equal(strategy.memoryUse.level, 'none');
-  assert.match(strategy.promptHints.join(' '), /群聊里短接话/);
+  assert.match(strategy.promptHints.join(' '), /群聊通常一句/);
 });
 
 test('negative help scene supports first and limits follow-up pressure', () => {
@@ -80,7 +80,7 @@ test('negative help scene supports first and limits follow-up pressure', () => {
 
   assert.equal(strategy.stance, 'supportive_protective');
   assert.equal(strategy.followupStyle, 'one_question_after_support');
-  assert.match(strategy.promptHints.join(' '), /先安抚|追问最多一个/);
+  assert.match(strategy.promptHints.join(' '), /先损一句再关心|最多追问一个/);
 });
 
 test('jealous strategy keeps safety boundaries explicit', () => {
@@ -96,8 +96,8 @@ test('jealous strategy keeps safety boundaries explicit', () => {
 
   assert.equal(strategy.stance, 'guarded_jealous');
   assert.equal(strategy.possessiveness, 'medium');
-  assert.match(strategy.promptHints.join(' '), /不能攻击第三方/);
-  assert.match(strategy.forbiddenMoves.join(' '), /现实威胁|羞辱|攻击第三方/);
+  assert.match(strategy.promptHints.join(' '), /不攻击第三方/);
+  assert.match(strategy.forbiddenMoves.join(' '), /现实威胁|持续围攻|严重羞辱/);
 });
 
 test('daily mood changes expression without erasing warmth at high affection', () => {

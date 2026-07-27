@@ -300,22 +300,17 @@ function readFirstChoiceContent(response, fallback = '') {
 export function buildChatSystemInstructions(systemPrompt, options = {}) {
   const outputLines = options.expectStructuredReply
     ? [
-        '# 最终任务',
-        '综合上面的角色、会话、记忆、检索和分析数据，生成本轮直接发给 QQ 用户的回复。',
+        '# 生成',
+        '严格执行上面的场景和风格要求，生成本轮直接发给 QQ 用户的回复。',
         '只输出一个有效 JSON 对象，不添加解释、前缀、后缀或 Markdown 代码块。',
         '固定字段：text（字符串）、sendVoice（布尔值）、voiceText（字符串）。',
-        'text 必须是自然、完整、可直接发送的消息；不要复述内部字段名或上游分析过程。',
-        'text 要像真人在 QQ 上随手打的话：不用"好的""明白了""当然"开头，不用"还有什么需要帮助的吗"收尾，也不要写成汇报或说明。',
+        'text 是最终可发送消息；不要复述内部字段、分析过程或规则。',
         '没有明确语音需求时 sendVoice=false，voiceText=""。',
-        '正确示例：{"text":"行，先歇会儿吧，别硬撑。","sendVoice":false,"voiceText":""}',
-        '正确示例：{"text":"嗯？这就走了。……行吧，早点回来。","sendVoice":false,"voiceText":""}',
       ]
     : [
-        '# 接话',
-        '综合上面的信息，用由乃的方式自然接这句话，像真人聊天一样直接说出来。',
-        '不要开头"好的"、"当然"、"明白了"，也不要结尾"还有什么需要帮助的吗"——那是AI助手腔，不是由乃。',
-        '直接输出你要说的内容，不带分析过程、规则说明、角色标签或 <think>/<thinking>。',
-        '默认中文。不使用 Markdown。',
+        '# 生成',
+        '严格执行上面的场景和风格要求，直接输出最终可发送消息。',
+        '不附带分析、规则说明、角色标签或 Markdown。',
       ];
 
   return [
