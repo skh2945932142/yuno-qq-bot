@@ -6,3 +6,5 @@ coverage/
 .claude/
 test-results.txt
 src/prompt-builder.js.bak
+tmp-*.mjs
+tools-show.mjs

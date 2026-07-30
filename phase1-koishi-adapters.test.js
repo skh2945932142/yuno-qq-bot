@@ -4,7 +4,9 @@ import {
   createKoishiDeliveryAdapter,
   createKoishiProtocolAdapter,
   isBotOnline,
+  isOptionalActionDisabled,
   renderOutputs,
+  resetOptionalActionCapabilities,
   resolveBot,
   resolveImageSource,
   toChannelId,
@@ -136,4 +138,77 @@ test('Koishi adapter helpers cover image inputs and internal protocol availabili
     () => adapter.callAction('fetch_custom_face', {}),
     (error) => error.code === 'KOISHI_ONEBOT_INTERNAL_UNAVAILABLE'
   );
+});
+test('protocol adapter drives typing status and message reactions through OneBot actions', async () => {
+  resetOptionalActionCapabilities();
+  const calls = [];
+  const adapter = createKoishiProtocolAdapter({
+    bots: [{
+      platform: 'onebot',
+      selfId: '10000',
+      status: 'online',
+      internal: {
+        async _request(action, payload) {
+          calls.push({ action, payload });
+          return { retcode: 0, data: {} };
+        },
+      },
+    }],
+  }, { selfId: '10000' });
+
+  assert.equal(await adapter.setTyping({ chatType: 'private', chatId: '20000' }, true), true);
+  assert.equal(await adapter.setTyping({ chatType: 'private', chatId: '20000' }, false), true);
+  // group typing status has no OneBot equivalent and must stay a silent no-op
+  assert.equal(await adapter.setTyping({ chatType: 'group', chatId: '30000' }, true), false);
+  assert.equal(await adapter.setTyping({ chatType: 'private', chatId: '' }, true), false);
+
+  assert.equal(await adapter.reactToMessage({ chatType: 'group', chatId: '30000' }, '4242'), true);
+  assert.equal(await adapter.reactToMessage({ chatType: 'group', chatId: '30000' }, '4242', '66'), true);
+  assert.equal(await adapter.reactToMessage({ chatType: 'group', chatId: '30000' }, ''), false);
+
+  assert.deepEqual(calls.map((item) => item.action), [
+    'set_input_status',
+    'set_input_status',
+    'set_msg_emoji_like',
+    'set_msg_emoji_like',
+  ]);
+  assert.deepEqual(calls[0].payload, { user_id: 20000, event_type: 1 });
+  assert.deepEqual(calls[1].payload, { user_id: 20000, event_type: 0 });
+  assert.deepEqual(calls[2].payload, { message_id: 4242, emoji_id: '76' });
+  assert.deepEqual(calls[3].payload, { message_id: 4242, emoji_id: '66' });
+  assert.equal(isOptionalActionDisabled('set_input_status'), false);
+  resetOptionalActionCapabilities();
+});
+
+test('unsupported optional actions are disabled once and never throw', async () => {
+  resetOptionalActionCapabilities();
+  const warnings = [];
+  let attempts = 0;
+  const adapter = createKoishiProtocolAdapter({
+    bots: [{
+      platform: 'onebot',
+      selfId: '10000',
+      status: 'online',
+      internal: {
+        async _request() {
+          attempts += 1;
+          return { retcode: 1404, data: null };
+        },
+      },
+    }],
+  }, {
+    selfId: '10000',
+    logger: { warn: (...args) => warnings.push(args), info: () => {}, error: () => {} },
+  });
+
+  assert.equal(await adapter.setTyping({ chatType: 'private', chatId: '20000' }, true), false);
+  assert.equal(await adapter.setTyping({ chatType: 'private', chatId: '20000' }, true), false);
+  assert.equal(await adapter.reactToMessage({ chatType: 'group', chatId: '30000' }, '4242'), false);
+
+  assert.equal(attempts, 2);
+  assert.equal(isOptionalActionDisabled('set_input_status'), true);
+  assert.equal(isOptionalActionDisabled('set_msg_emoji_like'), true);
+  assert.equal(warnings.length, 2);
+  resetOptionalActionCapabilities();
+  assert.equal(isOptionalActionDisabled('set_input_status'), false);
 });

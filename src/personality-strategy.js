@@ -64,7 +64,7 @@ function hasVisibleEmoji(text) {
 function chooseWeightedMove(candidates, seed) {
   const normalized = candidates.filter((item) => item && item.key && Number(item.weight) > 0);
   const total = normalized.reduce((sum, item) => sum + Number(item.weight), 0);
-  if (!total) return 'observation';
+  if (!total) return normalized[0]?.key || 'observation';
 
   let cursor = hashString(seed) % total;
   for (const candidate of normalized) {
@@ -72,6 +72,23 @@ function chooseWeightedMove(candidates, seed) {
     cursor -= candidate.weight;
   }
   return normalized[0].key;
+}
+
+const MICRO_STYLES = Object.freeze([
+  { key: 'terse', weight: 30 },
+  { key: 'normal', weight: 50 },
+  { key: 'spicy', weight: 20 },
+]);
+
+export function resolveMicroStyle(event = {}, extras = {}) {
+  const seed = [
+    'micro-style',
+    event.chatId || 'chat',
+    event.userId || 'user',
+    event.messageId || event.timestamp || '0',
+    extras.emotion || '',
+  ].join('|');
+  return chooseWeightedMove(MICRO_STYLES, seed) || 'normal';
 }
 
 function normalizeEventType(type) {
@@ -530,9 +547,12 @@ export function resolvePersonalityStrategy({
       ? '群聊不要公开展开私人记忆、暧昧长文或连续刷屏。'
       : '私聊也不要把偏爱写成强迫或过度占有。',
   ];
+  const microStyle = resolveMicroStyle(event, { emotion });
+
   return {
     scene,
     relationshipStage,
+    microStyle,
     stance,
     warmth,
     possessiveness,

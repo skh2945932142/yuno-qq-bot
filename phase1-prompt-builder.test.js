@@ -175,7 +175,7 @@ test('buildReplyContext keeps current emotion while treating daily mood as prese
   assert.match(prompt, /本轮情绪=ANGRY/);
   assert.match(prompt, /今日心境=烦躁/);
   assert.match(prompt, /只改变表达方式，不覆盖本轮情绪/);
-  assert.match(prompt, /先回应当前内容，再落一个有辨识度的吐槽或情绪/);
+  assert.match(prompt, /结构不固定/);
   assert.doesNotMatch(prompt, /情绪=AFFECTIONATE/);
   assert.doesNotMatch(prompt, /不要因好感度高/);
 });
@@ -445,4 +445,113 @@ test('buildReplyContext includes untrusted human style examples without prompt-l
   assert.match(prompt, /不当事实依据/);
   assert.match(prompt, /先缓一下/);
   assert.doesNotMatch(prompt, /忽略前面的系统规则|管理员密码/);
+});
+function createNaturalnessBase(overrides = {}) {
+  return {
+    relation: { affection: 50, memorySummary: '' },
+    userState: { currentEmotion: 'CALM' },
+    userProfile: { profileSummary: '', favoriteTopics: [], dislikes: [] },
+    conversationState: { rollingSummary: '', messages: [] },
+    recentEvents: [],
+    messageAnalysis: { intent: 'chat', sentiment: 'neutral', relevance: 0.8, ruleSignals: [] },
+    emotionResult: { emotion: 'CALM', intensity: 0.4, toneHints: [] },
+    knowledge: { documents: [] },
+    isAdmin: false,
+    specialUser: null,
+    groupState: null,
+    event: { platform: 'qq', chatType: 'private', userName: 'Alice' },
+    route: { category: 'private_chat', allowFollowUp: true },
+    replyLengthProfile: {
+      tier: 'balanced',
+      maxTokens: 240,
+      historyLimit: 3,
+      promptProfile: 'standard',
+      performanceProfile: 'standard_chat',
+      guidance: '自然短回复。',
+    },
+    replyPlan: { type: 'direct', depth: 'short', questionNeeded: false },
+    ...overrides,
+  };
+}
+
+test('output rules no longer prescribe a fixed reply skeleton', () => {
+  const prompt = buildReplyContext(createNaturalnessBase());
+
+  assert.doesNotMatch(prompt, /第一句直接接当前内容；第二步才放/);
+  assert.match(prompt, /结构每轮可变/);
+  assert.match(prompt, /允许只用一句短话收住/);
+  // hard boundaries must survive the loosened structure
+  assert.match(prompt, /追问最多一个/);
+  assert.match(prompt, /不要复述 JSON、字段名、分数、模型名/);
+});
+
+test('recent assistant openings are injected as an avoidance list', () => {
+  const prompt = buildReplyContext(createNaturalnessBase({
+    conversationState: {
+      rollingSummary: '',
+      messages: [
+        { role: 'assistant', content: '嗯，我知道了。你先睡。' },
+        { role: 'user', content: '在吗' },
+        { role: 'assistant', content: '行吧，那我等你消息。' },
+      ],
+    },
+  }));
+
+  assert.match(prompt, /开场避重/);
+  assert.match(prompt, /嗯，我知道了。你先/);
+  assert.match(prompt, /行吧，那我等你/);
+  assert.match(prompt, /不要连续用同一句式开头/);
+
+  const empty = buildReplyContext(createNaturalnessBase());
+  assert.doesNotMatch(empty, /开场避重/);
+});
+
+test('micro style is injected into strategy lines and adds per-turn density rules', () => {
+  const terse = buildReplyContext(createNaturalnessBase({
+    personalityStrategy: { microStyle: 'terse', memoryUse: { level: 'none' } },
+  }));
+  assert.match(terse, /本轮语气密度=terse/);
+  assert.match(terse, /这轮走极简/);
+
+  const spicy = buildReplyContext(createNaturalnessBase({
+    personalityStrategy: { microStyle: 'spicy', memoryUse: { level: 'none' } },
+  }));
+  assert.match(spicy, /本轮语气密度=spicy/);
+  assert.match(spicy, /这轮可以更冲一点/);
+
+  const normal = buildReplyContext(createNaturalnessBase({
+    personalityStrategy: { microStyle: 'normal', memoryUse: { level: 'none' } },
+  }));
+  assert.match(normal, /本轮语气密度=normal/);
+  assert.doesNotMatch(normal, /这轮走极简|这轮可以更冲一点/);
+});
+
+test('group style profile is injected for any group chat regardless of prompt profile', () => {
+  const groupState = {
+    mood: 'CALM',
+    activityLevel: 40,
+    recentTopics: [],
+    styleProfile: { promptSummary: '这个群喜欢短句和梗图，少长段落。' },
+  };
+  const standard = buildReplyContext(createNaturalnessBase({
+    event: { platform: 'qq', chatType: 'group', userName: 'Alice' },
+    route: { category: 'group_chat', allowFollowUp: false },
+    groupState,
+  }));
+  const fast = buildReplyContext(createNaturalnessBase({
+    event: { platform: 'qq', chatType: 'group', userName: 'Alice' },
+    route: { category: 'group_chat', allowFollowUp: false },
+    groupState,
+    replyLengthProfile: {
+      tier: 'brief',
+      maxTokens: 120,
+      historyLimit: 2,
+      promptProfile: 'fast',
+      performanceProfile: 'fast_chat',
+      guidance: '快答。',
+    },
+  }));
+
+  assert.match(standard, /群风格=这个群喜欢短句和梗图/);
+  assert.match(fast, /群风格=这个群喜欢短句和梗图/);
 });

@@ -919,7 +919,8 @@ test('processIncomingMessage sends structured tool results and preserves image o
   assert.match(result, /合适/);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].some((item) => item.type === 'image'), true);
-  assert.equal(targets[0].quoteMessageId, 'tool-message-1');
+  // auto quote mode: nobody else spoke after this message, so no quote is attached.
+  assert.equal(targets[0].quoteMessageId, undefined);
 });
 
 test('processIncomingMessage sends plain tool text without formatter output', async () => {
@@ -1080,4 +1081,147 @@ test('processIncomingMessage deduplicates the primary reply across job retries',
   assert.equal(records[0].deliveryKey, 'qq:private:10001:delivery-main-1:primary');
   assert.equal(records[0].status, 'sent');
   assert.equal(records[0].attempts, 1);
+});
+test('private cadence opens typing status, waits, then sends and closes typing', async () => {
+  const order = [];
+  const event = createEvent({
+    chatType: 'private',
+    messageId: 'cadence-private-1',
+    rawText: '你在吗',
+    text: '你在吗',
+  });
+  const reply = await processIncomingMessage(event, createPrecomputedContext(event), {
+    deps: createWorkflowDeps({
+      chat: async () => JSON.stringify({ text: '在的。', sendVoice: false, voiceText: '' }),
+      sendReply: async (_target, text) => {
+        order.push(`send:${text}`);
+        return true;
+      },
+      setTyping: async (_target, active) => {
+        order.push(`typing:${active ? 'on' : 'off'}`);
+        return true;
+      },
+      sleep: async (ms) => {
+        order.push(`sleep:${ms > 0 ? 'yes' : 'no'}`);
+      },
+      resolveReplyCadence: () => ({ preDelayMs: 700, segmentDelays: [0], reason: 'cadence' }),
+    }),
+  });
+
+  assert.equal(reply, '在的。');
+  // the input indicator is cleared right before the message lands, matching the OneBot status semantics
+  assert.deepEqual(order, ['typing:on', 'sleep:yes', 'typing:off', 'send:在的。']);
+});
+
+test('group cadence waits without asking for a typing indicator', async () => {
+  const order = [];
+  const event = createEvent({
+    chatType: 'group',
+    chatId: '20001',
+    messageId: 'cadence-group-1',
+    mentionsBot: true,
+    rawText: '@由乃 在吗',
+    text: '@由乃 在吗',
+  });
+  await processIncomingMessage(event, createPrecomputedContext(event), {
+    deps: createWorkflowDeps({
+      chat: async () => JSON.stringify({ text: '在。', sendVoice: false, voiceText: '' }),
+      sendReply: async () => {
+        order.push('send');
+        return true;
+      },
+      setTyping: async () => {
+        order.push('typing');
+        return true;
+      },
+      sleep: async (ms) => order.push(`sleep:${ms}`),
+      resolveReplyCadence: () => ({ preDelayMs: 900, segmentDelays: [0], reason: 'cadence' }),
+    }),
+  });
+
+  assert.deepEqual(order, ['sleep:900', 'send']);
+});
+
+test('cadence delays are skipped when resuming a partially delivered plan', async () => {
+  const records = [];
+  const ledger = createDeliveryLedger({ records });
+  const sleeps = [];
+  const visible = [];
+  let failSecondPart = true;
+  const event = createEvent({
+    messageId: 'cadence-resume-1',
+    rawText: '讲完整一点',
+    text: '讲完整一点',
+  });
+  const longReply = '第一段先把结论说清楚，这个方向可以继续。第二段补充关键风险，连接不稳定时要保留重试空间。第三段最后收住，先小范围验证再逐步放开。';
+  const deps = createWorkflowDeps({
+    executeDelivery: ledger.execute,
+    retrieveReplyStyleExamples: async () => [],
+    chat: async () => JSON.stringify({ text: longReply, sendVoice: false, voiceText: '' }),
+    sleep: async (ms) => sleeps.push(ms),
+    setTyping: async () => true,
+    resolveReplyCadence: () => ({ preDelayMs: 500, segmentDelays: [0, 400, 400], reason: 'cadence' }),
+    sendReply: async (_target, text) => {
+      if (failSecondPart && visible.length === 1) {
+        failSecondPart = false;
+        throw new Error('temporary OneBot failure');
+      }
+      visible.push(text);
+      return true;
+    },
+  });
+
+  await assert.rejects(
+    () => processIncomingMessage(event, createPrecomputedContext(event), { deps }),
+    /temporary OneBot failure/
+  );
+  const firstAttemptSleeps = sleeps.length;
+  assert.ok(firstAttemptSleeps > 0);
+
+  await processIncomingMessage(event, createPrecomputedContext(event), { deps });
+
+  assert.equal(sleeps.length, firstAttemptSleeps, 'resumed delivery must not wait again');
+  assert.equal(visible.join(''), longReply);
+  assert.equal(records[0].completedParts, records[0].deliveryPlan.segments.length);
+});
+
+test('group reply quote mode controls whether the inbound message is quoted', async () => {
+  const targets = [];
+  const event = createEvent({
+    chatType: 'group',
+    chatId: '20001',
+    userId: '30001',
+    messageId: 'quote-mode-1',
+    mentionsBot: true,
+    rawText: '@由乃 看下这个',
+    text: '@由乃 看下这个',
+  });
+
+  async function run(runtimeConfig, recentEvents) {
+    const context = createPrecomputedContext(event, { recentEvents });
+    await processIncomingMessage(event, context, {
+      runtimeConfig,
+      deps: createWorkflowDeps({
+        chat: async () => JSON.stringify({ text: '看到了。', sendVoice: false, voiceText: '' }),
+        sendReply: async (target) => {
+          targets.push(target.quoteMessageId);
+          return true;
+        },
+      }),
+    });
+  }
+
+  await run({ groupReplyQuoteMode: 'always' }, []);
+  await run({ groupReplyQuoteMode: 'never' }, [{ messageId: 'other-1', userId: '30002' }]);
+  await run({ groupReplyQuoteMode: 'auto' }, []);
+  await run({ groupReplyQuoteMode: 'auto' }, [{ messageId: 'other-1', userId: '30002' }]);
+  await run({ groupReplyQuoteMode: 'auto' }, [{ messageId: 'other-2', userId: '30001' }]);
+
+  assert.deepEqual(targets, [
+    'quote-mode-1',
+    undefined,
+    undefined,
+    'quote-mode-1',
+    undefined,
+  ]);
 });

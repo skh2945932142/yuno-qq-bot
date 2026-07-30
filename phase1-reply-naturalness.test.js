@@ -5,6 +5,11 @@ import {
   inspectReplyNaturalness,
   polishReplyNaturalness,
 } from './src/reply-naturalness.js';
+import { VARIANT_POOLS } from './src/reply-variants.js';
+
+function poolTexts(name) {
+  return VARIANT_POOLS[name].map((entry) => entry.text);
+}
 
 test('inspectReplyNaturalness flags AI disclaimers and canned empathy', () => {
   const result = inspectReplyNaturalness('作为一个 AI，我理解你的感受。总结一下：你需要先休息。', {
@@ -145,7 +150,7 @@ test('deescalateReplyNaturalness never returns unsupported motive attribution', 
     messageAnalysis: { intent: 'social', sentiment: 'positive' },
   });
 
-  assert.equal(text, '嗯，听你这么说，我有点高兴。只是没打算表现得太明显。');
+  assert.ok(poolTexts('deescalated-positive').includes(text), text);
   assert.doesNotMatch(text, /你每次|被讲中|责任/);
 });
 
@@ -206,4 +211,67 @@ test('robotic acknowledgement phrases are rewritten without raising attack score
     const softened = deescalateReplyNaturalness(reply, options);
     assert.doesNotMatch(softened, /记下|记住|收下|听到|知道了|收到/);
   }
+});
+function repeatToLength(length) {
+  return '今天的进度我盯着呢'.repeat(40).slice(0, length);
+}
+
+test('private length thresholds allow 96 chars for normal replies and 140 for help intent', () => {
+  const base = { event: { chatType: 'private' }, route: { category: 'private_chat' } };
+  const helpBase = { ...base, messageAnalysis: { intent: 'help' } };
+
+  assert.equal(inspectReplyNaturalness(repeatToLength(96), base).flags.includes('private-too-long'), false);
+  assert.equal(inspectReplyNaturalness(repeatToLength(97), base).flags.includes('private-too-long'), true);
+  assert.equal(inspectReplyNaturalness(repeatToLength(139), helpBase).flags.includes('private-too-long'), false);
+  assert.equal(inspectReplyNaturalness(repeatToLength(141), helpBase).flags.includes('private-too-long'), true);
+});
+
+test('over-long private replies collapse on a sentence boundary instead of mid-sentence truncation', () => {
+  const first = '第一句先把结论说清楚。';
+  const second = '接着这句非常长非常长地补充所有细节把私聊长度上限直接顶穿方便验证句界收束只保留第一句完整内容而不是在中途硬截断再补一个句号的行为是否已经被正确实现出来并且能够稳定复现每一次结果。';
+  const output = deescalateReplyNaturalness(first + second, {
+    event: { chatType: 'private' },
+    route: { category: 'private_chat' },
+  });
+
+  assert.equal(output, first);
+  assert.match(output, /。$/);
+  assert.equal(output.includes(second.slice(0, 8)), false);
+});
+
+test('private replies without any sentence boundary are kept whole rather than hard-truncated', () => {
+  const value = '这段话一口气说到底中间没有任何标点符号所以句界收束没有任何位置可以使用整段内容会被原样保留下来给你看清楚我到底想表达什么东西顺便把长度堆到远超九十六个字的私聊上限方便断言验证具体行为是否真的符合预期结果';
+  assert.ok(value.length > 96);
+
+  const output = deescalateReplyNaturalness(value, {
+    event: { chatType: 'private' },
+    route: { category: 'private_chat' },
+  });
+
+  assert.equal(output, value);
+  assert.doesNotMatch(output, /[^。！？!?]。$/);
+});
+
+test('one question survives when the inbound message is itself a question or the plan is a followup', () => {
+  const reply = '这块缓存我看过了。你要不要先跑一遍压测？';
+  const route = { category: 'private_chat' };
+
+  const inboundQuestion = deescalateReplyNaturalness(reply, {
+    event: { chatType: 'private', text: '缓存要怎么处理？' },
+    route,
+  });
+  const followupPlan = deescalateReplyNaturalness(reply, {
+    event: { chatType: 'private', text: '缓存我改完了' },
+    route,
+    replyPlan: { type: 'followup_probe' },
+  });
+  const plainStatement = deescalateReplyNaturalness(reply, {
+    event: { chatType: 'private', text: '缓存我改完了' },
+    route,
+  });
+
+  assert.match(inboundQuestion, /压测？$/);
+  assert.match(followupPlan, /压测？$/);
+  assert.doesNotMatch(plainStatement, /[？?]/);
+  assert.equal(plainStatement, '这块缓存我看过了。');
 });

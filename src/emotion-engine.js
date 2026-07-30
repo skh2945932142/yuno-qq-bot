@@ -13,12 +13,12 @@ const EMOTION_STYLES = {
 };
 
 const EMOJI_RULES = {
-  CALM: { budget: 0, style: 'none', toneHints: ['冷处理', '停顿', '短句'] },
+  CALM: { budget: 1, style: 'soft', toneHints: ['冷处理', '停顿', '短句'] },
   CURIOUS: { budget: 1, style: 'soft', toneHints: ['观察', '具体好奇'] },
   WARN: { budget: 0, style: 'none', toneHints: ['边界', '少废话', '直接'] },
-  JEALOUS: { budget: 0, style: 'none', toneHints: ['轻微吃味', '低频'] },
-  PROTECTIVE: { budget: 0, style: 'none', toneHints: ['护短', '具体关心'] },
-  SAD: { budget: 0, style: 'none', toneHints: ['克制失落', '少量停顿', '短句'] },
+  JEALOUS: { budget: 1, style: 'soft', toneHints: ['轻微吃味', '低频'] },
+  PROTECTIVE: { budget: 1, style: 'soft', toneHints: ['护短', '具体关心'] },
+  SAD: { budget: 1, style: 'soft', toneHints: ['克制失落', '少量停顿', '短句'] },
   ANGRY: { budget: 0, style: 'none', toneHints: ['锋利', '压迫', '直接'] },
   AFFECTIONATE: { budget: 1, style: 'soft', toneHints: ['偏爱', '黏人', '轻柔安抚'] },
   FIXATED: { budget: 1, style: 'soft', toneHints: ['偏爱', '留意细节', '护短'] },

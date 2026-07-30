@@ -1,4 +1,5 @@
-﻿function formatList(items, fallback = '暂无') {
+﻿import { buildToolAcknowledgementVariant } from './reply-variants.js';
+function formatList(items, fallback = '暂无') {
   return Array.isArray(items) && items.length > 0 ? items.join(' / ') : fallback;
 }
 
@@ -32,20 +33,11 @@ function sanitizeToolAcknowledgement(text, toolResult = {}) {
   if (!value || !ROBOTIC_TOOL_ACKNOWLEDGEMENT_REGEX.test(value)) return value;
 
   const detail = value.includes('：') ? value.split('：').slice(1).join('：').trim() : '';
-  const tool = String(toolResult?.tool || '');
-  if (tool.startsWith('reminder_') || tool === 'schedule_note') {
-    return detail ? `好。${detail}` : '好，到时间我会叫你。';
-  }
-  if (tool.startsWith('subscription_')) {
-    return detail ? `订阅开始了：${detail}` : '好，之后我会按这个频率看。';
-  }
-  if (tool.startsWith('meme_')) {
-    return detail ? `表情包这边会按这个来：${detail}` : '之后会按这个表情包偏好来。';
-  }
-  if (tool.startsWith('memory_') || tool.startsWith('style_')) {
-    return detail ? `之后会按这个偏好来：${detail}` : '之后会按这个偏好来。';
-  }
-  return detail ? `好，之后按这个来：${detail}` : '好，之后按这个来。';
+  return buildToolAcknowledgementVariant({
+    tool: String(toolResult?.tool || ''),
+    detail,
+    chatId: String(toolResult?.chatId || ''),
+  });
 }
 
 

@@ -18,8 +18,8 @@ test('resolveEmotion picks protective for help requests with decent affection', 
 
   assert.equal(result.emotion, 'PROTECTIVE');
   assert.equal(result.reason, 'help-request');
-  assert.equal(result.emojiBudget, 0);
-  assert.equal(result.emojiStyle, 'none');
+  assert.equal(result.emojiBudget, 1);
+  assert.equal(result.emojiStyle, 'soft');
 });
 
 test('resolveEmotion becomes angry on hostile low-affection input', () => {

@@ -129,3 +129,87 @@ test('fast trigger analysis distinguishes targeted and non-targeted group poke e
   assert.equal(analyzeTriggerFast(targeted).shouldRespond, true);
   assert.equal(analyzeTriggerFast(nonTargeted).reason, 'non-target-poke');
 });
+const AMBIENT_CONFIG = {
+  ambientJoinEnabled: true,
+  ambientJoinProbability: 0.02,
+  ambientJoinCooldownMs: 600000,
+  ambientJoinMaxPerDay: 6,
+  targetGroupId: '12345',
+};
+
+function ambientGroupEvent(overrides = {}) {
+  return {
+    platform: 'qq',
+    chatType: 'group',
+    chatId: '12345',
+    userId: '10001',
+    userName: 'Alice',
+    messageId: 'ambient-1',
+    rawText: '这个排期我觉得还得再压一压',
+    text: '这个排期我觉得还得再压一压',
+    mentionsBot: false,
+    source: { postType: 'message' },
+    ...overrides,
+  };
+}
+
+test('ambient join can answer untriggered group chatter in the target group', async () => {
+  const { resetParticipationState } = await import('./src/participation-policy.js');
+  resetParticipationState();
+
+  const allowed = await analyzeTrigger(ambientGroupEvent(), {
+    relation: { affection: 40, activeScore: 20 },
+    groupState: { activityLevel: 60 },
+  }, {
+    runtimeConfig: AMBIENT_CONFIG,
+    ambientRandom: () => 0,
+  });
+
+  assert.equal(allowed.shouldRespond, true);
+  assert.equal(allowed.reason, 'ambient-join');
+  assert.equal(allowed.relevance, 0.45);
+  assert.match(allowed.ruleSignals.join(','), /ambient-join/);
+
+  resetParticipationState();
+  const denied = await analyzeTrigger(ambientGroupEvent({ messageId: 'ambient-2' }), {
+    relation: { affection: 40, activeScore: 20 },
+    groupState: { activityLevel: 60 },
+  }, {
+    runtimeConfig: AMBIENT_CONFIG,
+    ambientRandom: () => 0.99,
+  });
+
+  assert.equal(denied.shouldRespond, false);
+  assert.equal(denied.reason, 'explicit-trigger-required');
+});
+
+test('fast trigger analysis shares the same ambient join gate', async () => {
+  const { resetParticipationState } = await import('./src/participation-policy.js');
+  resetParticipationState();
+
+  const allowed = analyzeTriggerFast(ambientGroupEvent({ messageId: 'ambient-fast-1' }), {
+    runtimeConfig: AMBIENT_CONFIG,
+    groupState: { activityLevel: 60 },
+    ambientRandom: () => 0,
+  });
+  assert.equal(allowed.shouldRespond, true);
+  assert.equal(allowed.reason, 'ambient-join');
+
+  resetParticipationState();
+  const idle = analyzeTriggerFast(ambientGroupEvent({ messageId: 'ambient-fast-2' }), {
+    runtimeConfig: AMBIENT_CONFIG,
+    groupState: { activityLevel: 2 },
+    ambientRandom: () => 0,
+  });
+  assert.equal(idle.shouldRespond, false);
+  assert.equal(idle.reason, 'explicit-trigger-required');
+
+  resetParticipationState();
+  const otherGroup = analyzeTriggerFast(ambientGroupEvent({ chatId: '99999', messageId: 'ambient-fast-3' }), {
+    runtimeConfig: AMBIENT_CONFIG,
+    groupState: { activityLevel: 60 },
+    ambientRandom: () => 0,
+  });
+  assert.equal(otherGroup.shouldRespond, false);
+  assert.equal(otherGroup.reason, 'explicit-trigger-required');
+});

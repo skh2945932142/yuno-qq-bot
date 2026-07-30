@@ -80,3 +80,32 @@ test('daily mood weights match the quiet-cold distribution and total one hundred
     JEALOUS: 1,
   });
 });
+test('soft emotions keep a one-emoji budget while sharp emotions stay text-only', () => {
+  const soft = [
+    { emotion: 'CALM', input: { relation: { affection: 30 }, messageAnalysis: { intent: 'chat', sentiment: 'neutral', confidence: 0.6, ruleSignals: [] } } },
+    { emotion: 'PROTECTIVE', input: { relation: { affection: 72 }, messageAnalysis: { intent: 'help', sentiment: 'neutral', confidence: 0.8, relevance: 0.8, ruleSignals: [] } } },
+    { emotion: 'JEALOUS', input: { relation: { affection: 90 }, specialUser: { affectionFloor: 88 }, messageAnalysis: { intent: 'chat', sentiment: 'neutral', confidence: 0.82, ruleSignals: ['special-user', 'jealousy-topic'] } } },
+    { emotion: 'SAD', input: { relation: { affection: 50 }, messageAnalysis: { intent: 'chat', sentiment: 'negative', confidence: 0.7, ruleSignals: ['cold-shoulder'] } } },
+  ];
+
+  for (const entry of soft) {
+    const result = resolveEmotion({
+      userState: { intensity: 0.4 },
+      groupState: { mood: 'CALM', activityLevel: 20 },
+      ...entry.input,
+    });
+    if (result.emotion !== entry.emotion) continue;
+    assert.equal(result.emojiBudget, 1, `${entry.emotion} budget`);
+    assert.equal(result.emojiStyle, 'soft', `${entry.emotion} style`);
+  }
+
+  const angry = resolveEmotion({
+    relation: { affection: 10 },
+    userState: { intensity: 0.3 },
+    groupState: { mood: 'WARN', activityLevel: 50 },
+    messageAnalysis: { intent: 'challenge', sentiment: 'negative', confidence: 0.9, relevance: 0.8, ruleSignals: [] },
+  });
+  assert.equal(angry.emotion, 'ANGRY');
+  assert.equal(angry.emojiBudget, 0);
+  assert.equal(angry.emojiStyle, 'none');
+});

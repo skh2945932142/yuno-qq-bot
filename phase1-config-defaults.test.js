@@ -405,3 +405,62 @@ test('config falls back from unsafe metrics route patterns', async () => {
 
   assert.equal(config.metricsPath, '/metrics');
 });
+test('config exposes humanized cadence, participation and ambient join defaults', async () => {
+  const { config } = await loadConfigModule({
+    GROUP_REPLY_QUOTE_MODE: '',
+    REPLY_SEGMENT_TRIM_TRAILING_PERIOD: '',
+    REPLY_CADENCE_ENABLED: '',
+    REPLY_CADENCE_READ_MS_PER_CHAR: '',
+    REPLY_CADENCE_READ_MAX_MS: '',
+    REPLY_CADENCE_MIN_PRE_DELAY_MS: '',
+    REPLY_CADENCE_MAX_PRE_DELAY_MS: '',
+    REPLY_CADENCE_TYPING_MS_PER_CHAR: '',
+    REPLY_CADENCE_TYPING_MAX_MS: '',
+    REPLY_CADENCE_JITTER_RATIO: '',
+    TYPING_INDICATOR_ENABLED: '',
+    GROUP_MESSAGE_AGGREGATION_ENABLED: '',
+    GROUP_MESSAGE_AGGREGATION_WINDOW_MS: '',
+    GROUP_MESSAGE_AGGREGATION_MAX_WINDOW_MS: '',
+    PARTICIPATION_SKIP_PROBABILITY: '',
+    PARTICIPATION_REACTION_PROBABILITY: '',
+    PARTICIPATION_MAX_CONSECUTIVE_REPLIES: '',
+    AMBIENT_JOIN_ENABLED: '',
+    AMBIENT_JOIN_PROBABILITY: '',
+    AMBIENT_JOIN_COOLDOWN_MS: '',
+    AMBIENT_JOIN_MAX_PER_DAY: '',
+  });
+
+  assert.equal(config.groupReplyQuoteMode, 'auto');
+  assert.equal(config.replySegmentTrimTrailingPeriod, true);
+  assert.equal(config.replyCadenceEnabled, true);
+  assert.equal(config.replyCadenceReadMsPerChar, 12);
+  assert.equal(config.replyCadenceReadMaxMs, 1200);
+  assert.equal(config.replyCadenceMinPreDelayMs, 350);
+  assert.equal(config.replyCadenceMaxPreDelayMs, 1800);
+  assert.equal(config.replyCadenceTypingMsPerChar, 70);
+  assert.equal(config.replyCadenceTypingMaxMs, 2600);
+  assert.equal(config.replyCadenceJitterRatio, 0.25);
+  assert.equal(config.typingIndicatorEnabled, true);
+  assert.equal(config.groupMessageAggregationEnabled, true);
+  assert.equal(config.groupMessageAggregationWindowMs, 900);
+  assert.equal(config.groupMessageAggregationMaxWindowMs, 3000);
+  assert.equal(config.participationSkipProbability, 0.12);
+  assert.equal(config.participationReactionProbability, 0.18);
+  assert.equal(config.participationMaxConsecutiveReplies, 2);
+  assert.equal(config.ambientJoinEnabled, true);
+  assert.equal(config.ambientJoinProbability, 0.02);
+  assert.equal(config.ambientJoinCooldownMs, 600000);
+  assert.equal(config.ambientJoinMaxPerDay, 6);
+});
+
+test('config rejects invalid group reply quote mode and clamps cadence probability', async () => {
+  const { config } = await loadConfigModule({
+    GROUP_REPLY_QUOTE_MODE: 'sometimes',
+    REPLY_CADENCE_JITTER_RATIO: '5',
+    PARTICIPATION_SKIP_PROBABILITY: '-1',
+  });
+
+  assert.equal(config.groupReplyQuoteMode, 'auto');
+  assert.equal(config.replyCadenceJitterRatio, 1);
+  assert.equal(config.participationSkipProbability, 0);
+});

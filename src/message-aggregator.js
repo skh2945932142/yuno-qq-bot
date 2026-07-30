@@ -25,6 +25,30 @@ function resolveMaxWindowMs(options = {}, windowMs) {
   return Math.max(windowMs, configured);
 }
 
+function resolveGroupWindowMs(options = {}) {
+  return normalizePositiveNumber(
+    options.groupWindowMs ?? options.groupMessageAggregationWindowMs,
+    config.groupMessageAggregationWindowMs || 900,
+    1
+  );
+}
+
+function resolveGroupMaxWindowMs(options = {}, windowMs) {
+  const configured = normalizePositiveNumber(
+    options.groupMaxWindowMs ?? options.groupMessageAggregationMaxWindowMs,
+    config.groupMessageAggregationMaxWindowMs || 3000,
+    windowMs
+  );
+  return Math.max(windowMs, configured);
+}
+
+function hasExplicitGroupTrigger(event = {}, text = '') {
+  if (event.mentionsBot) return true;
+  if (event.source?.subType === 'poke') return true;
+  if (parseCommand(text)) return true;
+  return /^\/\S+/.test(text) || /(由乃|yuno)/i.test(text);
+}
+
 export function shouldAggregatePrivateEvent(event = {}, runtimeConfig = config) {
   if (!runtimeConfig.privateMessageAggregationEnabled) return false;
   if (event.chatType !== 'private') return false;
@@ -34,6 +58,22 @@ export function shouldAggregatePrivateEvent(event = {}, runtimeConfig = config) 
   if (!text && !(event.attachments || []).length) return false;
   if (parseCommand(text)) return false;
   return true;
+}
+
+export function shouldAggregateGroupEvent(event = {}, runtimeConfig = config) {
+  if (!runtimeConfig.groupMessageAggregationEnabled) return false;
+  if (event.chatType !== 'group') return false;
+  if (event.source?.postType === 'notice') return false;
+
+  const text = String(event.rawText || event.text || '').trim();
+  if (!text && !(event.attachments || []).length) return false;
+  if (parseCommand(text)) return false;
+  return hasExplicitGroupTrigger(event, text);
+}
+
+export function shouldAggregateEvent(event = {}, runtimeConfig = config) {
+  if (event.chatType === 'private') return shouldAggregatePrivateEvent(event, runtimeConfig);
+  return shouldAggregateGroupEvent(event, runtimeConfig);
 }
 
 export function mergeAggregatedEvents(events = []) {
@@ -55,10 +95,14 @@ export function mergeAggregatedEvents(events = []) {
   };
 }
 
-export function createPrivateMessageAggregator(options = {}) {
+export function createMessageAggregator(options = {}) {
   const runtimeConfig = options.runtimeConfig || options;
   const windowMs = resolveWindowMs(runtimeConfig);
   const maxWindowMs = resolveMaxWindowMs(runtimeConfig, windowMs);
+  const groupWindowMs = resolveGroupWindowMs(runtimeConfig);
+  const groupMaxWindowMs = resolveGroupMaxWindowMs(runtimeConfig, groupWindowMs);
+  const windowFor = (event) => (event?.chatType === 'group' ? groupWindowMs : windowMs);
+  const maxWindowFor = (event) => (event?.chatType === 'group' ? groupMaxWindowMs : maxWindowMs);
   const sessions = new Map();
   let sequence = 0;
   let closed = false;
@@ -119,7 +163,7 @@ export function createPrivateMessageAggregator(options = {}) {
         }));
         if (batch.length > 1) {
           recordWorkflowMetric('yuno_private_messages_aggregated_total', batch.length, {
-            chat_type: 'private',
+            chat_type: mergedEvent?.chatType === 'group' ? 'group' : 'private',
           });
         }
       } catch (error) {
@@ -135,8 +179,8 @@ export function createPrivateMessageAggregator(options = {}) {
   function scheduleBatch(key, session, head) {
     if (session.timer) clearTimeout(session.timer);
     const now = Date.now();
-    const deadline = head.reservedAt + maxWindowMs;
-    const delayMs = Math.max(0, Math.min(windowMs, deadline - now));
+    const deadline = head.reservedAt + maxWindowFor(head.event);
+    const delayMs = Math.max(0, Math.min(windowFor(head.event), deadline - now));
     session.timer = setTimeout(() => {
       session.timer = null;
       pump(key, { forceBatch: true });
@@ -175,7 +219,7 @@ export function createPrivateMessageAggregator(options = {}) {
       batch.push(entry);
     }
     const barrier = session.entries[batch.length];
-    const hardDeadlineReached = Date.now() >= head.reservedAt + maxWindowMs;
+    const hardDeadlineReached = Date.now() >= head.reservedAt + maxWindowFor(head.event);
     const shouldFlush = forceBatch
       || closed
       || hardDeadlineReached
@@ -205,7 +249,7 @@ export function createPrivateMessageAggregator(options = {}) {
       id: ++sequence,
       key,
       event,
-      aggregate: shouldAggregatePrivateEvent(event, runtimeConfig),
+      aggregate: shouldAggregateEvent(event, runtimeConfig),
       reservedAt: Number(reserveOptions.now || Date.now()),
       submitted: false,
       accepted: false,
@@ -223,7 +267,7 @@ export function createPrivateMessageAggregator(options = {}) {
       const index = currentSession?.entries.indexOf(entry) ?? -1;
       if (index >= 0) currentSession.entries.splice(index, 1);
       pump(key);
-    }, maxWindowMs);
+    }, maxWindowFor(event));
     session.entries.push(entry);
     return entry;
   }
@@ -278,3 +322,5 @@ export function createPrivateMessageAggregator(options = {}) {
     },
   };
 }
+
+export const createPrivateMessageAggregator = createMessageAggregator;

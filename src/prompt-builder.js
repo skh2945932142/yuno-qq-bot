@@ -52,6 +52,7 @@ function buildPersonalityStrategySection(personalityStrategy, replyLengthProfile
     `- 关系阶段=${formatStrategyValue(personalityStrategy.relationshipStage)} 立场=${formatStrategyValue(personalityStrategy.stance)} 温度=${formatStrategyValue(personalityStrategy.warmth)} 占有感=${formatStrategyValue(personalityStrategy.possessiveness)} 幽默=${formatStrategyValue(personalityStrategy.humor)}`,
     `- 记忆引用=${formatStrategyValue(memoryUse.level, 'none')} 可用类型=${formatList(memoryUse.matchedTypes || memoryUse.allowedTypes, '无', promptProfile === 'fast' ? 3 : 5)}`,
     `- 追问方式=${formatStrategyValue(personalityStrategy.followupStyle, 'none')}`,
+    `- 本轮语气密度=${formatStrategyValue(personalityStrategy.microStyle, 'normal')}`,
   ];
 
   if (personalityStrategy.signatureMove?.key) {
@@ -133,7 +134,7 @@ function buildPersonaSection(specialUser, performanceProfile) {
   const lines = [
     '角色基线',
     '- 你是由乃。像长期混在 QQ 群里的毒舌损友一样接话：短、直接、有网感，也有清楚的喜恶。',
-    '- 风格顺序：先回应当前内容，再落一个有辨识度的吐槽或情绪，最后补必要答案；没有必要就直接收住。',
+    '- 结构不固定：接话、吐槽、答案的顺序每轮可以不一样，也允许只用一句短话收住。',
     '- 保留《未来日记》由乃的敏锐、偏爱和情绪反差，但用真实聊天表达，不演角色台词。',
     '- 默认使用中文，除非用户明确要求英文。',
     '- 日常默认可以毒舌；从新用户首轮起，也可以用“懒狗、菜狗、笨蛋、怂”等轻度损友称呼。',
@@ -350,7 +351,10 @@ function buildCurrentTurnSection(messageAnalysis, event, route, promptProfile, g
 
   if (event.chatType === 'group' && promptProfile === 'standard' && groupState) {
     lines.push(`- 群气氛=${groupState.mood || 'CALM'} 活跃度=${Math.round(groupState.activityLevel || 0)} 近期话题=${formatList(groupState.recentTopics)}`);
-    const groupStyleSummary = compactText(groupState.styleProfile?.promptSummary, 72, '');
+  }
+
+  if (event.chatType === 'group') {
+    const groupStyleSummary = compactText(groupState?.styleProfile?.promptSummary, 72, '');
     if (groupStyleSummary) {
       lines.push(`- 群风格=${groupStyleSummary}`);
     }
@@ -361,6 +365,20 @@ function buildCurrentTurnSection(messageAnalysis, event, route, promptProfile, g
   }
 
   return lines.join('\n');
+}
+
+function buildOpeningAvoidanceSection(conversationState) {
+  const openings = ((conversationState || {}).messages || [])
+    .filter((item) => item?.role === 'assistant')
+    .slice(-2)
+    .map((item) => String(item.content || '').trim().replace(/\s+/g, '').slice(0, 8))
+    .filter((item) => item.length >= 2);
+  if (openings.length === 0) return '';
+  return [
+    '开场避重',
+    `- 本轮不要复用这些开场：${[...new Set(openings)].join(' / ')}。`,
+    '- 换一个起手方式，不要连续用同一句式开头。',
+  ].join('\n');
 }
 
 function buildReplyPlanSection(replyPlan) {
@@ -410,12 +428,13 @@ function buildUpstreamDataContractSection() {
   ].join('\n');
 }
 
-function buildOutputRules(event, route, replyLengthProfile, replyPlan) {
+function buildOutputRules(event, route, replyLengthProfile, replyPlan, personalityStrategy = null) {
   const isPrivate = event.chatType === 'private';
+  const microStyle = String(personalityStrategy?.microStyle || '');
   const performanceProfile = replyLengthProfile?.performanceProfile || 'standard_chat';
   const lines = [
     '输出要求',
-    '- 第一句直接接当前内容；第二步才放一个吐槽、态度或情绪；需要答案时紧接着给答案。',
+    '- 结构每轮可变：可以先接话、先吐槽、先给答案，也允许只用一句短话收住，不要固定顺序。',
     '- 一条回复只保留一个主要攻击点，不围攻、不连续堆称呼，也不把猜测写成用户的隐藏动机。',
     '- 低落场景可以“损一句再关心”，但不要把回复写成咨询流程、情绪分类或选择题。',
     '- 技术、知识和办事请求保持同样的毒舌力度，同时给出能执行的结论、步骤或所需信息。',
@@ -434,6 +453,12 @@ function buildOutputRules(event, route, replyLengthProfile, replyPlan) {
     lines.push('- 普通私聊控制在1-2句、约15-55个汉字；需要安慰或解释时最多3句。');
   } else {
     lines.push('- 群聊最多补一层，不进入私聊式长文。');
+  }
+
+  if (microStyle === 'terse') {
+    lines.push('- 这轮走极简：一句甚至半句就够，不补充解释。');
+  } else if (microStyle === 'spicy') {
+    lines.push('- 这轮可以更冲一点，但仍然只保留一个攻击点。');
   }
 
   if (replyPlan?.type === 'topic_extend') {
@@ -488,10 +513,11 @@ export function buildReplyContext({
     buildPersonalityStrategySection(personalityStrategy, replyLengthProfile),
     buildReplyStyleExamplesSection(replyStyleExamples, replyLengthProfile),
     buildInterpretationSection(replyPlan),
+    buildOpeningAvoidanceSection(conversationState),
     buildCurrentTurnSection(messageAnalysis, event, route, promptProfile, groupState, recentEvents),
     buildVoiceReplySection(voiceReplyPolicy),
     buildUpstreamDataContractSection(),
-    buildOutputRules(event, route, replyLengthProfile, replyPlan),
+    buildOutputRules(event, route, replyLengthProfile, replyPlan, personalityStrategy),
   ];
 
   if (promptProfile !== 'fast') {

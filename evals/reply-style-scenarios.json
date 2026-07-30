@@ -8,7 +8,7 @@
       "analysis": { "intent": "chat", "sentiment": "neutral", "ruleSignals": ["private-chat"] },
       "emotionResult": { "emotion": "CALM" }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["toxic-banter", "first-turn"], "requiredReplyAny": ["懒狗", "菜狗", "笨蛋"], "maxReplyLength": 72 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["toxic-banter", "first-turn"], "requiredReplyAny": ["懒狗", "菜狗", "笨蛋"], "maxReplyLength": 96 }
   },
   {
     "id": "private-bored-toxic",
@@ -19,7 +19,7 @@
       "analysis": { "intent": "chat", "sentiment": "neutral", "ruleSignals": ["private-chat"] },
       "emotionResult": { "emotion": "CALM" }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["toxic-banter"], "requiredReplyAny": ["长蘑菇", "出息", "救你"], "maxReplyLength": 72 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["toxic-banter"], "requiredReplyAny": ["长蘑菇", "出息", "救你"], "maxReplyLength": 96 }
   },
   {
     "id": "private-code-help-toxic",
@@ -31,7 +31,7 @@
       "emotionResult": { "emotion": "CURIOUS" },
       "replyPlan": { "questionNeeded": true, "interpretation": { "needsEmpathy": false, "subIntent": "技术求助" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["technical", "toxic-banter"], "requiredReplyAny": ["日志", "报错", "代码"], "maxReplyLength": 110 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["technical", "toxic-banter"], "requiredReplyAny": ["日志", "报错", "代码"], "maxReplyLength": 140 }
   },
   {
     "id": "private-tired-roast-care",
@@ -43,7 +43,7 @@
       "emotionResult": { "emotion": "SAD" },
       "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": true, "subIntent": "情绪承接" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["roast-then-care"], "requiredReplyAny": ["躺", "歇", "休息", "别硬撑"], "maxReplyLength": 110 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["roast-then-care"], "requiredReplyAny": ["躺", "歇", "休息", "别硬撑"], "maxReplyLength": 140 }
   },
   {
     "id": "private-anxiety-roast-care",
@@ -55,7 +55,7 @@
       "emotionResult": { "emotion": "SAD" },
       "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": true, "subIntent": "情绪承接" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["roast-then-care"], "requiredReplyAny": ["最急", "扔给我", "加班"], "maxReplyLength": 110 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["roast-then-care"], "requiredReplyAny": ["最急", "扔给我", "加班"], "maxReplyLength": 140 }
   },
   {
     "id": "private-affection-direct",
@@ -67,7 +67,7 @@
       "emotionResult": { "emotion": "AFFECTIONATE" },
       "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": false, "subIntent": "亲近陪伴" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["direct-affection"], "requiredReplyAny": ["开心", "爽", "想你", "喜欢"], "maxReplyLength": 72 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["direct-affection"], "requiredReplyAny": ["开心", "爽", "想你", "喜欢"], "maxReplyLength": 96 }
   },
   {
     "id": "private-jealous-direct",
@@ -79,7 +79,7 @@
       "emotionResult": { "emotion": "JEALOUS" },
       "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": false, "subIntent": "亲近陪伴" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["jealousy"], "requiredReplyAny": ["不爽", "生气", "吃味", "回来"], "maxReplyLength": 72 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["jealousy"], "requiredReplyAny": ["不爽", "生气", "吃味", "回来"], "maxReplyLength": 96 }
   },
   {
     "id": "private-robot-tease",
@@ -90,7 +90,7 @@
       "analysis": { "intent": "chat", "sentiment": "neutral", "ruleSignals": ["private-chat"] },
       "emotionResult": { "emotion": "CALM" }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["no-ai-disclaimer"], "requiredReplyAny": ["呆", "机器人", "认识"], "maxReplyLength": 72 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["no-ai-disclaimer"], "requiredReplyAny": ["呆", "机器人", "认识"], "maxReplyLength": 96 }
   },
   {
     "id": "private-esm-knowledge-toxic",

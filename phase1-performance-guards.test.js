@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { processIncomingMessage } from './src/message-workflow.js';
 import { retrieveKnowledge } from './src/knowledge-base.js';
 import { cleanupGroupEventsRetention } from './src/state/group-state-runtime.js';
+import { VARIANT_POOLS } from './src/reply-variants.js';
 
 function createEvent(overrides = {}) {
   return {
@@ -71,7 +72,10 @@ test('processIncomingMessage uses short fallback when reply budget is exceeded',
     },
   });
 
-  assert.equal(reply, '先说眼前这句。你继续，我下一条补完整一点。');
+  assert.ok(
+    VARIANT_POOLS['budget-fallback-private'].some((entry) => entry.text === reply),
+    reply
+  );
   assert.equal(sentReplies.length, 1);
 });
 

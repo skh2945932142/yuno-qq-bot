@@ -1,6 +1,7 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { formatToolResultAsYuno } from './src/yuno-formatter.js';
+import { VARIANT_POOLS } from './src/reply-variants.js';
 
 test('formatter renders group reports without losing key fields', () => {
   const text = formatToolResultAsYuno({
@@ -42,6 +43,11 @@ test('formatter removes legacy robotic acknowledgement summaries', () => {
     summary: '这条偏好我记下了：语气=短。',
   }, { specialUser: null });
 
-  assert.equal(text, '之后会按这个偏好来：语气=短。');
+  assert.match(text, /：语气=短。$/);
+  const prefix = text.replace(/：语气=短。$/, '');
+  assert.ok(
+    VARIANT_POOLS['tool-ack-preference'].some((entry) => entry.text.replace(/[。！]$/, '') === prefix),
+    text
+  );
   assert.doesNotMatch(text, /记下|记住|收下|收到/);
 });

@@ -27,6 +27,9 @@ function createDeps(overrides = {}) {
     }),
     onReplyApproved: async ({ event, decision }) => ({ event, decision }),
     recordWorkflowMetric: () => {},
+    resolveParticipationDecision: () => ({ mode: 'reply', reason: 'explicit-trigger' }),
+    recordParticipationReply: () => 1,
+    reactToMessage: async () => true,
     logger: { info() {}, warn() {} },
     ...overrides,
   };
@@ -146,4 +149,82 @@ test('handleInboundEvent treats group increase as automation-only input', async 
   assert.equal(result.reason, 'automation-notice');
   assert.deepEqual(result.automationOutputs, ['welcome-output']);
   assert.equal(replyCalled, false);
+});
+test('participation skip suppresses the reply without touching delivery', async () => {
+  const calls = [];
+  const metrics = [];
+  const result = await handleInboundEvent(createEvent(), {
+    deps: createDeps({
+      resolveParticipationDecision: () => ({ mode: 'skip', reason: 'low-relevance-sampling' }),
+      recordParticipationReply: () => calls.push('record'),
+      reactToMessage: async () => calls.push('react'),
+      onReplyApproved: async () => calls.push('reply'),
+      recordWorkflowMetric: (name, _value, labels) => metrics.push({ name, labels }),
+    }),
+  });
+
+  assert.equal(result.suppressed, true);
+  assert.equal(result.reason, 'participation-skip');
+  assert.equal(result.replyResult, null);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(
+    metrics.find((item) => item.name === 'yuno_participation_decisions_total')?.labels,
+    { mode: 'skip', reason: 'low-relevance-sampling' }
+  );
+});
+
+test('participation reaction reacts instead of replying and survives adapter failures', async () => {
+  const calls = [];
+  const reacted = await handleInboundEvent(createEvent(), {
+    deps: createDeps({
+      resolveParticipationDecision: () => ({ mode: 'reaction', reason: 'low-information-inbound' }),
+      reactToMessage: async () => {
+        calls.push('react');
+        return true;
+      },
+      onReplyApproved: async () => calls.push('reply'),
+    }),
+  });
+
+  assert.equal(reacted.suppressed, true);
+  assert.equal(reacted.reason, 'participation-reaction');
+  assert.deepEqual(calls, ['react']);
+
+  const metrics = [];
+  const failed = await handleInboundEvent(createEvent(), {
+    deps: createDeps({
+      resolveParticipationDecision: () => ({ mode: 'reaction', reason: 'consecutive-reply-limit' }),
+      reactToMessage: async () => {
+        throw new Error('set_msg_emoji_like unsupported');
+      },
+      onReplyApproved: async () => calls.push('reply'),
+      recordWorkflowMetric: (name, _value, labels) => metrics.push({ name, labels }),
+    }),
+  });
+
+  assert.equal(failed.suppressed, true);
+  assert.equal(failed.reason, 'participation-reaction');
+  assert.deepEqual(calls, ['react']);
+  assert.deepEqual(
+    metrics.find((item) => item.name === 'yuno_reaction_replies_total')?.labels,
+    { result: 'skipped' }
+  );
+});
+
+test('approved replies register the participation streak before handing off', async () => {
+  const calls = [];
+  const result = await handleInboundEvent(createEvent(), {
+    deps: createDeps({
+      resolveParticipationDecision: () => ({ mode: 'reply', reason: 'default-reply' }),
+      recordParticipationReply: () => calls.push('record'),
+      onReplyApproved: async () => {
+        calls.push('reply');
+        return 'delivered';
+      },
+    }),
+  });
+
+  assert.equal(result.suppressed, false);
+  assert.equal(result.replyResult, 'delivered');
+  assert.deepEqual(calls, ['record', 'reply']);
 });

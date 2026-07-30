@@ -53,6 +53,11 @@ import {
   shouldSegmentReply,
   splitReplyIntoSegments,
 } from './reply-segmenter.js';
+import { resolveReplyCadence, sleep as cadenceSleep } from './reply-cadence.js';
+import {
+  buildBudgetFallbackVariant,
+  buildModelFallbackVariant,
+} from './reply-variants.js';
 import { withConversationExecution } from './conversation-executor.js';
 import { executeTrackedDelivery as executeDeliveryTask } from './delivery-ledger.js';
 
@@ -63,6 +68,8 @@ const ALLOWED_SOFT_EMOJIS = new Set([
   '\u{1F602}', '\u{1F923}', '\u{1F60A}', '\u{1F605}', '\u{1F914}',
   '\u{1F644}', '\u{1F62E}', '\u{1F97A}', '\u{1F624}', '\u{1F634}',
   '\u{1F44D}', '\u{1F44C}', '\u{1F389}', '\u{1F31F}', '\u{1F308}',
+  '\u{1F60F}', '\u{1F612}', '\u{1F643}', '\u{1F971}', '\u{1F636}',
+  '\u{1F61C}', '\u{1F92D}', '\u{1F615}', '\u{1F979}', '\u{1F440}',
 ]);
 const EMOJI_REGEX = /\p{Extended_Pictographic}/gu;
 const THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*?<\/\1>/gi;
@@ -240,61 +247,15 @@ async function runReplyWithBudget(task, timeoutMs) {
 }
 
 function buildModelFallbackReply(event, task, error) {
-  const route = task?.category || 'chat';
-  const reason = String(error?.code || '').toUpperCase();
-  const status = Number(error?.status || error?.response?.status || 0);
-  const isPrivate = event?.chatType === 'private';
-
-  if (route === 'knowledge_qa') {
-    return isPrivate
-      ? '我这边刚才查资料有点卡住了。你把问题再发我一次，我优先给你补全。'
-      : '我这边刚才查资料卡了一下，你再说一次，我马上补上。';
-  }
-
-  if (reason === 'MODEL_CIRCUIT_OPEN') {
-    return isPrivate
-      ? '我这边刚刚短暂拥堵了，但我还在。你再发一次，我优先接你这条。'
-      : '我这边刚刚短暂拥堵了，你再发一次，我立刻接上。';
-  }
-
-  if (reason === 'MODEL_TIMEOUT') {
-    return isPrivate
-      ? '我刚才卡了一下，还在听你。把刚刚那句再发我一次，我马上接。'
-      : '我这边刚卡了一下，你再说一次，我马上接。';
-  }
-
-  if (reason === 'MODEL_INVALID_REPLY') {
-    return isPrivate
-      ? '我在。刚才那句没接完整，你不用重发。'
-      : '刚才那句没接完整，你不用重复发。';
-  }
-
-  if (status === 429) {
-    return isPrivate
-      ? '刚刚消息一下挤住了。你不用重发，缓一下我就接着说。'
-      : '刚刚消息挤住了，不用重复发，我缓一下就接上。';
-  }
-
-  return isPrivate
-    ? '我这边刚才有点抖动，但我还在。你再发一次，我接着说。'
-    : '我这边刚才有点抖动，你再说一次，我马上接。';
+  return buildModelFallbackVariant({ event, route: task, error });
 }
 
 function buildReplyBudgetFallbackReply(event, task) {
-  const isPrivate = event?.chatType === 'private';
-  if (task?.category === 'knowledge_qa') {
-    return isPrivate
-      ? '我先给你一句短答：这题先说重点。你要的话我下一条补完整版本。'
-      : '这题我先短答一下：能接。要详细版你再戳我一句。';
-  }
-
-  return isPrivate
-    ? '先说眼前这句。你继续，我下一条补完整一点。'
-    : '先接一句：我在。你继续，我马上补后半句。';
+  return buildBudgetFallbackVariant({ event, route: task });
 }
 
-export function shapeChatReplyText(text, emotionResult) {
-  let output = normalizeReplyFormatting(enforceEmojiBudget(text, emotionResult));
+export function shapeChatReplyText(text, emotionResult, options = {}) {
+  let output = normalizeReplyFormatting(enforceEmojiBudget(text, emotionResult), options);
   output = normalizeEllipsis(output, config.chatEllipsisLimit);
 
   if (config.chatStyleRepeatGuard) {
@@ -307,7 +268,7 @@ export function shapeChatReplyText(text, emotionResult) {
     .trim();
 }
 
-export function normalizeReplyFormatting(text) {
+export function normalizeReplyFormatting(text, options = {}) {
   const normalized = String(text || '')
     .replace(/\r\n/g, '\n')
     .replace(/[ \t]+\n/g, '\n')
@@ -328,6 +289,11 @@ export function normalizeReplyFormatting(text) {
   }
 
   if (lines.some(isLikelyStructuredLine)) {
+    return lines.join('\n');
+  }
+
+  // Private chat keeps up to two bubbles so the segmenter can pace them naturally.
+  if (options.chatType === 'private' && lines.length === 2) {
     return lines.join('\n');
   }
 
@@ -888,7 +854,41 @@ export function createWorkflowDeps(deps = {}, options = {}) {
     toolRegistry: deps.toolRegistry || toolRegistry,
     enqueuePersistJob: deps.enqueuePersistJob || runtimeServices.queueManager?.enqueuePersist || null,
     executeDelivery: deliveryLedgerEnabled ? (deps.executeDelivery || runtimeDelivery) : null,
+    resolveReplyCadence: deps.resolveReplyCadence || resolveReplyCadence,
+    sleep: deps.sleep || cadenceSleep,
+    setTyping: deps.setTyping
+      || (async (target, active) => {
+        const adapter = getRuntimeServices().protocolAdapter;
+        if (typeof adapter?.setTyping !== 'function') return false;
+        return adapter.setTyping(target, active);
+      }),
   };
+}
+
+function resolveGroupReplyQuoteId({
+  event,
+  route = null,
+  recentEvents = [],
+  runtimeConfig = config,
+}) {
+  if (event?.chatType !== 'group' || !event.messageId) return '';
+  if (route?.category === 'poke') return '';
+
+  const legacyEnabled = runtimeConfig.groupReplyQuoteEnabled ?? config.groupReplyQuoteEnabled ?? true;
+  if (!legacyEnabled) return '';
+
+  const mode = String(runtimeConfig.groupReplyQuoteMode ?? config.groupReplyQuoteMode ?? 'auto').toLowerCase();
+  if (mode === 'never') return '';
+  if (mode === 'always') return event.messageId;
+
+  // auto: only quote when the thread already moved on past this message.
+  const others = (Array.isArray(recentEvents) ? recentEvents : [])
+    .filter((item) => String(item?.messageId || '') !== String(event.messageId));
+  const latest = others[0];
+  if (latest && String(latest.userId || '') !== String(event.userId || '')) {
+    return event.messageId;
+  }
+  return '';
 }
 
 async function executeTrackedDelivery(deps, event, kind, task, explicitKey = '') {
@@ -1575,15 +1575,16 @@ export async function processIncomingMessage(event, precomputed = null, options 
     if (task.type === 'tool') {
       try {
         const toolResult = await runToolTask(task, workflowContext, trace, deps);
+        const toolQuoteMessageId = resolveGroupReplyQuoteId({
+          event: normalizedEvent,
+          recentEvents: workflowContext.recentEvents,
+          runtimeConfig: options.runtimeConfig || config,
+        });
         const target = {
           platform: normalizedEvent.platform,
           chatType: normalizedEvent.chatType,
           chatId: normalizedEvent.chatId,
-          ...((options.runtimeConfig?.groupReplyQuoteEnabled ?? config.groupReplyQuoteEnabled)
-            && normalizedEvent.chatType === 'group'
-            && normalizedEvent.messageId
-            ? { quoteMessageId: normalizedEvent.messageId }
-            : {}),
+          ...(toolQuoteMessageId ? { quoteMessageId: toolQuoteMessageId } : {}),
         };
 
         let replyText = toolResult?.text || toolResult?.summary || '已经处理好了。';
@@ -1998,7 +1999,8 @@ export async function processIncomingMessage(event, precomputed = null, options 
     const originalVoiceText = normalizeVoiceTtsTextBase(replyDecision.voiceText || replyDecision.text || visibleReplyText);
     const originalVoiceExceededLimit = originalVoiceMaxChars > 0
       && originalVoiceText.length > originalVoiceMaxChars;
-    let shapedReplyText = shapeChatReplyText(replyDecision.text || visibleReplyText, replyPresentationStyle);
+    const replyShapeOptions = { chatType: normalizedEvent.chatType };
+    let shapedReplyText = shapeChatReplyText(replyDecision.text || visibleReplyText, replyPresentationStyle, replyShapeOptions);
     let shapedVoiceText = shapeChatReplyText(replyDecision.voiceText || shapedReplyText, replyPresentationStyle);
     let naturalness = deps.inspectReplyNaturalness(shapedReplyText, naturalnessOptions);
     let voiceNaturalness = deps.inspectReplyNaturalness(shapedVoiceText, naturalnessOptions);
@@ -2041,7 +2043,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
           replyStyleRewriteOutcome = rewriteResult.outcome;
           if (rewriteResult.decision) {
             replyDecision = rewriteResult.decision;
-            shapedReplyText = shapeChatReplyText(replyDecision.text, replyPresentationStyle);
+            shapedReplyText = shapeChatReplyText(replyDecision.text, replyPresentationStyle, replyShapeOptions);
             shapedVoiceText = shapeChatReplyText(replyDecision.voiceText || shapedReplyText, replyPresentationStyle);
             naturalness = deps.inspectReplyNaturalness(shapedReplyText, naturalnessOptions);
             voiceNaturalness = deps.inspectReplyNaturalness(shapedVoiceText, naturalnessOptions);
@@ -2112,16 +2114,17 @@ export async function processIncomingMessage(event, precomputed = null, options 
       rewriteOutcome: replyStyleRewriteOutcome,
       providerKind: replyProviderKind,
     });
+    const replyQuoteMessageId = resolveGroupReplyQuoteId({
+      event: normalizedEvent,
+      route: task,
+      recentEvents: workflowContext.recentEvents,
+      runtimeConfig: options.runtimeConfig || config,
+    });
     const replyTarget = {
       platform: normalizedEvent.platform,
       chatType: normalizedEvent.chatType,
       chatId: normalizedEvent.chatId,
-      ...((options.runtimeConfig?.groupReplyQuoteEnabled ?? config.groupReplyQuoteEnabled)
-        && normalizedEvent.chatType === 'group'
-        && normalizedEvent.messageId
-        && task.category !== 'poke'
-        ? { quoteMessageId: normalizedEvent.messageId }
-        : {}),
+      ...(replyQuoteMessageId ? { quoteMessageId: replyQuoteMessageId } : {}),
     };
     const memeCandidates = await loadMemeCandidatesForReply({
       event: normalizedEvent,
@@ -2170,6 +2173,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       },
     ];
 
+    let cadencePreDelayMs = 0;
     await withTraceSpan(trace, 'send-text', async () => {
       const segmentationConfig = options.runtimeConfig || config;
       const segments = shouldSegmentReply({
@@ -2178,8 +2182,22 @@ export async function processIncomingMessage(event, precomputed = null, options 
         text: replyText,
         runtimeConfig: segmentationConfig,
       })
-        ? splitReplyIntoSegments(replyText, { maxCount: segmentationConfig.replySegmentMaxCount })
+        ? splitReplyIntoSegments(replyText, {
+            maxCount: segmentationConfig.replySegmentMaxCount,
+            replySegmentTrimTrailingPeriod: segmentationConfig.replySegmentTrimTrailingPeriod,
+          })
         : [replyText];
+      const cadence = deps.resolveReplyCadence({
+        event: normalizedEvent,
+        route: task,
+        replyPlan,
+        emotionResult,
+        dailyMood,
+        segments,
+        remainingBudgetMs: getRemainingReplyBudgetMs(),
+        runtimeConfig: segmentationConfig,
+      }) || { preDelayMs: 0, segmentDelays: [], reason: 'unavailable' };
+      cadencePreDelayMs = Math.max(0, Number(cadence.preDelayMs || 0));
       const candidatePlan = memeDecision.shouldSend && memeDecision.asset
         ? {
             type: 'structured-meme',
@@ -2200,6 +2218,26 @@ export async function processIncomingMessage(event, precomputed = null, options 
         const prepared = await deliveryContext.preparePlan(candidatePlan);
         let plan = prepared?.plan || candidatePlan;
         const completedParts = Math.max(0, Number(prepared?.completedParts || 0));
+        const cadenceActive = completedParts === 0;
+        const typingEnabled = cadenceActive
+          && normalizedEvent.chatType === 'private'
+          && (segmentationConfig.typingIndicatorEnabled ?? config.typingIndicatorEnabled ?? true);
+        let typingOpened = false;
+        const closeTyping = async () => {
+          if (!typingOpened) return;
+          typingOpened = false;
+          await deps.setTyping(replyTarget, false).catch(() => false);
+        };
+        if (cadenceActive && cadencePreDelayMs > 0) {
+          if (typingEnabled) {
+            typingOpened = Boolean(await deps.setTyping(replyTarget, true).catch(() => false));
+          }
+          recordWorkflowMetric('yuno_reply_cadence_delay_ms', cadencePreDelayMs, {
+            chat_type: normalizedEvent.chatType,
+            phase: 'pre-delay',
+          }, 'histogram');
+          await deps.sleep(cadencePreDelayMs);
+        }
         const plannedReplyText = String(
           plan.text
           || (Array.isArray(plan.segments) ? plan.segments.join('') : '')
@@ -2219,6 +2257,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
 
         if (plan.type === 'structured-meme' && plan.asset) {
           if (completedParts >= 1) return { plan };
+          await closeTyping();
           let memeError = null;
           try {
             const imageOutput = await deps.buildMemeImageOutput(plan.asset);
@@ -2264,7 +2303,10 @@ export async function processIncomingMessage(event, precomputed = null, options 
             text: plannedReplyText,
             runtimeConfig: segmentationConfig,
           })
-            ? splitReplyIntoSegments(plannedReplyText, { maxCount: segmentationConfig.replySegmentMaxCount })
+            ? splitReplyIntoSegments(plannedReplyText, {
+                maxCount: segmentationConfig.replySegmentMaxCount,
+                replySegmentTrimTrailingPeriod: segmentationConfig.replySegmentTrimTrailingPeriod,
+              })
             : [plannedReplyText];
           const replacement = await deliveryContext.replacePlanBeforeDelivery({
             type: fallbackSegments.length > 1 ? 'segmented-text' : 'text',
@@ -2285,11 +2327,23 @@ export async function processIncomingMessage(event, precomputed = null, options 
         }
         for (let index = Math.min(completedParts, plannedSegments.length); index < plannedSegments.length; index += 1) {
           const segment = plannedSegments[index];
-          if (index > 0) {
-            await new Promise((resolve) => setTimeout(resolve, resolveSegmentDelayMs(segment, {
-              minDelayMs: segmentationConfig.replySegmentMinDelayMs,
-              maxDelayMs: segmentationConfig.replySegmentMaxDelayMs,
-            })));
+          if (index > 0 && cadenceActive) {
+            const segmentDelayMs = Number.isFinite(Number(cadence.segmentDelays?.[index]))
+              ? Math.max(0, Number(cadence.segmentDelays[index]))
+              : resolveSegmentDelayMs(segment, {
+                  minDelayMs: segmentationConfig.replySegmentMinDelayMs,
+                  maxDelayMs: segmentationConfig.replySegmentMaxDelayMs,
+                });
+            if (segmentDelayMs > 0) {
+              recordWorkflowMetric('yuno_reply_cadence_delay_ms', segmentDelayMs, {
+                chat_type: normalizedEvent.chatType,
+                phase: 'segment',
+              }, 'histogram');
+              await deps.sleep(segmentDelayMs);
+            }
+          }
+          if (index === 0) {
+            await closeTyping();
           }
           const segmentTarget = index === 0
             ? replyTarget
@@ -2298,6 +2352,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
           if (sent === false) throw new Error('segment-delivery-not-sent');
           await deliveryContext.markPartCompleted(index + 1);
         }
+        await closeTyping();
         return { plan };
       }, options.deliveryKey);
 
@@ -2478,6 +2533,9 @@ export async function processIncomingMessage(event, precomputed = null, options 
       signatureMove: personalityStrategy.signatureMove?.key || null,
       replyEdgeScore: Number(finalNaturalness.edgeScore || 0),
       replyStyleRewriteOutcome,
+      cadencePreDelayMs,
+      participationMode: 'reply',
+      microStyle: personalityStrategy.microStyle || null,
     });
     return replyText;
   } catch (error) {

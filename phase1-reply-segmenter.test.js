@@ -4,12 +4,17 @@ import {
   resolveSegmentDelayMs,
   shouldSegmentReply,
   splitReplyIntoSegments,
+  trimShortBubbleTrailingPeriod,
 } from './src/reply-segmenter.js';
 import {
+  createMessageAggregator,
   createPrivateMessageAggregator,
   mergeAggregatedEvents,
+  shouldAggregateEvent,
+  shouldAggregateGroupEvent,
   shouldAggregatePrivateEvent,
 } from './src/message-aggregator.js';
+import { normalizeReplyFormatting } from './src/message-workflow.js';
 
 test('splitReplyIntoSegments keeps short replies as a single message', () => {
   assert.deepEqual(splitReplyIntoSegments('嗯，在。'), ['嗯，在。']);
@@ -46,9 +51,20 @@ test('splitReplyIntoSegments handles English sentence boundaries and invalid opt
   assert.equal(resolveSegmentDelayMs('test', { minDelayMs: -10, maxDelayMs: -20 }) >= 0, true);
 
   const email = '请发到 test@example.com。收到后我会继续处理。然后再确认最终结果。';
-  assert.equal(splitReplyIntoSegments(email).join(''), email);
+  assert.equal(splitReplyIntoSegments(email, { trimTrailingPeriod: false }).join(''), email);
   const version = 'Node.js 22.1 已经可用了。升级前先检查依赖。升级后再跑完整测试。';
-  assert.equal(splitReplyIntoSegments(version).join(''), version);
+  assert.equal(splitReplyIntoSegments(version, { trimTrailingPeriod: false }).join(''), version);
+});
+
+test('splitReplyIntoSegments drops trailing periods on short bubbles only', () => {
+  const text = '请发到 test@example.com。收到后我会继续处理。然后再确认最终结果。';
+  const trimmed = splitReplyIntoSegments(text);
+  assert.deepEqual(trimmed.slice(1), ['收到后我会继续处理', '然后再确认最终结果']);
+  assert.equal(trimShortBubbleTrailingPeriod('好。'), '好');
+  assert.equal(trimShortBubbleTrailingPeriod('好。', { trimTrailingPeriod: false }), '好。');
+  const longBubble = '这句已经足够长了，所以句号必须保留在末尾不动。';
+  assert.equal(trimShortBubbleTrailingPeriod(longBubble), longBubble);
+  assert.equal(trimShortBubbleTrailingPeriod('。'), '。');
 });
 
 test('shouldSegmentReply only applies to private non-knowledge chat', () => {
@@ -259,4 +275,111 @@ test('aggregator keeps different sessions independent', async () => {
   ]);
 
   assert.deepEqual(new Set(seen), new Set(['m1', 'm2']));
+});
+test('shouldAggregateGroupEvent only aggregates explicitly triggered group messages', () => {
+  const runtimeConfig = { groupMessageAggregationEnabled: true };
+  const groupEvent = (overrides) => ({ chatType: 'group', source: { postType: 'message' }, ...overrides });
+
+  assert.equal(shouldAggregateGroupEvent(groupEvent({ rawText: '在吗', mentionsBot: true }), runtimeConfig), true);
+  assert.equal(shouldAggregateGroupEvent(groupEvent({ rawText: '由乃你看看这个' }), runtimeConfig), true);
+  assert.equal(shouldAggregateGroupEvent(groupEvent({
+    rawText: '',
+    attachments: [{ type: 'image' }],
+    source: { postType: 'message', subType: 'poke' },
+  }), runtimeConfig), true);
+  assert.equal(shouldAggregateGroupEvent(groupEvent({ rawText: '今天天气不错' }), runtimeConfig), false);
+  assert.equal(shouldAggregateGroupEvent(groupEvent({ rawText: '/help', mentionsBot: true }), runtimeConfig), false);
+  assert.equal(shouldAggregateGroupEvent(groupEvent({ rawText: '由乃', mentionsBot: true }), {
+    groupMessageAggregationEnabled: false,
+  }), false);
+});
+
+test('shouldAggregateEvent dispatches by chat type', () => {
+  const runtimeConfig = {
+    groupMessageAggregationEnabled: true,
+    privateMessageAggregationEnabled: true,
+  };
+
+  assert.equal(shouldAggregateEvent({
+    chatType: 'group', rawText: '由乃在吗', mentionsBot: true, source: { postType: 'message' },
+  }, runtimeConfig), true);
+  assert.equal(shouldAggregateEvent({
+    chatType: 'group', rawText: '大家早', source: { postType: 'message' },
+  }, runtimeConfig), false);
+  assert.equal(shouldAggregateEvent({
+    chatType: 'private', rawText: '你好', source: { postType: 'message' },
+  }, runtimeConfig), true);
+});
+
+test('aggregator merges rapid explicitly triggered group messages with the group window', async () => {
+  const aggregator = createMessageAggregator({
+    groupMessageAggregationEnabled: true,
+    privateMessageAggregationEnabled: true,
+    groupWindowMs: 30,
+    groupMaxWindowMs: 100,
+  });
+  const seen = [];
+  const base = {
+    platform: 'qq',
+    chatType: 'group',
+    chatId: 'g1',
+    userId: 'u1',
+    mentionsBot: true,
+    source: { postType: 'message' },
+  };
+  const first = aggregator.reserve({ ...base, rawText: '由乃', messageId: 'm1' });
+  const second = aggregator.reserve({ ...base, rawText: '看下这个日志', messageId: 'm2' });
+  const process = async (event) => seen.push(event);
+
+  const results = await Promise.all([
+    aggregator.submit(first, { process }),
+    aggregator.submit(second, { process }),
+  ]);
+
+  assert.deepEqual(results.map((item) => item.type), ['superseded', 'processed']);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].rawText, '由乃\n看下这个日志');
+  assert.equal(seen[0].aggregatedCount, 2);
+});
+
+test('aggregator keeps unaddressed group chatter as independent processing calls', async () => {
+  const aggregator = createMessageAggregator({
+    groupMessageAggregationEnabled: true,
+    groupWindowMs: 30,
+    groupMaxWindowMs: 100,
+  });
+  const seen = [];
+  const base = {
+    platform: 'qq',
+    chatType: 'group',
+    chatId: 'g2',
+    userId: 'u2',
+    source: { postType: 'message' },
+  };
+  const first = aggregator.reserve({ ...base, rawText: '今天好热', messageId: 'm1' });
+  const second = aggregator.reserve({ ...base, rawText: '是啊', messageId: 'm2' });
+  const process = async (event) => seen.push(event.rawText);
+
+  await Promise.all([
+    aggregator.submit(first, { process }),
+    aggregator.submit(second, { process }),
+  ]);
+
+  assert.deepEqual(seen, ['今天好热', '是啊']);
+});
+
+test('normalizeReplyFormatting keeps two private bubbles but flattens groups and longer lists', () => {
+  assert.equal(
+    normalizeReplyFormatting('第一句在这里\n第二句在这里', { chatType: 'private' }),
+    '第一句在这里\n第二句在这里'
+  );
+  assert.equal(normalizeReplyFormatting('一\n二\n三', { chatType: 'private' }), '一二三');
+  assert.equal(
+    normalizeReplyFormatting('第一句在这里\n第二句在这里', { chatType: 'group' }),
+    '第一句在这里第二句在这里'
+  );
+  assert.equal(
+    normalizeReplyFormatting('1. 先这样\n2. 再那样', { chatType: 'private' }),
+    '1. 先这样\n2. 再那样'
+  );
 });

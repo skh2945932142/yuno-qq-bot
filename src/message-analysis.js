@@ -3,6 +3,7 @@ import { classifyReplyTrigger } from './minimax.js';
 import { normalizeLegacyMessageEvent } from './chat/session.js';
 import { parseCommand } from './command-parser.js';
 import { loadTriggerPolicy } from './trigger-policy.js';
+import { resolveAmbientJoinDecision } from './participation-policy.js';
 import { getSpecialUserByUserId } from './special-users.js';
 import {
   clamp,
@@ -357,6 +358,30 @@ export function analyzeTriggerFast(event, options = {}) {
     && !rule.poke
     && !rule.specialKeyword
   ) {
+    const ambient = resolveAmbientJoinDecision({
+      event: rule.event,
+      groupState: options.groupState || null,
+      runtimeConfig: options.runtimeConfig || config,
+      random: options.ambientRandom,
+    });
+    if (ambient.allowed) {
+      return buildHeuristicResult({
+        shouldRespond: true,
+        confidence: clamp(Math.max(rule.score, 0.4), 0, 1),
+        intent,
+        sentiment,
+        relevance: 0.45,
+        reason: 'ambient-join',
+        ruleSignals: [...rule.signals, 'ambient-join'],
+        replyStyle: 'calm',
+        topics: [],
+        decisionExplanation: makeDecisionExplanation(rule, {
+          finalDecision: 'allow',
+          policy: 'ambient-join',
+        }),
+      });
+    }
+
     return buildHeuristicResult({
       shouldRespond: false,
       confidence: clamp(rule.score, 0, 1),
@@ -566,6 +591,30 @@ export async function analyzeTrigger(event, context = {}, options = {}) {
     && !rule.poke
     && !rule.specialKeyword
   ) {
+    const ambient = resolveAmbientJoinDecision({
+      event: rule.event,
+      groupState: context.groupState || null,
+      runtimeConfig: options.runtimeConfig || config,
+      random: options.ambientRandom,
+    });
+    if (ambient.allowed) {
+      return buildHeuristicResult({
+        shouldRespond: true,
+        confidence: clamp(Math.max(rule.score, 0.4), 0, 1),
+        intent,
+        sentiment,
+        relevance: 0.45,
+        reason: 'ambient-join',
+        ruleSignals: [...rule.signals, 'ambient-join'],
+        replyStyle: 'calm',
+        topics: context.topics || [],
+        decisionExplanation: makeDecisionExplanation(rule, {
+          finalDecision: 'allow',
+          policy: 'ambient-join',
+        }),
+      });
+    }
+
     return buildHeuristicResult({
       shouldRespond: false,
       confidence: clamp(rule.score, 0, 1),

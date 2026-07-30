@@ -1,4 +1,5 @@
 import { normalizeWhitespace } from './utils.js';
+import { buildDeescalatedVariant } from './reply-variants.js';
 
 const AI_DISCLAIMER_REGEX = /(作为(?:一个)?\s*(?:AI|人工智能|语言模型)|我是(?:一个)?\s*(?:AI|人工智能|语言模型)|身为(?:一个)?\s*(?:AI|人工智能))/i;
 const AI_DISCLAIMER_SENTENCE_REGEX = /(?:作为(?:一个)?\s*(?:AI|人工智能|语言模型)|我是(?:一个)?\s*(?:AI|人工智能|语言模型)|身为(?:一个)?\s*(?:AI|人工智能))[^。！？!?]*(?:[。！？!?]|$)/gi;
@@ -17,6 +18,10 @@ const ROBOTIC_ACKNOWLEDGEMENT_REGEX = /(?:我(?:(?:已经|会|先|都|也|替你
 const EMOJI_DETECT_REGEX = /\p{Extended_Pictographic}/u;
 const EMOJI_REPLACE_REGEX = /\p{Extended_Pictographic}/gu;
 const KAOMOJI_REGEX = /(?:\((?=[^)\r\n]{2,16}\))(?=[^)\r\n]*[｡・ωへ｀´▽ﾉ￣^><≧≦つっヾ；;])[^)\r\n]+\)|[=;:][\-^']?[)(DP]|[｡・ωへ｀´▽ﾉ￣]{3,})/gu;
+
+function resolvePrivateLengthLimit(options = {}) {
+  return options.messageAnalysis?.intent === 'help' ? 140 : 96;
+}
 
 function isGroupChat(options = {}) {
   return options.event?.chatType === 'group';
@@ -133,7 +138,7 @@ export function inspectReplyNaturalness(text, options = {}) {
   const previousEdgeScore = Number(recentAssistantMessages(options, 2).at(-1)?.edgeScore || 0);
   const repeatedEmoji = hasEmojiOrKaomoji(value)
     && recentAssistantMessages(options, 2).some((item) => hasEmojiOrKaomoji(item.content));
-  const privateLengthLimit = options.messageAnalysis?.intent === 'help' ? 110 : 72;
+  const privateLengthLimit = resolvePrivateLengthLimit(options);
   const privateTooLong = options.event?.chatType === 'private'
     && !isKnowledgeRoute(options)
     && normalizeWhitespace(value).length > privateLengthLimit;
@@ -274,8 +279,27 @@ function removeRoboticAcknowledgementClauses(text) {
 }
 
 
+function inboundLooksLikeQuestion(options = {}) {
+  const inbound = String(
+    options.event?.rawText
+    ?? options.event?.text
+    ?? ''
+  );
+  if (/[？?]/.test(inbound)) return true;
+  return /(怎么|如何|为什么|为啥|能不能|会不会|是不是|多少|哪个|什么时候)/.test(inbound);
+}
+
+function isFollowupPlan(options = {}) {
+  const type = String(options.replyPlan?.type || '').toLowerCase();
+  return type.includes('followup') || type.includes('follow_up');
+}
+
 function limitQuestions(text, options = {}) {
-  const allowed = options.replyPlan?.questionNeeded ? 1 : 0;
+  const allowed = options.replyPlan?.questionNeeded
+    || inboundLooksLikeQuestion(options)
+    || isFollowupPlan(options)
+    ? 1
+    : 0;
   const sentences = String(text || '').match(/[^。！？!?]+[。！？!?]?/g) || [];
   const questionIndexes = sentences
     .map((sentence, index) => /[？?]/.test(sentence) ? index : -1)
@@ -291,27 +315,30 @@ function limitQuestions(text, options = {}) {
 
 function shortenPrivateReply(text, options = {}) {
   if (options.event?.chatType !== 'private' || isKnowledgeRoute(options)) return text;
-  const limit = options.messageAnalysis?.intent === 'help' ? 110 : 72;
+  const limit = resolvePrivateLengthLimit(options);
   const value = String(text || '').trim();
   if (value.length <= limit) return value;
 
   const sentences = value.match(/[^。！？!?]+[。！？!?]?/g) || [value];
   let output = '';
-  for (const sentence of sentences.slice(0, 2)) {
-    if ((output + sentence).length > limit) break;
+  for (const sentence of sentences) {
+    if (output && (output + sentence).length > limit) break;
     output += sentence;
+    if (output.length >= limit) break;
   }
-  if (output.length >= 4) return output.trim();
-  return `${value.slice(0, Math.max(1, limit - 1)).replace(/[，,；;：:]$/, '')}。`;
+  const trimmed = output.trim();
+  if (trimmed.length >= 4) return trimmed;
+  return (sentences[0] || value).trim();
 }
 
 export function buildDeescalatedReplyFallback(options = {}) {
   const intent = String(options.messageAnalysis?.intent || options.analysis?.intent || '').toLowerCase();
   const sentiment = String(options.messageAnalysis?.sentiment || options.analysis?.sentiment || '').toLowerCase();
-  if (intent === 'help' || sentiment === 'negative') return '先别硬撑。今天可以慢一点。';
-  if (intent === 'challenge') return '我不同意。先把重点说清楚。';
-  if (sentiment === 'positive') return '嗯，听你这么说，我有点高兴。只是没打算表现得太明显。';
-  return '嗯，你继续说。我想听后面。';
+  return buildDeescalatedVariant({
+    event: options.event || {},
+    intent,
+    sentiment,
+  });
 }
 
 export function deescalateReplyNaturalness(text, options = {}) {

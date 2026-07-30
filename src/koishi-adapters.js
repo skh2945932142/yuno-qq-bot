@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { config } from './config.js';
 import { logger } from './logger.js';
+import { recordWorkflowMetric } from './metrics.js';
 import {
   encodeTencentSilk,
   resolveFfmpegPath,
@@ -135,8 +136,51 @@ export function createKoishiDeliveryAdapter(context, options = {}) {
   };
 }
 
+const disabledOptionalActions = new Set();
+
+function markOptionalActionUnsupported(action, error, loggerImpl) {
+  if (disabledOptionalActions.has(action)) return;
+  disabledOptionalActions.add(action);
+  loggerImpl.warn('delivery', 'Optional OneBot action is unavailable; disabling it', {
+    action,
+    message: error?.message || 'unknown error',
+  });
+}
+
+export function isOptionalActionDisabled(action) {
+  return disabledOptionalActions.has(action);
+}
+
+export function resetOptionalActionCapabilities() {
+  disabledOptionalActions.clear();
+}
+
 export function createKoishiProtocolAdapter(context, options = {}) {
-  return {
+  const loggerImpl = options.logger || logger;
+
+  async function callOptionalAction(action, payload, metricName) {
+    if (disabledOptionalActions.has(action)) {
+      if (metricName) {
+        recordWorkflowMetric(metricName, 1, { result: 'unsupported' });
+      }
+      return false;
+    }
+    try {
+      await adapter.callAction(action, payload);
+      if (metricName) {
+        recordWorkflowMetric(metricName, 1, { result: 'sent' });
+      }
+      return true;
+    } catch (error) {
+      markOptionalActionUnsupported(action, error, loggerImpl);
+      if (metricName) {
+        recordWorkflowMetric(metricName, 1, { result: 'failed' });
+      }
+      return false;
+    }
+  }
+
+  const adapter = {
     async callAction(action, payload = {}) {
       const bot = resolveBot(context, options);
       const request = bot.internal?._request;
@@ -164,7 +208,25 @@ export function createKoishiProtocolAdapter(context, options = {}) {
         throw wrapped;
       }
     },
+    async setTyping(target = {}, active = true) {
+      const chatId = String(target.chatId || '').trim();
+      if (!chatId || target.chatType !== 'private') return false;
+      return callOptionalAction('set_input_status', {
+        user_id: Number(chatId) || chatId,
+        event_type: active ? 1 : 0,
+      }, 'yuno_typing_indicator_total');
+    },
+    async reactToMessage(target = {}, messageId = '', emojiId = '76') {
+      const normalizedMessageId = String(messageId || '').trim();
+      if (!normalizedMessageId) return false;
+      return callOptionalAction('set_msg_emoji_like', {
+        message_id: Number(normalizedMessageId) || normalizedMessageId,
+        emoji_id: String(emojiId || '76'),
+      }, 'yuno_reaction_replies_total');
+    },
   };
+
+  return adapter;
 }
 
 export {

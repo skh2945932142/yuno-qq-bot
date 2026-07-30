@@ -68,3 +68,17 @@ test('planIncomingTask uses group/private defaults when no special route matches
   assert.equal(privateTask.category, 'private_chat');
   assert.equal(groupTask.category, 'group_chat');
 });
+test('planIncomingTask routes ambient join into group chat without follow-up', () => {
+  const task = planIncomingTask({
+    event: createEvent({ chatType: 'group', chatId: '20001', rawText: '这个方案我觉得还行' }),
+    text: '这个方案我觉得还行',
+    analysis: { shouldRespond: true, reason: 'ambient-join', relevance: 0.45 },
+    conversationState: { messages: [{ role: 'user', content: '之前聊过' }, { role: 'assistant', content: '嗯' }] },
+  });
+
+  assert.equal(task.type, 'chat');
+  assert.equal(task.category, 'group_chat');
+  assert.equal(task.requiresRetrieval, false);
+  assert.equal(task.allowFollowUp, false);
+  assert.equal(task.reason, 'ambient-join');
+});

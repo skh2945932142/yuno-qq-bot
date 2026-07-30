@@ -79,6 +79,17 @@ export function planIncomingTask({ event, text, analysis, conversationState }) {
     };
   }
 
+  if (analysis.reason === 'ambient-join') {
+    return {
+      type: 'chat',
+      category: 'group_chat',
+      requiresModel: true,
+      requiresRetrieval: false,
+      allowFollowUp: false,
+      reason: analysis.reason,
+    };
+  }
+
   const recentMessages = conversationState?.messages || [];
   const hasRecentContext = recentMessages.length >= 2 || Boolean(conversationState?.rollingSummary);
   const classifierCategory = analysis.decisionExplanation?.classifier?.category || '';

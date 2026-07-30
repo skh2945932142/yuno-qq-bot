@@ -4,6 +4,8 @@ import { isNonTargetPokeEvent } from './message-analysis.js';
 import { recordInboundGroupObservation } from './group-ops.js';
 import { evaluateGroupAutomation } from './group-automation.js';
 import { shouldRespondToEvent } from './message-workflow.js';
+import { recordParticipationReply, resolveParticipationDecision } from './participation-policy.js';
+import { getRuntimeServices } from './runtime-services.js';
 
 const groupObservationTails = new Map();
 
@@ -28,6 +30,17 @@ function createInboundDeps(deps = {}) {
     shouldRespondToEvent: deps.shouldRespondToEvent || shouldRespondToEvent,
     onReplyApproved: deps.onReplyApproved || (async ({ decision }) => decision),
     recordWorkflowMetric: deps.recordWorkflowMetric || recordWorkflowMetric,
+    resolveParticipationDecision: deps.resolveParticipationDecision || resolveParticipationDecision,
+    recordParticipationReply: deps.recordParticipationReply || recordParticipationReply,
+    reactToMessage: deps.reactToMessage || (async (event) => {
+      const adapter = getRuntimeServices().protocolAdapter;
+      if (typeof adapter?.reactToMessage !== 'function') return false;
+      return adapter.reactToMessage({
+        platform: event.platform,
+        chatType: event.chatType,
+        chatId: event.chatId,
+      }, event.messageId);
+    }),
     logger: deps.logger || logger,
     observationTimeoutMs: Number(deps.observationTimeoutMs || 4000),
   };
@@ -188,6 +201,50 @@ export async function handleInboundEvent(event, options = {}) {
     });
   }
 
+  const participation = deps.resolveParticipationDecision({
+    event,
+    analysis: decision.analysis,
+    runtimeConfig: options.decisionOptions?.runtimeConfig,
+  }) || { mode: 'reply', reason: 'default-reply' };
+  deps.recordWorkflowMetric('yuno_participation_decisions_total', 1, {
+    mode: participation.mode,
+    reason: participation.reason,
+  });
+
+  if (participation.mode === 'reaction') {
+    let reacted = false;
+    try {
+      reacted = Boolean(await deps.reactToMessage(event));
+    } catch (error) {
+      deps.logger.warn('delivery', 'Reaction reply failed; suppressing silently', {
+        chatId: event.chatId,
+        messageId: event.messageId,
+        message: error.message,
+      });
+    }
+    deps.recordWorkflowMetric('yuno_reaction_replies_total', 1, {
+      result: reacted ? 'sent' : 'skipped',
+    });
+    return buildSuppressedResult(event, 'participation-reaction', {
+      analysis: decision.analysis,
+      automationDecision,
+      automationOutputs,
+    });
+  }
+
+  if (participation.mode === 'skip') {
+    deps.recordWorkflowMetric('yuno_suppressed_messages_total', 1, {
+      chat_type: event.chatType,
+      reason: 'participation-skip',
+    });
+    return buildSuppressedResult(event, 'participation-skip', {
+      analysis: decision.analysis,
+      automationDecision,
+      automationOutputs,
+    });
+  }
+
+  deps.recordParticipationReply(event);
   const replyResult = await deps.onReplyApproved({
     event,
     decision,

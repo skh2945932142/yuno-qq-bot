@@ -3,6 +3,7 @@ import { clamp } from './utils.js';
 
 const SEGMENT_MIN_TEXT_LENGTH = 36;
 const SEGMENT_MIN_PIECE_LENGTH = 6;
+const SHORT_BUBBLE_MAX_LENGTH = 12;
 
 function normalizePositiveInteger(value, fallback, minimum = 1) {
   const parsed = Number(value);
@@ -37,6 +38,19 @@ function splitBySentence(text) {
   const remainder = value.slice(start).trim();
   if (remainder) pieces.push(remainder);
   return pieces;
+}
+
+export function trimShortBubbleTrailingPeriod(segment, options = {}) {
+  const enabled = options.trimTrailingPeriod
+    ?? options.replySegmentTrimTrailingPeriod
+    ?? config.replySegmentTrimTrailingPeriod
+    ?? true;
+  const value = String(segment || '').trim();
+  if (!enabled) return value;
+  if (value.length > SHORT_BUBBLE_MAX_LENGTH + 1) return value;
+  if (!value.endsWith('。')) return value;
+  const trimmed = value.slice(0, -1).trim();
+  return trimmed || value;
 }
 
 export function splitReplyIntoSegments(text, options = {}) {
@@ -81,7 +95,7 @@ export function splitReplyIntoSegments(text, options = {}) {
     merged[merged.length - 1] = joinSentencePieces(merged[merged.length - 1], tail);
   }
 
-  return merged;
+  return merged.map((segment) => trimShortBubbleTrailingPeriod(segment, options));
 }
 
 export function resolveSegmentDelayMs(segmentText, options = {}) {

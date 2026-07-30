@@ -1,6 +1,14 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { processIncomingMessage, shapeChatReplyText, stripHiddenReasoning } from './src/message-workflow.js';
+import { VARIANT_POOLS } from './src/reply-variants.js';
+
+function assertFromPool(poolName, value) {
+  assert.ok(
+    VARIANT_POOLS[poolName].some((entry) => entry.text === value),
+    `expected ${JSON.stringify(value)} to come from pool ${poolName}`
+  );
+}
 
 function createEvent(overrides = {}) {
   return {
@@ -189,7 +197,7 @@ test('processIncomingMessage uses a Chinese non-retry fallback when only hidden 
     }
   );
 
-  assert.match(reply, /没接完整/);
+  assertFromPool('model-fallback-private', reply);
   assert.doesNotMatch(reply, /再说一遍|Here is|JSON/i);
   assert.equal(sentReplies[0], reply);
 });
@@ -312,7 +320,7 @@ test('processIncomingMessage degrades gracefully when model times out', async ()
     ),
   });
 
-  assert.match(reply, /刚卡了一下|有点抖动/);
+  assertFromPool('model-fallback-group', reply);
   assert.equal(sentReplies.length, 1);
 });
 
@@ -349,7 +357,7 @@ test('distinct fallback provider is attempted for the same model and cannot supp
   });
 
   assert.deepEqual(modelCalls, ['reply', 'reply-fallback']);
-  assert.match(reply, /刚才卡了一下/);
+  assertFromPool('model-fallback-private', reply);
   assert.equal(sentReplies.length, 1);
   assert.equal(sentReplies[0], reply);
 });
@@ -452,7 +460,7 @@ test('JSON boilerplate from both reply models is never sent to the user', async 
     ),
   });
 
-  assert.equal(reply, '我在。刚才那句没接完整，你不用重发。');
+  assertFromPool('model-fallback-private', reply);
   assert.deepEqual(sentReplies, [reply]);
   assert.doesNotMatch(reply, /Here is|JSON/i);
 });
@@ -503,7 +511,7 @@ test('style rewrite failure never sends the original accusatory reply', async ()
     ),
   });
 
-  assert.equal(reply, '嗯，听你这么说，我有点高兴。只是没打算表现得太明显。');
+  assertFromPool('deescalated-positive', reply);
   assert.deepEqual(sentReplies, [reply]);
   assert.doesNotMatch(reply, /你每次|责任|扔给我/);
 });
@@ -631,4 +639,27 @@ test('robotic acknowledgement is rewritten once before sending', async () => {
   assert.deepEqual(sentReplies, [reply]);
   assert.deepEqual(modelCalls, ['reply', 'reply-style-rewrite']);
   assert.doesNotMatch(reply, /记下|记住|收下|听到了|知道了|收到/);
+});
+test('the soft emoji whitelist matches the emoji actually used by the style corpus', () => {
+  const kept = shapeChatReplyText('\u8fd9\u4e2a\u65b9\u6848\u6211\u770b\u884c \u{1F60F}', { emojiBudget: 1, emojiStyle: 'soft' }, {
+    event: { chatType: 'private' },
+  });
+  assert.match(kept, /\u{1F60F}/u);
+
+  for (const emoji of ['\u{1F612}', '\u{1F643}', '\u{1F440}', '\u{1F61C}']) {
+    const text = shapeChatReplyText(`\u77e5\u9053\u4e86 ${emoji}`, { emojiBudget: 1, emojiStyle: 'soft' }, {
+      event: { chatType: 'private' },
+    });
+    assert.ok(text.includes(emoji), `${emoji} should stay in soft style`);
+  }
+
+  const stripped = shapeChatReplyText('\u4e0d\u884c \u{1F480}', { emojiBudget: 1, emojiStyle: 'soft' }, {
+    event: { chatType: 'private' },
+  });
+  assert.doesNotMatch(stripped, /\u{1F480}/u);
+
+  const noBudget = shapeChatReplyText('\u884c\u5427 \u{1F60F}', { emojiBudget: 0, emojiStyle: 'none' }, {
+    event: { chatType: 'private' },
+  });
+  assert.doesNotMatch(noBudget, /\u{1F60F}/u);
 });
