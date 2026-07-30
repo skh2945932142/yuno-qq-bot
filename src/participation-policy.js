@@ -24,8 +24,24 @@ const EXPLICIT_SIGNALS = new Set([
 const PUNCTUATION_ONLY_REGEX = /^[\s\p{P}\p{S}]+$/u;
 const EMOJI_ONLY_REGEX = /^(?:[\s\p{Extended_Pictographic}\uFE0F\u200D]|\p{P})+$/u;
 
+const STREAK_MAP_LIMIT = 2000;
+const AMBIENT_MAP_LIMIT = 500;
+
 const replyStreaks = new Map();
 const ambientState = new Map();
+
+// Both maps are process-local and unbounded by nature, so drop the oldest
+// entries once they grow past a safe ceiling.
+function pruneMap(map, limit) {
+  if (map.size <= limit) return;
+  const overflow = map.size - limit;
+  let removed = 0;
+  for (const key of map.keys()) {
+    map.delete(key);
+    removed += 1;
+    if (removed >= overflow) break;
+  }
+}
 
 function readNumberOption(value, fallback, minimum = 0) {
   const parsed = Number(value);
@@ -39,7 +55,7 @@ function resolveSettings(runtimeConfig = config) {
     skipProbability: readNumberOption(source.participationSkipProbability, 0.12),
     reactionProbability: readNumberOption(source.participationReactionProbability, 0.18),
     maxConsecutiveReplies: Math.max(1, Math.round(readNumberOption(source.participationMaxConsecutiveReplies, 2, 1))),
-    ambientEnabled: source.ambientJoinEnabled ?? config.ambientJoinEnabled ?? true,
+    ambientEnabled: source.ambientJoinEnabled ?? config.ambientJoinEnabled ?? false,
     ambientProbability: readNumberOption(source.ambientJoinProbability, 0.02),
     ambientCooldownMs: readNumberOption(source.ambientJoinCooldownMs, 600000),
     ambientMaxPerDay: Math.max(0, Math.round(readNumberOption(source.ambientJoinMaxPerDay, 6))),
@@ -81,12 +97,12 @@ function streakKey(event = {}) {
 export function recordParticipationReply(event = {}, now = Date.now()) {
   const key = streakKey(event);
   const current = replyStreaks.get(key);
-  if (!current || now - current.lastAt > CONSECUTIVE_REPLY_WINDOW_MS) {
-    replyStreaks.set(key, { count: 1, lastAt: now });
-    return 1;
-  }
-  const next = { count: current.count + 1, lastAt: now };
+  replyStreaks.delete(key);
+  const next = !current || now - current.lastAt > CONSECUTIVE_REPLY_WINDOW_MS
+    ? { count: 1, lastAt: now }
+    : { count: current.count + 1, lastAt: now };
   replyStreaks.set(key, next);
+  pruneMap(replyStreaks, STREAK_MAP_LIMIT);
   return next.count;
 }
 
@@ -193,7 +209,9 @@ function evaluateAmbientJoinDecision({
     return denyAmbient('ambient-not-sampled');
   }
 
+  ambientState.delete(key);
   ambientState.set(key, { lastAt: now, dayKey, count: dailyCount + 1 });
+  pruneMap(ambientState, AMBIENT_MAP_LIMIT);
   return { allowed: true, reason: 'ambient-join' };
 }
 

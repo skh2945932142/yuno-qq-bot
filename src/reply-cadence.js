@@ -53,8 +53,11 @@ function resolveBaselineMs(event, route) {
   return 700;
 }
 
+const INBOUND_LENGTH_SCAN_LIMIT = 2000;
+
 function inboundLength(event) {
-  const raw = String(event?.rawText ?? event?.text ?? '');
+  // Reading time saturates well before the cap, so avoid scanning huge payloads.
+  const raw = String(event?.rawText ?? event?.text ?? '').slice(0, INBOUND_LENGTH_SCAN_LIMIT);
   return stripCqCodes(raw).length;
 }
 

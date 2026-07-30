@@ -158,28 +158,6 @@ export function resetOptionalActionCapabilities() {
 export function createKoishiProtocolAdapter(context, options = {}) {
   const loggerImpl = options.logger || logger;
 
-  async function callOptionalAction(action, payload, metricName) {
-    if (disabledOptionalActions.has(action)) {
-      if (metricName) {
-        recordWorkflowMetric(metricName, 1, { result: 'unsupported' });
-      }
-      return false;
-    }
-    try {
-      await adapter.callAction(action, payload);
-      if (metricName) {
-        recordWorkflowMetric(metricName, 1, { result: 'sent' });
-      }
-      return true;
-    } catch (error) {
-      markOptionalActionUnsupported(action, error, loggerImpl);
-      if (metricName) {
-        recordWorkflowMetric(metricName, 1, { result: 'failed' });
-      }
-      return false;
-    }
-  }
-
   const adapter = {
     async callAction(action, payload = {}) {
       const bot = resolveBot(context, options);
@@ -225,6 +203,28 @@ export function createKoishiProtocolAdapter(context, options = {}) {
       }, 'yuno_reaction_replies_total');
     },
   };
+
+  async function callOptionalAction(action, payload, metricName) {
+    if (disabledOptionalActions.has(action)) {
+      if (metricName) {
+        recordWorkflowMetric(metricName, 1, { result: 'unsupported' });
+      }
+      return false;
+    }
+    try {
+      await adapter.callAction(action, payload);
+      if (metricName) {
+        recordWorkflowMetric(metricName, 1, { result: 'sent' });
+      }
+      return true;
+    } catch (error) {
+      markOptionalActionUnsupported(action, error, loggerImpl);
+      if (metricName) {
+        recordWorkflowMetric(metricName, 1, { result: 'failed' });
+      }
+      return false;
+    }
+  }
 
   return adapter;
 }

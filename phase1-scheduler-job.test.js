@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  createScheduler,
   runDueAutomationTasks,
   runSingleAutomationTask,
 } from './src/jobs/scheduler-job.js';
+import { planScheduledInteraction } from './src/state/group-state-runtime.js';
 
 function createTask(overrides = {}) {
   return {
@@ -92,4 +94,55 @@ test('scheduler releases its task claim when delivery is already in progress', a
   assert.equal(releases.length, 1);
   assert.equal(releases[0].ownerId, 'scheduler-b');
   assert.match(releases[0].error, /already in progress/);
+});
+
+function schedulerConfig(overrides = {}) {
+  return {
+    targetGroupId: '20001',
+    dailyMoodTimezone: 'Asia/Shanghai',
+    proactiveMessagesEnabled: false,
+    ...overrides,
+  };
+}
+
+test('scheduler skips the proactive cron slots when proactive messages are disabled', () => {
+  const disabled = createScheduler({ config: schedulerConfig() });
+  disabled.start();
+  const disabledCount = disabled.taskCount;
+  disabled.stop();
+
+  const enabled = createScheduler({ config: schedulerConfig({ proactiveMessagesEnabled: true }) });
+  enabled.start();
+  const enabledCount = enabled.taskCount;
+  enabled.stop();
+
+  assert.equal(enabledCount - disabledCount, 2);
+});
+
+test('planScheduledInteraction refuses to speak first when proactive messages are disabled', () => {
+  const now = new Date('2026-03-13T07:00:00+08:00');
+  const groupState = {
+    mood: 'CALM',
+    activityLevel: 25,
+    lastMessageAt: new Date(now.getTime() - 2 * 60 * 60 * 1000),
+    lastProactiveAt: new Date(now.getTime() - 12 * 60 * 60 * 1000),
+    recentTopics: ['morning-class'],
+  };
+
+  const blocked = planScheduledInteraction({
+    groupState,
+    recentEvents: [],
+    dateContext: now,
+    runtimeConfig: { proactiveMessagesEnabled: false, dailyMoodTimezone: 'Asia/Shanghai' },
+  });
+  assert.equal(blocked.shouldSend, false);
+  assert.equal(blocked.reason, 'proactive-disabled');
+
+  const allowed = planScheduledInteraction({
+    groupState,
+    recentEvents: [],
+    dateContext: now,
+    runtimeConfig: { proactiveMessagesEnabled: true, dailyMoodTimezone: 'Asia/Shanghai' },
+  });
+  assert.equal(allowed.shouldSend, true);
 });

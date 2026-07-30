@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { planScheduledInteraction } from '../src/state/group-state-runtime.js';
 
+const PROACTIVE_CONFIG = {
+  proactiveMessagesEnabled: true,
+  dailyMoodTimezone: 'Asia/Shanghai',
+};
+
 test('planScheduledInteraction skips unsupported time slots', () => {
   const now = new Date('2026-03-12T20:00:00+08:00');
   const plan = planScheduledInteraction({
@@ -14,6 +19,7 @@ test('planScheduledInteraction skips unsupported time slots', () => {
     },
     recentEvents: [],
     dateContext: now,
+    runtimeConfig: PROACTIVE_CONFIG,
   });
 
   assert.equal(plan.shouldSend, false);
@@ -32,6 +38,7 @@ test('planScheduledInteraction creates a morning wake-up reminder', () => {
     },
     recentEvents: [{ summary: '阿明昨晚还在吐槽早八' }],
     dateContext: now,
+    runtimeConfig: PROACTIVE_CONFIG,
   });
 
   assert.equal(plan.shouldSend, true);
@@ -52,6 +59,7 @@ test('planScheduledInteraction creates a bedtime reminder', () => {
     },
     recentEvents: [{ summary: '有人还在改实验报告' }],
     dateContext: now,
+    runtimeConfig: PROACTIVE_CONFIG,
   });
 
   assert.equal(plan.shouldSend, true);
@@ -72,6 +80,7 @@ test('planScheduledInteraction skips morning reminder when group is already acti
     },
     recentEvents: [],
     dateContext: now,
+    runtimeConfig: PROACTIVE_CONFIG,
   });
 
   assert.equal(plan.shouldSend, false);

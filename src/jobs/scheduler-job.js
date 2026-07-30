@@ -140,8 +140,15 @@ async function runWithConcurrency(tasks, concurrency, worker) {
   return results;
 }
 
-export async function runScheduledInteraction(groupId) {
+export async function runScheduledInteraction(groupId, options = {}) {
+  const runtimeConfig = options.runtimeConfig || config;
   const trace = createTraceContext('scheduled-interaction', { groupId: String(groupId) });
+
+  if (runtimeConfig.proactiveMessagesEnabled === false) {
+    logSchedulerSkip('proactive-disabled');
+    finalizeTrace(trace, { shouldSend: false, reason: 'proactive-disabled' });
+    return;
+  }
 
   try {
     const [groupState, recentEvents] = await withTraceSpan(trace, 'load-group-state', () => Promise.all([
@@ -152,7 +159,8 @@ export async function runScheduledInteraction(groupId) {
       groupState,
       recentEvents,
       dateContext: new Date(),
-      timeZone: config.dailyMoodTimezone,
+      timeZone: runtimeConfig.dailyMoodTimezone,
+      runtimeConfig,
     });
 
     if (!plan.shouldSend) {
@@ -299,6 +307,7 @@ export function createScheduler(options = {}) {
       started = true;
       const timezone = runtimeConfig.dailyMoodTimezone || 'Asia/Shanghai';
       const hasTargetGroup = Boolean(runtimeConfig.targetGroupId);
+      const proactiveEnabled = runtimeConfig.proactiveMessagesEnabled !== false;
 
       tasks.push(cron.schedule('* * * * *', () => {
         runDueAutomationTasks(new Date()).catch((error) => {
@@ -313,14 +322,17 @@ export function createScheduler(options = {}) {
       }, { timezone }));
 
       if (hasTargetGroup) {
-        const trigger = () => {
-          runScheduledInteraction(runtimeConfig.targetGroupId).catch((error) => {
-            logger.error('scheduler', 'Scheduled interaction tick failed', { message: error.message });
-          });
-        };
+        if (proactiveEnabled) {
+          const trigger = () => {
+            runScheduledInteraction(runtimeConfig.targetGroupId, { runtimeConfig }).catch((error) => {
+              logger.error('scheduler', 'Scheduled interaction tick failed', { message: error.message });
+            });
+          };
 
-        tasks.push(cron.schedule('0 7 * * *', trigger, { timezone }));
-        tasks.push(cron.schedule('0 23 * * *', trigger, { timezone }));
+          tasks.push(cron.schedule('0 7 * * *', trigger, { timezone }));
+          tasks.push(cron.schedule('0 23 * * *', trigger, { timezone }));
+        }
+
         tasks.push(cron.schedule('0 21 * * *', () => {
           runDailyGroupDigest(runtimeConfig.targetGroupId).catch((error) => {
             logger.error('scheduler', 'Daily digest failed', { message: error.message });
@@ -331,6 +343,7 @@ export function createScheduler(options = {}) {
       logger.info('scheduler', 'Scheduler started', {
         groupId: runtimeConfig.targetGroupId || '',
         hasTargetGroup,
+        proactiveEnabled,
       });
     },
     stop() {
@@ -342,6 +355,9 @@ export function createScheduler(options = {}) {
     },
     get started() {
       return started;
+    },
+    get taskCount() {
+      return tasks.length;
     },
   };
 }

@@ -47,10 +47,13 @@
 | PARTICIPATION_SKIP_PROBABILITY | Chance to stay silent on weak keyword-only group hits. |
 | PARTICIPATION_REACTION_PROBABILITY | Chance to answer a low-information message with an emoji reaction instead of text. |
 | PARTICIPATION_MAX_CONSECUTIVE_REPLIES | Consecutive replies to the same user before downgrading to reaction or silence. |
-| AMBIENT_JOIN_ENABLED, AMBIENT_JOIN_PROBABILITY | Low-frequency unprompted joins in the target group. |
-| AMBIENT_JOIN_COOLDOWN_MS, AMBIENT_JOIN_MAX_PER_DAY | Cooldown and daily cap for ambient joins. |
+| AMBIENT_JOIN_ENABLED, AMBIENT_JOIN_PROBABILITY | Low-frequency unprompted joins in the target group. Disabled by default. |
+| AMBIENT_JOIN_COOLDOWN_MS, AMBIENT_JOIN_MAX_PER_DAY | Cooldown and daily cap for ambient joins (only used when AMBIENT_JOIN_ENABLED=true). |
+| PROACTIVE_MESSAGES_ENABLED | Scheduled proactive group messages at 07:00 and 23:00. Disabled by default; the 21:00 daily digest is unaffected. |
 
 Explicit summons (private chat, @, commands, poke) are never dropped by the participation policy. Consecutive-reply counters and ambient-join cooldowns live in process memory only, so they reset on restart and are not stored in MongoDB.
+
+With AMBIENT_JOIN_ENABLED=false and PROACTIVE_MESSAGES_ENABLED=false the bot never speaks first: it only answers explicit summons and tool or automation deliveries.
 
 ## Meme cache
 

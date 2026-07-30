@@ -428,6 +428,7 @@ test('config exposes humanized cadence, participation and ambient join defaults'
     AMBIENT_JOIN_PROBABILITY: '',
     AMBIENT_JOIN_COOLDOWN_MS: '',
     AMBIENT_JOIN_MAX_PER_DAY: '',
+    PROACTIVE_MESSAGES_ENABLED: '',
   });
 
   assert.equal(config.groupReplyQuoteMode, 'auto');
@@ -447,10 +448,21 @@ test('config exposes humanized cadence, participation and ambient join defaults'
   assert.equal(config.participationSkipProbability, 0.12);
   assert.equal(config.participationReactionProbability, 0.18);
   assert.equal(config.participationMaxConsecutiveReplies, 2);
-  assert.equal(config.ambientJoinEnabled, true);
+  assert.equal(config.ambientJoinEnabled, false);
   assert.equal(config.ambientJoinProbability, 0.02);
   assert.equal(config.ambientJoinCooldownMs, 600000);
   assert.equal(config.ambientJoinMaxPerDay, 6);
+  assert.equal(config.proactiveMessagesEnabled, false);
+});
+
+test('config can opt back into unprompted speech', async () => {
+  const { config } = await loadConfigModule({
+    AMBIENT_JOIN_ENABLED: 'true',
+    PROACTIVE_MESSAGES_ENABLED: 'true',
+  });
+
+  assert.equal(config.ambientJoinEnabled, true);
+  assert.equal(config.proactiveMessagesEnabled, true);
 });
 
 test('config rejects invalid group reply quote mode and clamps cadence probability', async () => {

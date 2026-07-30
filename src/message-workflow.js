@@ -2198,6 +2198,19 @@ export async function processIncomingMessage(event, precomputed = null, options 
         runtimeConfig: segmentationConfig,
       }) || { preDelayMs: 0, segmentDelays: [], reason: 'unavailable' };
       cadencePreDelayMs = Math.max(0, Number(cadence.preDelayMs || 0));
+      // Cadence owns the segment pauses unless it is off or unavailable, in
+      // which case the legacy length-based delay keeps segmentation readable.
+      const useCadenceSegmentDelays = cadence.reason !== 'disabled' && cadence.reason !== 'unavailable';
+      const resolveSegmentPauseMs = (segment, index) => {
+        const planned = Number(cadence.segmentDelays?.[index]);
+        if (useCadenceSegmentDelays && Number.isFinite(planned)) {
+          return Math.max(0, planned);
+        }
+        return resolveSegmentDelayMs(segment, {
+          minDelayMs: segmentationConfig.replySegmentMinDelayMs,
+          maxDelayMs: segmentationConfig.replySegmentMaxDelayMs,
+        });
+      };
       const candidatePlan = memeDecision.shouldSend && memeDecision.asset
         ? {
             type: 'structured-meme',
@@ -2328,12 +2341,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
         for (let index = Math.min(completedParts, plannedSegments.length); index < plannedSegments.length; index += 1) {
           const segment = plannedSegments[index];
           if (index > 0 && cadenceActive) {
-            const segmentDelayMs = Number.isFinite(Number(cadence.segmentDelays?.[index]))
-              ? Math.max(0, Number(cadence.segmentDelays[index]))
-              : resolveSegmentDelayMs(segment, {
-                  minDelayMs: segmentationConfig.replySegmentMinDelayMs,
-                  maxDelayMs: segmentationConfig.replySegmentMaxDelayMs,
-                });
+            const segmentDelayMs = resolveSegmentPauseMs(segment, index);
             if (segmentDelayMs > 0) {
               recordWorkflowMetric('yuno_reply_cadence_delay_ms', segmentDelayMs, {
                 chat_type: normalizedEvent.chatType,

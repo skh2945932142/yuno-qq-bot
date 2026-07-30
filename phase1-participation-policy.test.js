@@ -272,3 +272,16 @@ test('ambient join stops at the configured daily maximum', () => {
   });
   assert.equal(nextDay.allowed, true);
 });
+
+
+test('ambient join is disabled by default so the bot never speaks first', () => {
+  resetParticipationState();
+  const decision = resolveAmbientJoinDecision({
+    event: groupEvent({ messageId: 'g-default' }),
+    groupState: { activityLevel: 80 },
+    now: 1_700_000_000_000,
+    random: () => 0,
+  });
+
+  assert.deepEqual(decision, { allowed: false, reason: 'ambient-disabled' });
+});

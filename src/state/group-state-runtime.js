@@ -254,7 +254,12 @@ export function planScheduledInteraction({
   recentEvents,
   dateContext = new Date(),
   timeZone = config.dailyMoodTimezone,
+  runtimeConfig = config,
 }) {
+  if ((runtimeConfig || config).proactiveMessagesEnabled === false) {
+    return { shouldSend: false, reason: 'proactive-disabled' };
+  }
+
   if (!groupState) {
     return { shouldSend: false, reason: 'missing-group-state' };
   }
