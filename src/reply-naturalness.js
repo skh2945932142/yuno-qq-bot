@@ -14,6 +14,9 @@ const ACCUSATORY_FRAME_REGEX = /(?:你(?:又|居然|怎么还)|明明[^。！？
 const ADVERSARIAL_CONTRAST_REGEX = /(?:倒是[^。！？!?]{0,24}(?:就|还|一点)|明明[^。！？!?]{0,24}(?:却|还)|嫌[^。！？!?]{0,24}还)/;
 const POSSESSIVE_CONTROL_REGEX = /(不许|不准|只能|你只能|别(?:走|离开|消失|不理我)|不可以[^。！？!?]{0,12}(?:跟|和)[^。！？!?]{0,12}(?:别人|他人))/;
 const PERSONAL_ATTACK_REGEX = /(?:你(?:很|太)?(?:自私|虚伪|恶心|可笑|烦人|麻烦|没救)|废物|蠢货|闭嘴)/;
+// 轻度损友词允许出现，但一条回复里叠太多就变成围攻。
+const MILD_BELITTLING_REGEX = /(懒狗|菜狗|笨蛋|怂货|怂|蠢|傻|废|没救|智商|脑子(?:有问题|进水)|丢人|离谱|烂|垃圾|无药可救)/g;
+const MILD_BELITTLING_TEST_REGEX = new RegExp(MILD_BELITTLING_REGEX.source);
 const ROBOTIC_ACKNOWLEDGEMENT_REGEX = /(?:我(?:(?:已经|会|先|都|也|替你)\s*)*(?:记下|记住|记着|收下|接住)(?:了|啦|这句|这件事|你(?:这句|说的(?:话|内容)))?|这(?:句|句话|件事|条(?:偏好|订阅|提醒)?|个(?:要求|约定)?)(?:我)?(?:(?:已经|会|先|都|也|替你)\s*)*(?:记下|记住|记着|收下|接住)(?:了|啦)?|我(?:听见|听到|知道|明白|了解)(?:了|啦)|(?:(?:已经|都|这就)\s*)?(?:记下|记住|收下|接住)(?:了|啦)|(?:已经|已)?收到(?:了|啦)?)/;
 const EMOJI_DETECT_REGEX = /\p{Extended_Pictographic}/u;
 const EMOJI_REPLACE_REGEX = /\p{Extended_Pictographic}/gu;
@@ -100,6 +103,11 @@ function hasRepeatedTemplate(value, options = {}) {
   });
 }
 
+function countBelittlingHits(value) {
+  const matches = String(value || '').match(MILD_BELITTLING_REGEX) || [];
+  return new Set(matches).size;
+}
+
 function isExpectedQuestion(options = {}) {
   return options.replyPlan?.questionNeeded === true;
 }
@@ -127,6 +135,7 @@ export function inspectReplyNaturalness(text, options = {}) {
   const hasAdversarialContrast = ADVERSARIAL_CONTRAST_REGEX.test(value);
   const hasPossessiveControl = POSSESSIVE_CONTROL_REGEX.test(value);
   const hasPersonalAttack = PERSONAL_ATTACK_REGEX.test(value);
+  const stackedBelittling = countBelittlingHits(value) >= 2;
   const questions = questionCount(value);
   const unnecessaryQuestion = questions > 0
     && !isExpectedQuestion(options)
@@ -163,6 +172,10 @@ export function inspectReplyNaturalness(text, options = {}) {
     flags.push('personal-attack');
     edgeScore += 2;
   }
+  if (stackedBelittling) {
+    flags.push('stacked-belittling');
+    edgeScore += 1;
+  }
   if (unnecessaryQuestion || stackedQuestions) {
     flags.push('stacked-rhetorical-questions');
     edgeScore += stackedQuestions ? 2 : 1;
@@ -193,6 +206,7 @@ export function inspectReplyNaturalness(text, options = {}) {
   const hard = unique.some((flag) => hardFlags.includes(flag));
   const rewriteRecommended = unique.includes('private-too-long')
     || unique.includes('robotic-acknowledgement')
+    || unique.includes('stacked-belittling')
     || shouldRewriteForEdge({
     edgeScore,
     hard,
@@ -267,6 +281,21 @@ function removeAggressiveClauses(text) {
   ));
   return safe.join('').trim();
 }
+function trimStackedBelittling(text) {
+  const clauses = String(text || '')
+    .split(/(?<=[，,。！？!?；;])/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  let kept = false;
+  const output = clauses.filter((clause) => {
+    if (!MILD_BELITTLING_TEST_REGEX.test(clause)) return true;
+    if (kept) return false;
+    kept = true;
+    return true;
+  });
+  return output.join('').trim();
+}
+
 function removeRoboticAcknowledgementClauses(text) {
   const clauses = String(text || '')
     .split(/(?<=[，,。！？!?；;])/)
@@ -345,7 +374,9 @@ export function deescalateReplyNaturalness(text, options = {}) {
   const original = String(text || '').trim();
   if (!original) return buildDeescalatedReplyFallback(options);
   const hadRoboticAcknowledgement = ROBOTIC_ACKNOWLEDGEMENT_REGEX.test(original);
-  const safeClauses = removeRoboticAcknowledgementClauses(removeAggressiveClauses(original));
+  const safeClauses = trimStackedBelittling(
+    removeRoboticAcknowledgementClauses(removeAggressiveClauses(original))
+  );
   const output = shortenPrivateReply(limitQuestions(safeClauses, options), options)
     .replace(/\s*([，。！？!?、；;：:])\s*/g, '$1')
     .trim();

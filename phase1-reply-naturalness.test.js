@@ -275,3 +275,28 @@ test('one question survives when the inbound message is itself a question or the
   assert.doesNotMatch(plainStatement, /[？?]/);
   assert.equal(plainStatement, '这块缓存我看过了。');
 });
+test('single light jab stays allowed while stacked belittling is flagged and trimmed', () => {
+  const options = {
+    event: { chatType: 'private' },
+    route: { category: 'private_chat' },
+    messageAnalysis: { intent: 'help', sentiment: 'neutral' },
+    replyPlan: { questionNeeded: false },
+    personalityStrategy: { signatureMove: { key: 'sharp_answer' } },
+    conversationState: { messages: [] },
+  };
+
+  for (const reply of ['早什么早，懒狗。', '菜狗又把代码写炸了？日志交出来。']) {
+    const result = inspectReplyNaturalness(reply, options);
+    assert.equal(result.flags.includes('stacked-belittling'), false, reply);
+    assert.equal(result.rewriteRecommended, false, reply);
+  }
+
+  const stacked = inspectReplyNaturalness('懒狗，菜狗，你这脑子进水了吧。先把日志发我。', options);
+  assert.equal(stacked.flags.includes('stacked-belittling'), true);
+  assert.equal(stacked.rewriteRecommended, true);
+
+  const trimmed = deescalateReplyNaturalness('懒狗，菜狗，你这脑子进水了吧。先把日志发我。', options);
+  assert.match(trimmed, /先把日志发我/);
+  assert.equal(inspectReplyNaturalness(trimmed, options).flags.includes('stacked-belittling'), false);
+  assert.equal(trimmed.includes('菜狗'), false);
+});

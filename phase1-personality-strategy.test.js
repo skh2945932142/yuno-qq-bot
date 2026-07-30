@@ -220,3 +220,35 @@ test('custom nickname is only enabled when stored and not recently used', () => 
   assert.equal(allowed.addressing.value, '小月');
   assert.equal(suppressed.addressing.allowed, false);
 });
+test('edge moves are suppressed when any of the last two turns already carried edge', () => {
+  const strategy = resolvePersonalityStrategy({
+    event: baseEvent({ messageId: 'edge-cooldown', rawText: '你不服气？' }),
+    relation: { affection: 55 },
+    conversationState: {
+      messages: [
+        { role: 'assistant', content: '这次让你靠一会儿。', styleMove: 'mild_edge', edgeScore: 1 },
+        { role: 'assistant', content: '行吧，随你。', styleMove: 'observation', edgeScore: 0 },
+      ],
+    },
+    messageAnalysis: { intent: 'challenge', sentiment: 'neutral', ruleSignals: [] },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '接话' } },
+  });
+
+  assert.notEqual(strategy.signatureMove.key, 'mild_edge');
+  assert.equal(strategy.signatureMove.edgeAllowed, false);
+});
+
+test('forbidden moves cap belittling density without banning sarcasm', () => {
+  const strategy = resolvePersonalityStrategy({
+    event: baseEvent(),
+    relation: { affection: 40 },
+    messageAnalysis: { intent: 'chat', sentiment: 'neutral', ruleSignals: [] },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '接话' } },
+  });
+  const forbidden = strategy.forbiddenMoves.join(' ');
+
+  assert.match(forbidden, /只保留一个轻量攻击点/);
+  assert.match(forbidden, /不否定对方整个人/);
+  assert.match(forbidden, /允许轻度损友称呼/);
+  assert.match(strategy.promptHints.join(' '), /讽刺保留/);
+});

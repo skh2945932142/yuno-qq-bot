@@ -26,6 +26,32 @@
 | ENABLE_VOICE and TTS variables | Optional voice delivery. |
 | METRICS_AUTH_TOKEN | Required token for x-yuno-metrics-token. |
 
+## Humanized reply pacing
+
+| Variable | Purpose |
+|---|---|
+| REPLY_CADENCE_ENABLED | Master switch for the humanized pre-reply delay and typing pacing. |
+| REPLY_CADENCE_READ_MS_PER_CHAR, REPLY_CADENCE_READ_MAX_MS | Simulated reading time per inbound character and its ceiling. |
+| REPLY_CADENCE_MIN_PRE_DELAY_MS, REPLY_CADENCE_MAX_PRE_DELAY_MS | Clamp for the delay before the first bubble is sent. |
+| REPLY_CADENCE_TYPING_MS_PER_CHAR, REPLY_CADENCE_TYPING_MAX_MS | Per-character typing time between segments and its ceiling. |
+| REPLY_CADENCE_JITTER_RATIO | Random jitter applied to every cadence delay, 0 disables jitter. |
+| TYPING_INDICATOR_ENABLED | Sends the OneBot set_input_status action during private-chat pre-delay; silently disabled when unsupported. |
+| REPLY_SEGMENT_TRIM_TRAILING_PERIOD | Drops the trailing period on short bubbles so segments read like chat messages. |
+| GROUP_REPLY_QUOTE_MODE | auto quotes only when the reply would otherwise be ambiguous; always and never force the behavior. |
+| GROUP_MESSAGE_AGGREGATION_ENABLED, GROUP_MESSAGE_AGGREGATION_WINDOW_MS, GROUP_MESSAGE_AGGREGATION_MAX_WINDOW_MS | Merges rapid explicitly triggered group messages into one reply. |
+
+## Participation policy
+
+| Variable | Purpose |
+|---|---|
+| PARTICIPATION_SKIP_PROBABILITY | Chance to stay silent on weak keyword-only group hits. |
+| PARTICIPATION_REACTION_PROBABILITY | Chance to answer a low-information message with an emoji reaction instead of text. |
+| PARTICIPATION_MAX_CONSECUTIVE_REPLIES | Consecutive replies to the same user before downgrading to reaction or silence. |
+| AMBIENT_JOIN_ENABLED, AMBIENT_JOIN_PROBABILITY | Low-frequency unprompted joins in the target group. |
+| AMBIENT_JOIN_COOLDOWN_MS, AMBIENT_JOIN_MAX_PER_DAY | Cooldown and daily cap for ambient joins. |
+
+Explicit summons (private chat, @, commands, poke) are never dropped by the participation policy. Consecutive-reply counters and ambient-join cooldowns live in process memory only, so they reset on restart and are not stored in MongoDB.
+
 ## Meme cache
 
 Use MEME_PROVIDER=local-cache to keep existing stored assets and collect safe incoming images. LLBot migration does not use fetch_custom_face.

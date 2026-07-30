@@ -555,3 +555,17 @@ test('group style profile is injected for any group chat regardless of prompt pr
   assert.match(standard, /群风格=这个群喜欢短句和梗图/);
   assert.match(fast, /群风格=这个群喜欢短句和梗图/);
 });
+test('persona keeps sarcasm but caps its intensity and target', () => {
+  const prompt = buildReplyContext(createNaturalnessBase());
+
+  // 讽刺能力保留
+  assert.match(prompt, /毒舌损友/);
+  assert.match(prompt, /日常可以讽刺、可以损/);
+  // 强度与打击面被收窄
+  assert.match(prompt, /默认走轻量档/);
+  assert.match(prompt, /不要连着两句贬损/);
+  assert.match(prompt, /不否定对方整个人/);
+  assert.match(prompt, /低频使用/);
+  assert.match(prompt, /智力或长相/);
+  assert.doesNotMatch(prompt, /毒舌强度不降/);
+});
