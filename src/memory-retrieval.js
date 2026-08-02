@@ -40,7 +40,11 @@ function normalizeEmbeddingRows(rows) {
 }
 
 function isQdrantReady(deps = {}) {
-  if (deps.upsertPoints || deps.searchPoints) {
+  // Any injected point accessor means the caller is supplying its own Qdrant,
+  // so skip the configuration probe. scrollPoints/deletePoints belong here too:
+  // omitting them made cleanupExpiredMemoryVectors short-circuit whenever
+  // QDRANT_URL was unset, which hid the cleanup tests behind a local .env.
+  if (deps.upsertPoints || deps.searchPoints || deps.scrollPoints || deps.deletePoints) {
     return true;
   }
   const configured = getQdrantStatus();
