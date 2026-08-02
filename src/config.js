@@ -204,7 +204,7 @@ export const config = Object.freeze({
   participationReactionProbability: readProbability('PARTICIPATION_REACTION_PROBABILITY', 0.18),
   participationMaxConsecutiveReplies: readNumber('PARTICIPATION_MAX_CONSECUTIVE_REPLIES', 2),
   ambientJoinEnabled: readBoolean('AMBIENT_JOIN_ENABLED', false),
-  ambientJoinProbability: readProbability('AMBIENT_JOIN_PROBABILITY', 0.02),
+  ambientJoinProbability: readProbability('AMBIENT_JOIN_PROBABILITY', 0.005),
   ambientJoinCooldownMs: readNumber('AMBIENT_JOIN_COOLDOWN_MS', 600000),
   ambientJoinMaxPerDay: readNumber('AMBIENT_JOIN_MAX_PER_DAY', 6),
   proactiveMessagesEnabled: readBoolean('PROACTIVE_MESSAGES_ENABLED', false),

@@ -453,7 +453,7 @@ test('config exposes humanized cadence, participation and ambient join defaults'
   assert.equal(config.participationReactionProbability, 0.18);
   assert.equal(config.participationMaxConsecutiveReplies, 2);
   assert.equal(config.ambientJoinEnabled, false);
-  assert.equal(config.ambientJoinProbability, 0.02);
+  assert.equal(config.ambientJoinProbability, 0.005);
   assert.equal(config.ambientJoinCooldownMs, 600000);
   assert.equal(config.ambientJoinMaxPerDay, 6);
   assert.equal(config.proactiveMessagesEnabled, false);
