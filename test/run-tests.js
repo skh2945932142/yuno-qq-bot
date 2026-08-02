@@ -1,4 +1,5 @@
 await import('./analysis.test.js');
+await import('./utils-language.test.js');
 await import('./emotion-engine.test.js');
 await import('./daily-mood.test.js');
 await import('./reply-style.test.js');

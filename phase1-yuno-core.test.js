@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildYunoCoreEvent, runYunoConversation } from './src/yuno-core.js';
 import { createDeliveryLedger } from './src/delivery-ledger.js';
+import { resetParticipationState } from './src/participation-policy.js';
 
 test('buildYunoCoreEvent normalizes generic platform input into unified event', () => {
   const event = buildYunoCoreEvent({
@@ -211,9 +212,18 @@ test('runYunoConversation send mode forwards text, structured, and voice outputs
 });
 
 test('runYunoConversation uses the shared inbound lifecycle for external adapters', async () => {
+  // These group events reuse g1/u1, so the module-level reply streak leaks
+  // between tests and could push this case onto the participation sampling path.
+  // A stable messageId plus explicit relevance keeps the assertion deterministic.
+  resetParticipationState();
   const calls = [];
   const result = await runYunoConversation({
-    platform: 'qq', scene: 'group', groupId: 'g1', userId: 'u1', rawMessage: 'hello',
+    platform: 'qq',
+    scene: 'group',
+    groupId: 'g1',
+    userId: 'u1',
+    rawMessage: 'hello',
+    metadata: { messageId: 'msg-lifecycle' },
   }, {
     processInboundLifecycle: true,
     deps: {
@@ -227,7 +237,7 @@ test('runYunoConversation uses the shared inbound lifecycle for external adapter
     engine: {
       shouldRespondToEvent: async (event) => {
         calls.push('decision');
-        return { event, analysis: { shouldRespond: true, reason: 'allow' } };
+        return { event, analysis: { shouldRespond: true, reason: 'allow', relevance: 0.9 } };
       },
       processIncomingMessage: async (_event, _decision, options) => {
         calls.push('reply');

@@ -22,6 +22,13 @@ const MOJIBAKE_SNIPPETS = [
   '杩囩▼',
 ];
 
+// U+FFFD is the opposite corruption direction from MOJIBAKE_SNIPPETS above:
+// GBK bytes decoded as UTF-8. Unlike those snippets it is unrecoverable because
+// the original bytes are gone. src/utils.js was corrupted this way and the
+// snippet list did not catch it, leaving Chinese sentiment/intent detection
+// silently dead in production while every test stayed green.
+const REPLACEMENT_CHARACTER = '�';
+
 async function collectFiles(target) {
   const absolute = path.resolve(ROOT, target);
   const stat = await fs.stat(absolute);
@@ -48,6 +55,10 @@ test('model-visible source and eval text do not contain mojibake snippets', asyn
     const hits = MOJIBAKE_SNIPPETS.filter((snippet) => text.includes(snippet));
     if (hits.length > 0) {
       offenders.push(`${path.relative(process.cwd(), file)}: ${hits.join(',')}`);
+    }
+    const replacementCount = text.split(REPLACEMENT_CHARACTER).length - 1;
+    if (replacementCount > 0) {
+      offenders.push(`${path.relative(process.cwd(), file)}: ${replacementCount} U+FFFD (broken encoding)`);
     }
   }
 
