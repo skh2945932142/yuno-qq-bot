@@ -192,6 +192,7 @@ export async function updateGroupStateFromAnalysis({
   groupId,
   analysis,
   summary,
+  styleText = '',
   now = new Date(),
 }) {
   const existing = await ensureGroupState(groupId);
@@ -202,8 +203,11 @@ export async function updateGroupStateFromAnalysis({
     0,
     100
   );
+  // Style stats must read the raw user turn. `summary` is "<name>: <text cut to
+  // 80 chars>", which inflated averageLength by the username length and capped it
+  // below the 'long' threshold, so that bucket was effectively unreachable.
   const nextStyleProfile = updateGroupStyleProfile(existing.styleProfile, {
-    text: summary,
+    text: styleText || summary,
     analysis,
   });
 

@@ -22,9 +22,16 @@ function classifyExpressiveStyle({ emojiRate, textEmoteRate }) {
   return 'restrained';
 }
 
+// Caps the weight of history so the running averages stay adaptive. Without a
+// cap, sampleCount grows without bound and the learning rate decays to 1/n:
+// after a few tens of thousands of messages the group style is frozen and can no
+// longer follow a shift in the room's tone.
+const MAX_EFFECTIVE_SAMPLES = 200;
+
 function mergeAverage(previousAverage, previousCount, nextValue) {
-  if (previousCount <= 0) return nextValue;
-  return ((previousAverage * previousCount) + nextValue) / (previousCount + 1);
+  const weight = Math.min(Math.max(0, previousCount), MAX_EFFECTIVE_SAMPLES);
+  if (weight <= 0) return nextValue;
+  return ((previousAverage * weight) + nextValue) / (weight + 1);
 }
 
 export function summarizeGroupStylePrompt(profile = {}) {

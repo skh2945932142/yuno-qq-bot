@@ -5,7 +5,13 @@ import { UserMemoryEvent, MemeAsset } from './models.js';
 import { logger } from './logger.js';
 import { recordWorkflowMetric } from './metrics.js';
 import { getRuntimeServices } from './runtime-services.js';
-import { getQdrantStatus, searchKnowledge, upsertKnowledgePoints } from './qdrant-client.js';
+import {
+  deleteKnowledgePointsByIds,
+  getQdrantStatus,
+  scrollKnowledgePoints,
+  searchKnowledge,
+  upsertKnowledgePoints,
+} from './qdrant-client.js';
 import { isDbReady } from './db.js';
 
 function buildPointId(prefix, value) {
@@ -101,6 +107,105 @@ function activeFilter(now = new Date()) {
   };
 }
 
+// Vectors were only ever written, never removed. Once a memory expired, Mongo
+// filtered it out but its vector kept winning retrieval slots, so a chat with a
+// long history would return three hits and end up with zero usable memories.
+// Mongo is the source of truth here: any point whose backing document is gone,
+// expired or disabled is an orphan. `type` keeps this away from knowledge and
+// manifest points, which knowledge-base.js reconciles separately.
+const VECTOR_CLEANUP_TARGETS = [
+  { type: 'memory_event', idKey: 'memoryId', modelKey: 'memoryModel' },
+  { type: 'meme_semantic', idKey: 'assetId', modelKey: 'memeModel', extraFilter: { disabled: false } },
+];
+
+const VECTOR_CLEANUP_BATCH_SIZE = 256;
+const VECTOR_CLEANUP_MAX_BATCHES = 40;
+
+async function cleanupTargetVectors(target, now, deps) {
+  const model = deps[target.modelKey]
+    || (target.modelKey === 'memoryModel' ? UserMemoryEvent : MemeAsset);
+  const scroll = deps.scrollPoints || scrollKnowledgePoints;
+  const removePoints = deps.deletePoints || deleteKnowledgePointsByIds;
+  const batchSize = Number(deps.batchSize || VECTOR_CLEANUP_BATCH_SIZE);
+  const maxBatches = Number(deps.maxBatches || VECTOR_CLEANUP_MAX_BATCHES);
+
+  let offset = null;
+  let scanned = 0;
+  let deleted = 0;
+
+  for (let batch = 0; batch < maxBatches; batch += 1) {
+    const page = await scroll(
+      { must: [{ key: 'type', match: { value: target.type } }] },
+      batchSize,
+      offset
+    );
+    const points = Array.isArray(page?.points) ? page.points : [];
+    if (points.length === 0) break;
+    scanned += points.length;
+
+    const ids = [...new Set(points
+      .map((point) => String(point?.payload?.[target.idKey] || '').trim())
+      .filter(Boolean))];
+    const alive = ids.length
+      ? await model.find({
+        [target.idKey]: { $in: ids },
+        ...(target.extraFilter || {}),
+        $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
+      })
+      : [];
+    const aliveIds = new Set(alive.map((doc) => String(doc?.[target.idKey] || '')));
+
+    const orphanPointIds = points
+      .filter((point) => !aliveIds.has(String(point?.payload?.[target.idKey] || '').trim()))
+      .map((point) => point.id)
+      .filter((id) => id !== undefined && id !== null);
+
+    if (orphanPointIds.length > 0) {
+      await removePoints(orphanPointIds);
+      deleted += orphanPointIds.length;
+    }
+
+    offset = page?.nextOffset || null;
+    if (!offset) break;
+  }
+
+  return { scanned, deleted };
+}
+
+export async function cleanupExpiredMemoryVectors(options = {}, deps = {}) {
+  if (!isQdrantReady(deps)) {
+    return { enabled: false, scanned: 0, deleted: 0, reason: 'qdrant-unavailable' };
+  }
+  if (!deps.memoryModel && !deps.memeModel && !isDbReady()) {
+    return { enabled: false, scanned: 0, deleted: 0, reason: 'db-unavailable' };
+  }
+
+  const now = options.now instanceof Date ? options.now : new Date();
+  let scanned = 0;
+  let deleted = 0;
+
+  for (const target of VECTOR_CLEANUP_TARGETS) {
+    try {
+      const result = await cleanupTargetVectors(target, now, deps);
+      scanned += result.scanned;
+      deleted += result.deleted;
+    } catch (error) {
+      logger.warn('retrieval', 'Memory vector cleanup failed for one target', {
+        message: error.message,
+        type: target.type,
+      });
+      recordWorkflowMetric('yuno_memory_vector_cleanup_failures_total', 1, { type: target.type });
+    }
+  }
+
+  if (deleted > 0) {
+    recordWorkflowMetric('yuno_memory_vectors_deleted_total', deleted, { reason: 'expired' });
+    logger.info('retrieval', 'Removed orphaned memory vectors', { scanned, deleted });
+  }
+
+  return { enabled: true, scanned, deleted };
+}
+
 export async function indexUserMemoryEvents(memoryEvents = [], deps = {}) {
   if (!Array.isArray(memoryEvents) || memoryEvents.length === 0 || !isQdrantReady(deps)) {
     return { enabled: false, count: 0 };
@@ -142,14 +247,7 @@ export async function indexMemeAssetSemantics(asset, deps = {}) {
   return { enabled: true, count: 1 };
 }
 
-async function searchSemanticPoints(query, filter, deps = {}) {
-  if (!query || !isQdrantReady(deps)) {
-    return [];
-  }
-  const vector = await embedText(query, {
-    ...deps,
-    operation: 'memory-retrieval-embedding',
-  });
+function searchWithVector(vector, filter, deps = {}) {
   return (deps.searchPoints || searchKnowledge)(vector, {
     limit: deps.limit || 4,
     scoreThreshold: deps.scoreThreshold ?? Math.max(0.18, config.qdrantMinScore),
@@ -168,22 +266,31 @@ export async function retrieveMemoryContext({ userId, chatId = '', userTurn, lim
   }
 
   try {
-    const [eventHits, memeHits] = await Promise.all([
-      searchSemanticPoints(userTurn, {
-        must: [
-          { key: 'type', match: { value: 'memory_event' } },
-          { key: 'userId', match: { value: normalizedUserId } },
-        ],
-      }, { ...deps, limit: limitEvents }),
-      searchSemanticPoints(userTurn, {
-        must: [
-          { key: 'type', match: { value: 'meme_semantic' } },
-          normalizedChatId
-            ? { key: 'chatId', match: { value: normalizedChatId } }
-            : { key: 'userId', match: { value: normalizedUserId } },
-        ],
-      }, { ...deps, limit: limitMemes }),
-    ]);
+    // Both lookups score the same user turn, so embed it once and reuse the
+    // vector. Previously each branch embedded the identical text, putting two
+    // provider round-trips on the critical path of every reply.
+    const queryText = String(userTurn || '').trim();
+    const vector = isQdrantReady(deps)
+      ? await embedText(queryText, { ...deps, operation: 'memory-retrieval-embedding' })
+      : null;
+    const [eventHits, memeHits] = vector
+      ? await Promise.all([
+        searchWithVector(vector, {
+          must: [
+            { key: 'type', match: { value: 'memory_event' } },
+            { key: 'userId', match: { value: normalizedUserId } },
+          ],
+        }, { ...deps, limit: limitEvents }),
+        searchWithVector(vector, {
+          must: [
+            { key: 'type', match: { value: 'meme_semantic' } },
+            normalizedChatId
+              ? { key: 'chatId', match: { value: normalizedChatId } }
+              : { key: 'userId', match: { value: normalizedUserId } },
+          ],
+        }, { ...deps, limit: limitMemes }),
+      ])
+      : [[], []];
 
     const memoryIds = eventHits.map((item) => String(item.payload?.memoryId || '')).filter(Boolean);
     const assetIds = memeHits.map((item) => String(item.payload?.assetId || '')).filter(Boolean);

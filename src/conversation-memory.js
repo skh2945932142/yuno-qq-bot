@@ -5,6 +5,10 @@ const RECENT_MESSAGE_LIMIT = 8;
 const SUMMARY_CHAR_LIMIT = 1200;
 const MESSAGE_SNIPPET_LIMIT = 96;
 const DEFAULT_APPEND_ATTEMPTS = 5;
+const SUMMARY_ENTRY_SEPARATOR = ' | ';
+// Legacy summaries batched entries with ' || ' and messages with ' | '. Both are
+// flattened into a single entry list on first read so old rows migrate in place.
+const SUMMARY_ENTRY_SPLIT_REGEX = /\s*\|\|\s*|\s+\|\s+/;
 
 function truncateText(text, limit = MESSAGE_SNIPPET_LIMIT) {
   const normalized = String(text || '').trim();
@@ -15,23 +19,42 @@ function truncateText(text, limit = MESSAGE_SNIPPET_LIMIT) {
   return `${normalized.slice(0, Math.max(0, limit - 1))}…`;
 }
 
-function summarizeMessages(messages) {
-  return messages
-    .map((item) => `${item.role === 'assistant' ? 'Bot' : 'User'}: ${truncateText(item.content)}`)
-    .join(' | ');
+function formatSummaryEntry(item) {
+  const role = item.role === 'assistant' ? 'Bot' : 'User';
+  // The separator must not appear inside an entry, otherwise trimming the oldest
+  // entries would split a message in half.
+  const content = truncateText(item.content).replace(/\|/g, '/');
+  return `${role}: ${content}`;
 }
 
-function mergeRollingSummary(previousSummary, summarizedMessages) {
-  const segment = summarizeMessages(summarizedMessages);
-  const nextSummary = [String(previousSummary || '').trim(), segment]
-    .filter(Boolean)
-    .join(' || ');
+function splitSummaryEntries(summary) {
+  return String(summary || '')
+    .split(SUMMARY_ENTRY_SPLIT_REGEX)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
 
-  if (nextSummary.length <= SUMMARY_CHAR_LIMIT) {
-    return nextSummary;
+// The previous implementation kept the tail with slice(length - LIMIT), which cut
+// mid-message and mid-character, feeding fragments like "|| Use" into the prompt.
+// Dropping whole entries keeps the same "newest wins" behaviour but never emits a
+// partial message.
+function mergeRollingSummary(previousSummary, summarizedMessages) {
+  const entries = [
+    ...splitSummaryEntries(previousSummary),
+    ...summarizedMessages.map(formatSummaryEntry),
+  ].filter(Boolean);
+
+  if (entries.length === 0) {
+    return '';
   }
 
-  return nextSummary.slice(nextSummary.length - SUMMARY_CHAR_LIMIT);
+  let joined = entries.join(SUMMARY_ENTRY_SEPARATOR);
+  while (entries.length > 1 && joined.length > SUMMARY_CHAR_LIMIT) {
+    entries.shift();
+    joined = entries.join(SUMMARY_ENTRY_SEPARATOR);
+  }
+
+  return joined;
 }
 
 function normalizeMessage(item) {

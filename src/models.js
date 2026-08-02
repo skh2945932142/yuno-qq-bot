@@ -128,6 +128,10 @@ const UserProfileMemorySchema = new mongoose.Schema({
   emojiStyle: { type: String, default: '' },
   responsePreference: { type: String, default: '' },
   humorStyle: { type: String, default: '' },
+  // Decayed vote counts per inferred style trait, e.g.
+  // { tonePreference: { '温柔': 3.2, '直接': 0.8 } }. A trait only reaches the
+  // fields above once its evidence crosses the threshold in profile-memory.js.
+  styleEvidence: { type: mongoose.Schema.Types.Mixed, default: {} },
   styleLastUpdated: { type: Date, default: null },
   memeOptOut: { type: Boolean, default: false },
   profileSummary: { type: String, default: '' },
@@ -156,6 +160,11 @@ const UserMemoryEventSchema = new mongoose.Schema({
 }, { minimize: false });
 UserMemoryEventSchema.index({ platform: 1, userId: 1, createdAt: -1 });
 UserMemoryEventSchema.index({ platform: 1, userId: 1, expiresAt: 1 });
+// expiresAt was only ever honoured in application code, so expired memories
+// accumulated forever in Mongo while their Qdrant vectors kept consuming the
+// retrieval budget. A TTL index makes expiry real. Documents with a null
+// expiresAt are never touched by TTL, so permanent memories stay put.
+UserMemoryEventSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 export const UserMemoryEvent = mongoose.model('UserMemoryEvent', UserMemoryEventSchema);
 
 const MemeAssetSchema = new mongoose.Schema({
@@ -258,4 +267,9 @@ const DeliveryRecordSchema = new mongoose.Schema({
   timestamps: true,
 });
 DeliveryRecordSchema.index({ status: 1, lockedUntil: 1 });
+// One record is written per user-visible delivery, making this the highest-write
+// collection in the database with no prior retention. The records only need to
+// outlive the retry window; a week keeps them useful for incident review.
+const DELIVERY_RECORD_RETENTION_SECONDS = 7 * 24 * 60 * 60;
+DeliveryRecordSchema.index({ createdAt: 1 }, { expireAfterSeconds: DELIVERY_RECORD_RETENTION_SECONDS });
 export const DeliveryRecord = mongoose.model('DeliveryRecord', DeliveryRecordSchema);

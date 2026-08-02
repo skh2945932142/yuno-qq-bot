@@ -265,7 +265,7 @@ async function createChatCompletion(messages, options = {}) {
         operation
       ),
       {
-        retries: config.retryAttempts,
+        retries: options.retries ?? config.retryAttempts,
         delayMs: config.retryDelayMs,
         category: 'model',
         label: 'chat completion',
@@ -456,6 +456,11 @@ export async function analyzeMessage(text, context = {}, options = {}) {
       model: options.model,
       promptVersion: options.promptVersion || 'message-analysis/v1',
       operation: options.operation || 'analysis',
+      // Callers that treat analysis as best-effort can bound it and skip retries,
+      // so an abandoned classification does not keep a request open in the
+      // background after the caller has already moved on.
+      timeoutMs: options.timeoutMs,
+      retries: options.retries,
     });
 
     const raw = readFirstChoiceContent(response, '{}');

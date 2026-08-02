@@ -69,6 +69,18 @@ function createDeps() {
       onUserRecord: false,
     }),
     chat: async (_messages, _systemPrompt, userTurn) => `mock:${userTurn || 'ok'}`,
+    // Private chat now runs a semantic classifier alongside context loading;
+    // without this stub the mock smoke would reach the real provider.
+    analyzeMessage: async () => ({
+      intent: 'chat',
+      sentiment: 'neutral',
+      relevance: 0.5,
+      confidence: 0.6,
+      shouldReply: true,
+      reason: 'mock-analysis',
+      topics: [],
+      replyStyle: 'calm',
+    }),
   };
 }
 

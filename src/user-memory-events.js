@@ -153,3 +153,45 @@ export async function listActiveUserMemoryEvents({ userId, limit = 4, now = new 
     ],
   }).sort({ importanceScore: -1, createdAt: -1 }).limit(limit);
 }
+
+// lastReferencedAt was written as null and never updated, so a memory that the
+// bot leaned on every day expired on the same fixed schedule as one that was
+// never recalled. Touching it on every hit turns retrieval into the renewal
+// signal: useful memories stay alive, unused ones age out on their own.
+export async function touchReferencedMemoryEvents(memoryEvents = [], { now = new Date() } = {}, deps = {}) {
+  if (!deps.model && !isDbReady()) {
+    return { touched: 0 };
+  }
+
+  const entries = (Array.isArray(memoryEvents) ? memoryEvents : [])
+    .map((item) => ({
+      memoryId: String(item?.memoryId || '').trim(),
+      importanceScore: Number(item?.importanceScore || 0),
+    }))
+    .filter((item) => item.memoryId);
+  if (entries.length === 0) {
+    return { touched: 0 };
+  }
+
+  const model = deps.model || UserMemoryEvent;
+  // Group by renewed expiry so high-importance memories keep their longer TTL
+  // instead of every hit collapsing to the same window.
+  const byExpiry = new Map();
+  for (const entry of entries) {
+    const expiresAt = buildExpiresAt(entry.importanceScore, now);
+    const key = expiresAt.getTime();
+    if (!byExpiry.has(key)) byExpiry.set(key, { expiresAt, ids: [] });
+    byExpiry.get(key).ids.push(entry.memoryId);
+  }
+
+  let touched = 0;
+  for (const { expiresAt, ids } of byExpiry.values()) {
+    await model.updateMany(
+      { memoryId: { $in: ids } },
+      { $set: { lastReferencedAt: now, expiresAt } }
+    );
+    touched += ids.length;
+  }
+
+  return { touched };
+}

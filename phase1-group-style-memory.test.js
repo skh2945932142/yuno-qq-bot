@@ -60,3 +60,36 @@ test('buildReplyContext includes group style profile when available', () => {
 
   assert.match(prompt, /群风格=群风格偏短句，玩梗密度高/);
 });
+
+test('group style stays adaptive after a very long history', () => {
+  // sampleCount used to grow without bound, so the learning rate decayed to 1/n
+  // and the profile froze: with 50k samples, 60 new messages moved averageLength
+  // by less than 0.1. The effective weight is now capped, turning this into an
+  // exponential moving average with a bounded time constant.
+  const saturated = {
+    sampleCount: 50000,
+    averageLength: 10,
+    memeRate: 0,
+    emojiRate: 0,
+    textEmoteRate: 0,
+  };
+  const longMessage = '这是一条明显更长的群消息，用来验证平均长度还能被新样本带动'.repeat(2);
+
+  const advance = (profile, times) => {
+    let next = profile;
+    for (let index = 0; index < times; index += 1) {
+      next = updateGroupStyleProfile(next, { text: longMessage, analysis: { topics: [] } });
+    }
+    return next;
+  };
+
+  const after60 = advance(saturated, 60);
+  assert.ok(
+    after60.averageLength > 18,
+    `averageLength should follow new samples, got ${after60.averageLength}`
+  );
+
+  const after300 = advance(saturated, 300);
+  assert.ok(after300.averageLength > after60.averageLength);
+  assert.equal(after300.replyLength, 'balanced');
+});

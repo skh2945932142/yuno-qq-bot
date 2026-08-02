@@ -51,9 +51,21 @@
 | AMBIENT_JOIN_COOLDOWN_MS, AMBIENT_JOIN_MAX_PER_DAY | Cooldown and daily cap for ambient joins (only used when AMBIENT_JOIN_ENABLED=true). |
 | PROACTIVE_MESSAGES_ENABLED | Scheduled proactive group messages at 07:00 and 23:00. Disabled by default; the 21:00 daily digest is unaffected. |
 
-Explicit summons (private chat, @, commands, poke) are never dropped by the participation policy. Consecutive-reply counters and ambient-join cooldowns live in process memory only, so they reset on restart and are not stored in MongoDB.
+Explicit commands and pokes are never dropped by the participation policy. Private chat always answers messages that carry real content, and is exempt from the consecutive-reply counter and the low-relevance sampling; only content-free private messages (a single character, punctuation only, emoji only) are downgraded to a reaction or silence. Consecutive-reply counters and ambient-join cooldowns live in process memory only, so they reset on restart and are not stored in MongoDB.
+
+Private-chat reactions rely on the optional OneBot `set_msg_emoji_like` action. Where the protocol build does not support it, the action self-disables after the first failure and the downgrade becomes a silent skip.
 
 With AMBIENT_JOIN_ENABLED=false and PROACTIVE_MESSAGES_ENABLED=false the bot never speaks first: it only answers explicit summons and tool or automation deliveries.
+
+## Memory and semantics
+
+| Variable | Purpose |
+|---|---|
+| MEMORY_EXTRACTION_ENABLED | Extract durable memory events from user turns after each reply. |
+| PRIVATE_SEMANTIC_ANALYSIS_ENABLED | Run an LLM sentiment/intent pass for private chat in parallel with context loading. Enabled by default; disabling it falls back to the rule tables in `src/utils.js`. |
+| PRIVATE_SEMANTIC_TIMEOUT_MS | Hard ceiling for that pass, default 3000. On timeout the rule-based values are kept and the reply is not delayed. |
+
+Retention is enforced by MongoDB TTL indexes: `UserMemoryEvent.expiresAt` (expires at the stored time, renewed whenever a memory is actually recalled) and `DeliveryRecord.createdAt` (seven days). A nightly job reconciles Qdrant against MongoDB and deletes vectors whose backing document is gone, expired or disabled.
 
 ## Meme cache
 

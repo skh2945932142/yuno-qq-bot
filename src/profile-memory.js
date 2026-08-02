@@ -3,6 +3,62 @@ import { buildUserProfileKey } from './chat/session.js';
 import { uniqueCompact } from './utils.js';
 import { getSpecialUserByUserId } from './special-users.js';
 
+// Style traits used to be written from a single regex hit and could then only be
+// overwritten by another non-empty hit, never cleared. One stray "语气温柔点"
+// pinned tonePreference for good. These four traits are inferred rather than
+// stated, so they now need repeated evidence before they reach the profile, and
+// competing observations decay so a genuine change in style can take over.
+// Explicit statements (preferredName, dislikes, relationshipPreference, bond
+// memories) still apply immediately - the user asked for those directly.
+const EVIDENCE_FIELDS = ['tonePreference', 'emojiStyle', 'responsePreference', 'humorStyle'];
+const EVIDENCE_THRESHOLD = 3;
+const EVIDENCE_DECAY = 0.8;
+const EVIDENCE_MAX = 12;
+const EVIDENCE_FLOOR = 0.3;
+
+function accumulateEvidence(current = {}, observedValue = '') {
+  const next = {};
+  for (const [key, rawCount] of Object.entries(current || {})) {
+    const count = Number(rawCount);
+    if (!Number.isFinite(count) || count <= 0) continue;
+    if (key === observedValue) {
+      next[key] = count;
+      continue;
+    }
+    const decayed = Math.round(count * EVIDENCE_DECAY * 100) / 100;
+    if (decayed >= EVIDENCE_FLOOR) next[key] = decayed;
+  }
+
+  if (observedValue) {
+    next[observedValue] = Math.min(EVIDENCE_MAX, (next[observedValue] || 0) + 1);
+  }
+
+  return next;
+}
+
+function resolveEvidenceWinner(evidence = {}) {
+  let winner = '';
+  let best = 0;
+  for (const [key, rawCount] of Object.entries(evidence || {})) {
+    const count = Number(rawCount);
+    if (Number.isFinite(count) && count > best) {
+      winner = key;
+      best = count;
+    }
+  }
+  return best >= EVIDENCE_THRESHOLD ? winner : '';
+}
+
+export function mergeStyleEvidence(currentEvidence = {}, observed = {}) {
+  const nextEvidence = {};
+  const resolved = {};
+  for (const field of EVIDENCE_FIELDS) {
+    nextEvidence[field] = accumulateEvidence(currentEvidence?.[field], observed[field] || '');
+    resolved[field] = resolveEvidenceWinner(nextEvidence[field]);
+  }
+  return { evidence: nextEvidence, resolved };
+}
+
 function truncateText(text, limit = 80) {
   const normalized = String(text || '').trim();
   if (normalized.length <= limit) {
@@ -410,6 +466,7 @@ export async function ensureUserProfileMemory({ platform = 'qq', userId, userNam
         emojiStyle: '',
         responsePreference: '',
         humorStyle: '',
+        styleEvidence: {},
         styleLastUpdated: null,
         memeOptOut: false,
       },
@@ -425,9 +482,15 @@ export async function updateUserProfileMemory(profile, { text, analysis, userNam
     return profile;
   }
 
+  const { evidence: styleEvidence, resolved: resolvedStyle } = mergeStyleEvidence(
+    profile.styleEvidence,
+    extracted.update
+  );
+
   const nextProfile = {
     preferredName: extracted.update.preferredName || profile.preferredName || '',
-    tonePreference: extracted.update.tonePreference || profile.tonePreference || '',
+    // Inferred traits come from accumulated evidence, not from this single turn.
+    tonePreference: resolvedStyle.tonePreference || profile.tonePreference || '',
     favoriteTopics: uniqueCompact([
       ...extracted.update.favoriteTopics,
       ...(profile.favoriteTopics || []),
@@ -450,9 +513,9 @@ export async function updateUserProfileMemory(profile, { text, analysis, userNam
       ...extracted.update.frequentPhrases,
       ...(profile.frequentPhrases || []),
     ], 8),
-    emojiStyle: extracted.update.emojiStyle || profile.emojiStyle || '',
-    responsePreference: extracted.update.responsePreference || profile.responsePreference || '',
-    humorStyle: extracted.update.humorStyle || profile.humorStyle || '',
+    emojiStyle: resolvedStyle.emojiStyle || profile.emojiStyle || '',
+    responsePreference: resolvedStyle.responsePreference || profile.responsePreference || '',
+    humorStyle: resolvedStyle.humorStyle || profile.humorStyle || '',
     bondMemories: uniqueCompact([
       ...(resolvedSpecialUser?.memorySeeds || []),
       ...extracted.update.bondMemories,
@@ -475,6 +538,7 @@ export async function updateUserProfileMemory(profile, { text, analysis, userNam
       $set: {
         displayName: String(userName || profile.displayName || ''),
         ...nextProfile,
+        styleEvidence,
         profileSummary: buildProfileSummary(nextProfile),
         specialBondSummary,
         styleLastUpdated: hasStableStyleObservation(extracted.update)

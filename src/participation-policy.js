@@ -21,6 +21,16 @@ const EXPLICIT_SIGNALS = new Set([
   'poke',
   'command',
 ]);
+// Commands and pokes are answered in every scene, however short they are.
+const HARD_REPLY_REASONS = new Set([
+  'poke-trigger',
+  'command-trigger',
+  'admin-command-pass',
+]);
+const HARD_REPLY_SIGNALS = new Set([
+  'poke',
+  'command',
+]);
 const PUNCTUATION_ONLY_REGEX = /^[\s\p{P}\p{S}]+$/u;
 const EMOJI_ONLY_REGEX = /^(?:[\s\p{Extended_Pictographic}\uFE0F\u200D]|\p{P})+$/u;
 
@@ -72,13 +82,21 @@ function normalizedInboundText(event = {}) {
   return stripCqCodes(String(event.rawText ?? event.text ?? '')).trim();
 }
 
-function hasExplicitTrigger(event = {}, analysis = {}) {
-  if (event.chatType === 'private') return true;
+function ruleSignalsOf(analysis = {}) {
+  return Array.isArray(analysis.ruleSignals) ? analysis.ruleSignals : [];
+}
+
+function isHardExplicitTrigger(event = {}, analysis = {}) {
+  if (String(event.source?.subType || '') === 'poke') return true;
+  if (HARD_REPLY_REASONS.has(String(analysis.reason || ''))) return true;
+  if (ruleSignalsOf(analysis).some((signal) => HARD_REPLY_SIGNALS.has(String(signal)))) return true;
+  return Boolean(parseCommand(normalizedInboundText(event)));
+}
+
+function hasExplicitGroupTrigger(event = {}, analysis = {}) {
   if (event.mentionsBot) return true;
-  const reason = String(analysis.reason || '');
-  if (EXPLICIT_REASONS.has(reason)) return true;
-  const signals = Array.isArray(analysis.ruleSignals) ? analysis.ruleSignals : [];
-  if (signals.some((signal) => EXPLICIT_SIGNALS.has(String(signal)))) return true;
+  if (EXPLICIT_REASONS.has(String(analysis.reason || ''))) return true;
+  if (ruleSignalsOf(analysis).some((signal) => EXPLICIT_SIGNALS.has(String(signal)))) return true;
   return Boolean(parseCommand(normalizedInboundText(event)));
 }
 
@@ -123,15 +141,34 @@ export function resolveParticipationDecision({
   random = null,
 } = {}) {
   const settings = resolveSettings(runtimeConfig);
-  const explicit = hasExplicitTrigger(event, analysis);
-  if (explicit) {
+  const rng = buildRandom(event, 'participation', random);
+
+  if (isHardExplicitTrigger(event, analysis)) {
     return { mode: 'reply', reason: 'explicit-trigger' };
   }
 
-  const rng = buildRandom(event, 'participation', random);
+  const lowInformation = isLowInformationInbound(event);
+
+  // Private chat used to short-circuit to reply for every single message, so a
+  // burst of "嗯" / "在吗" each triggered a full generated reply. Content-free
+  // messages now get an emoji or nothing. Anything with substance still always
+  // gets a real reply: no streak limit and no random sampling in private chat.
+  if (event.chatType === 'private') {
+    if (lowInformation) {
+      return rng() < settings.reactionProbability
+        ? { mode: 'reaction', reason: 'low-information-inbound' }
+        : { mode: 'skip', reason: 'low-information-inbound' };
+    }
+    return { mode: 'reply', reason: 'private-default-reply' };
+  }
+
+  if (hasExplicitGroupTrigger(event, analysis)) {
+    return { mode: 'reply', reason: 'explicit-trigger' };
+  }
+
   const relevance = Number(analysis.relevance || 0);
 
-  if (isLowInformationInbound(event)) {
+  if (lowInformation) {
     return rng() < settings.reactionProbability
       ? { mode: 'reaction', reason: 'low-information-inbound' }
       : { mode: 'skip', reason: 'low-information-inbound' };

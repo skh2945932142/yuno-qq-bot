@@ -1,7 +1,7 @@
 ﻿import { config } from './config.js';
 import { readFile } from 'node:fs/promises';
 import { logger } from './logger.js';
-import { chat, tts } from './minimax.js';
+import { chat, tts, analyzeMessage } from './minimax.js';
 import { sendReply, sendStructuredReply, sendVoice } from './sender.js';
 import { analyzeTrigger, analyzeTriggerFast } from './message-analysis.js';
 import { resolveEmotion, shouldSendVoiceForEmotion } from './emotion-engine.js';
@@ -36,7 +36,7 @@ import { formatToolResultAsYuno, normalizeFormatterOutputs } from './yuno-format
 import { resolveReplyLengthProfile } from './reply-length.js';
 import { resolveReplyIntentPlan } from './reply-intent-plan.js';
 import { resolvePersonalityStrategy } from './personality-strategy.js';
-import { persistUserMemoryEvents } from './user-memory-events.js';
+import { persistUserMemoryEvents, touchReferencedMemoryEvents } from './user-memory-events.js';
 import { collectMemeAssetForEvent } from './meme-collector.js';
 import { indexMemeAssetSemantics, indexUserMemoryEvents, retrieveMemoryContext } from './memory-retrieval.js';
 import { markMemeUsed } from './meme-library.js';
@@ -811,6 +811,7 @@ export function createWorkflowDeps(deps = {}, options = {}) {
   return {
     analyzeTrigger: deps.analyzeTrigger || analyzeTrigger,
     analyzeTriggerFast: deps.analyzeTriggerFast || analyzeTriggerFast,
+    analyzeMessage: deps.analyzeMessage || analyzeMessage,
     planIncomingTask: deps.planIncomingTask || planIncomingTask,
     ensureRelation: deps.ensureRelation || ensureRelation,
     ensureUserState: deps.ensureUserState || ensureUserState,
@@ -823,6 +824,7 @@ export function createWorkflowDeps(deps = {}, options = {}) {
     appendConversationMessages: deps.appendConversationMessages || appendConversationMessages,
     updateUserProfileMemory: deps.updateUserProfileMemory || updateUserProfileMemory,
     persistUserMemoryEvents: deps.persistUserMemoryEvents || persistUserMemoryEvents,
+    touchReferencedMemoryEvents: deps.touchReferencedMemoryEvents || touchReferencedMemoryEvents,
     collectMemeAssetForEvent: deps.collectMemeAssetForEvent || collectMemeAssetForEvent,
     indexUserMemoryEvents: deps.indexUserMemoryEvents || indexUserMemoryEvents,
     indexMemeAssetSemantics: deps.indexMemeAssetSemantics || indexMemeAssetSemantics,
@@ -1008,6 +1010,87 @@ async function resolveContext(event, precomputed, trace, deps, options) {
   };
 }
 
+const PRIVATE_SEMANTIC_TIMEOUT_MS = 3000;
+
+// Private chat is answered unconditionally, so analyzeTriggerFast returns before
+// the classifier ever runs and sentiment/intent come from regex rules only. That
+// left the persona layer's `challenge` / `help` / negative-sentiment branches
+// unreachable in the scene where they matter most. This adds a semantic pass that
+// runs concurrently with context loading, so the cost is max(context, llm) rather
+// than the sum, and falls back to the rule values on timeout or error.
+async function resolvePrivateSemanticAnalysis(event, fastAnalysis, deps, trace, options = {}) {
+  const runtimeConfig = options.runtimeConfig || config;
+  if (runtimeConfig.privateSemanticAnalysisEnabled === false) return null;
+  // Commands and pokes are already structured; classifying them buys nothing.
+  if (shouldUseLightweightContext(event, fastAnalysis)) return null;
+
+  const text = stripCqCodes(event.rawText || event.text || '');
+  if (!text) return null;
+
+  const timeoutMs = Math.max(
+    500,
+    Number(runtimeConfig.privateSemanticTimeoutMs || PRIVATE_SEMANTIC_TIMEOUT_MS)
+  );
+  let timer = null;
+
+  try {
+    const semantic = await Promise.race([
+      deps.analyzeMessage(text, {
+        isAdmin: String(event.userId || '') === String(runtimeConfig.adminQq || ''),
+        ruleSignals: fastAnalysis.ruleSignals || [],
+      }, {
+        traceContext: trace,
+        operation: 'private-semantic-analysis',
+        // The inner timeout aborts the HTTP request; the race below is the hard
+        // ceiling that keeps the reply path moving even if a provider ignores it.
+        timeoutMs: timeoutMs,
+        retries: 0,
+      }),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+
+    recordWorkflowMetric('yuno_private_semantic_analysis_total', 1, {
+      result: semantic ? 'ok' : 'timeout',
+    });
+    return semantic;
+  } catch (error) {
+    recordWorkflowMetric('yuno_private_semantic_analysis_total', 1, { result: 'failed' });
+    (deps.logger || logger).warn('analysis', 'Private semantic analysis failed; keeping rule signals', {
+      traceId: trace?.traceId,
+      chatId: event.chatId,
+      userId: event.userId,
+      message: error.message,
+    });
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function mergePrivateSemanticAnalysis(fastAnalysis, semantic) {
+  if (!semantic) return fastAnalysis;
+
+  return {
+    ...fastAnalysis,
+    // shouldRespond and relevance stay as the policy decided: private chat is
+    // always answered, and the classifier is only here to sharpen the semantic
+    // fields that drive persona strategy, emotion and affection.
+    intent: semantic.intent || fastAnalysis.intent,
+    sentiment: semantic.sentiment || fastAnalysis.sentiment,
+    topics: Array.isArray(semantic.topics) && semantic.topics.length > 0
+      ? semantic.topics
+      : fastAnalysis.topics,
+    replyStyle: semantic.replyStyle || fastAnalysis.replyStyle,
+    confidence: Math.max(
+      Number(fastAnalysis.confidence || 0),
+      Number(semantic.confidence || 0)
+    ),
+    semanticSource: 'llm',
+  };
+}
+
 export async function shouldRespondToEvent(event, options = {}) {
   const deps = createWorkflowDeps(options.deps);
   const normalizedEvent = normalizeLegacyMessageEvent(event);
@@ -1030,6 +1113,45 @@ export async function shouldRespondToEvent(event, options = {}) {
         chat_type: normalizedEvent.chatType,
         reason: fastAnalysis.reason,
       });
+
+      // Private chat: load context and classify semantics concurrently, then
+      // return the context so processIncomingMessage reuses it instead of
+      // loading it a second time.
+      if (normalizedEvent.chatType === 'private') {
+        const [context, semantic] = await Promise.all([
+          buildWorkflowContext(normalizedEvent, trace, deps, {
+            lightweight: shouldUseLightweightContext(normalizedEvent, fastAnalysis),
+            runtimeConfig: options.runtimeConfig,
+          }),
+          resolvePrivateSemanticAnalysis(normalizedEvent, fastAnalysis, deps, trace, options),
+        ]);
+        const analysis = mergePrivateSemanticAnalysis(fastAnalysis, semantic);
+
+        recordWorkflowMetric('yuno_trigger_decisions_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          decision: analysis.shouldRespond ? 'allow' : 'deny',
+          reason: analysis.reason,
+        });
+
+        if (options.finalizeTrace !== false) {
+          finalizeTrace(trace, {
+            shouldRespond: analysis.shouldRespond,
+            reason: analysis.reason,
+            chatType: normalizedEvent.chatType,
+            messageId: normalizedEvent.messageId,
+            decisionReason: analysis.reason,
+            fastPath: true,
+            semanticSource: analysis.semanticSource || 'rules',
+          });
+        }
+
+        return {
+          ...context,
+          event: normalizedEvent,
+          analysis,
+          trace,
+        };
+      }
 
       recordWorkflowMetric('yuno_trigger_decisions_total', 1, {
         chat_type: normalizedEvent.chatType,
@@ -1247,6 +1369,16 @@ async function persistReplyState(context, payload, trace, deps, options = {}) {
     },
   });
 
+  const referencedMemories = Array.isArray(context.memoryContext?.eventMemories)
+    ? context.memoryContext.eventMemories
+    : [];
+  if (referencedMemories.length > 0) {
+    namedTasks.push({
+      name: 'touch-referenced-memories',
+      run: () => deps.touchReferencedMemoryEvents(referencedMemories),
+    });
+  }
+
   if (Array.isArray(context.event?.attachments) && context.event.attachments.some((item) => item.type === 'image')) {
     namedTasks.push({
       name: 'analyze-meme-semantics',
@@ -1273,6 +1405,7 @@ async function persistReplyState(context, payload, trace, deps, options = {}) {
         groupId: context.event.chatId,
         analysis: payload.analysis,
         summary: payload.summary,
+        styleText: payload.userTurn,
       }),
     });
   }
@@ -2195,6 +2328,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
         dailyMood,
         segments,
         remainingBudgetMs: getRemainingReplyBudgetMs(),
+        elapsedMs: Date.now() - replyBudgetStartedAt,
         runtimeConfig: segmentationConfig,
       }) || { preDelayMs: 0, segmentDelays: [], reason: 'unavailable' };
       cadencePreDelayMs = Math.max(0, Number(cadence.preDelayMs || 0));

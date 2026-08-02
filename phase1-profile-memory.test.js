@@ -4,6 +4,7 @@ import {
   buildProfileSummary,
   buildSpecialBondSummary,
   extractStableProfileUpdate,
+  mergeStyleEvidence,
 } from './src/profile-memory.js';
 
 test('extractStableProfileUpdate captures stable user preferences', () => {
@@ -103,4 +104,46 @@ test('buildSpecialBondSummary renders special relationship memory', () => {
   assert.match(summary, /Scathach/);
   assert.match(summary, /师父/);
   assert.match(summary, /约定/);
+});
+
+test('inferred style traits need repeated evidence before entering the profile', () => {
+  let evidence = {};
+  const observe = (value) => {
+    const result = mergeStyleEvidence(evidence, { tonePreference: value });
+    evidence = result.evidence;
+    return result.resolved.tonePreference;
+  };
+
+  // A single regex hit used to pin the trait permanently.
+  assert.equal(observe('温柔'), '');
+  assert.equal(observe('温柔'), '');
+  assert.equal(observe('温柔'), '温柔');
+});
+
+test('style evidence lets a genuine change of style take over', () => {
+  let evidence = {};
+  for (let index = 0; index < 4; index += 1) {
+    evidence = mergeStyleEvidence(evidence, { tonePreference: '温柔' }).evidence;
+  }
+
+  let resolved = '温柔';
+  for (let index = 0; index < 3; index += 1) {
+    const result = mergeStyleEvidence(evidence, { tonePreference: '直接' });
+    evidence = result.evidence;
+    resolved = result.resolved.tonePreference;
+  }
+
+  assert.equal(resolved, '直接');
+});
+
+test('style evidence forgets a one-off misfire', () => {
+  let result = mergeStyleEvidence({}, { humorStyle: 'sarcastic' });
+  assert.equal(result.resolved.humorStyle, '');
+
+  for (let index = 0; index < 6; index += 1) {
+    result = mergeStyleEvidence(result.evidence, {});
+  }
+
+  assert.deepEqual(result.evidence.humorStyle, {});
+  assert.equal(result.resolved.humorStyle, '');
 });

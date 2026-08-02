@@ -87,6 +87,7 @@ export function resolveReplyCadence({
   dailyMood = null,
   segments = [],
   remainingBudgetMs = null,
+  elapsedMs = 0,
   runtimeConfig = config,
   random = null,
 } = {}) {
@@ -113,6 +114,16 @@ export function resolveReplyCadence({
     settings.minPreDelayMs,
     Math.max(settings.minPreDelayMs, settings.maxPreDelayMs)
   );
+
+  // The pre-delay models Yuno reading and thinking, but generation already made
+  // the user wait for exactly that. Adding the full delay on top of a 3s model
+  // call just makes a slow reply slower, so credit the time already spent. The
+  // floor is 0 here rather than minPreDelayMs: once the wait has been paid, there
+  // is nothing left to simulate.
+  const alreadyWaitedMs = Math.max(0, Number(elapsedMs) || 0);
+  if (alreadyWaitedMs > 0) {
+    preDelayMs = Math.max(0, preDelayMs - alreadyWaitedMs);
+  }
 
   let segmentDelays = normalizedSegments.map((segment, index) => {
     if (index === 0) return 0;

@@ -4,6 +4,41 @@ import { buildChatScopeId, buildSessionKey } from './chat/session.js';
 import { extractPreferences, uniqueCompact } from './utils.js';
 import { getSpecialUserByUserId } from './special-users.js';
 
+// Affection used to be a one-way counter: the delta baseline was +1 and nothing
+// decayed, so any user who kept talking reached 100 in about 70 turns and stayed
+// there, which flattened every affection-based relationship stage. It now decays
+// with silence and can genuinely fall on negative interactions.
+const AFFECTION_BASELINE = 30;
+const AFFECTION_MAX = 100;
+const AFFECTION_DECAY_INTERVAL_MS = 3 * 24 * 60 * 60 * 1000;
+const AFFECTION_DECAY_STEP = 1;
+
+function resolveAffectionLowerBound(specialUser = null) {
+  return Math.max(AFFECTION_BASELINE, Number(specialUser?.affectionFloor || 0));
+}
+
+function countDecaySteps(lastInteract, now) {
+  const previous = lastInteract ? new Date(lastInteract).getTime() : Number.NaN;
+  if (!Number.isFinite(previous)) return 0;
+  const elapsed = now - previous;
+  if (!Number.isFinite(elapsed) || elapsed <= 0) return 0;
+  return Math.floor(elapsed / AFFECTION_DECAY_INTERVAL_MS);
+}
+
+// Read-side decay: callers see the decayed value immediately, but nothing is
+// written until the next updateRelationProfile settles it in the pipeline. That
+// keeps prompts and tools honest without adding a write to every read.
+export function resolveDecayedAffection(relation, now = Date.now(), specialUser = null) {
+  const current = Number(relation?.affection ?? AFFECTION_BASELINE);
+  if (!Number.isFinite(current)) return AFFECTION_BASELINE;
+  const steps = countDecaySteps(relation?.lastInteract, now);
+  if (steps <= 0) return current;
+  const lowerBound = resolveAffectionLowerBound(
+    specialUser || getSpecialUserByUserId(relation?.userId)
+  );
+  return Math.max(lowerBound, current - (steps * AFFECTION_DECAY_STEP));
+}
+
 function buildMemorySummaryPrefix({ preferences, favoriteTopics, specialUser }) {
   const segments = [];
 
@@ -72,7 +107,8 @@ async function findExistingDoc(Model, session) {
   return doc;
 }
 
-export async function ensureRelation(session) {
+export async function ensureRelation(session, options = {}) {
+  const now = Number(options.now || Date.now());
   const specialUser = getSpecialUserByUserId(session.userId);
   const existing = await findExistingDoc(Relation, session);
   if (existing) {
@@ -84,6 +120,12 @@ export async function ensureRelation(session) {
         { returnDocument: 'after' }
       );
       return updated || existing;
+    }
+    // Surface the decayed value without writing it; updateRelationProfile
+    // settles the same decay against $lastInteract on the next interaction.
+    const decayed = resolveDecayedAffection(existing, now, specialUser);
+    if (decayed !== existing.affection) {
+      existing.affection = decayed;
     }
     return existing;
   }
@@ -121,11 +163,13 @@ export async function ensureUserState(session) {
   );
 }
 
-export async function updateRelationProfile(relation, { text, analysis }) {
+export async function updateRelationProfile(relation, { text, analysis }, options = {}) {
   const specialUser = getSpecialUserByUserId(relation.userId);
   const preferences = uniqueCompact([
-    ...(relation.preferences || []),
+    // Newly extracted preferences come first: with the old order a full list of
+    // six froze permanently and nothing new could ever enter.
     ...extractPreferences(text),
+    ...(relation.preferences || []),
   ], 6);
 
   const favoriteTopics = uniqueCompact([
@@ -135,7 +179,7 @@ export async function updateRelationProfile(relation, { text, analysis }) {
 
   let delta = 1;
   if (analysis.sentiment === 'positive') delta += 1;
-  if (analysis.sentiment === 'negative') delta -= 2;
+  if (analysis.sentiment === 'negative') delta -= 3;
   if (analysis.intent === 'help') delta += 1;
   if (analysis.intent === 'challenge') delta -= 1;
   if (relation.userId === config.adminQq) delta += 1;
@@ -143,7 +187,7 @@ export async function updateRelationProfile(relation, { text, analysis }) {
   if (analysis.ruleSignals?.includes('special-keyword')) delta += 1;
   if (analysis.ruleSignals?.includes('bond-memory-hit')) delta += 1;
 
-  const affectionFloor = specialUser?.affectionFloor || 0;
+  const affectionLowerBound = resolveAffectionLowerBound(specialUser);
   const memorySummaryPrefix = buildMemorySummaryPrefix({
     preferences,
     favoriteTopics,
@@ -153,13 +197,34 @@ export async function updateRelationProfile(relation, { text, analysis }) {
     ...(relation.tags || []),
     ...(specialUser ? ['special-user', specialUser.personaMode] : []),
   ], 8);
-  const now = new Date();
+  const now = new Date(Number(options.now || Date.now()));
   const sessionFields = buildSessionFields({
     platform: relation.platform || 'qq',
     chatType: relation.chatType || 'group',
     chatId: relation.chatId || relation.groupId,
     userId: relation.userId,
   });
+  // Settle the silence decay in the same pipeline that applies the delta, using
+  // the stored $lastInteract rather than the caller's in-memory copy. $max
+  // against 0 guards against a lastInteract in the future (clock skew).
+  const decayPenalty = {
+    $multiply: [
+      AFFECTION_DECAY_STEP,
+      {
+        $max: [
+          0,
+          {
+            $floor: {
+              $divide: [
+                { $subtract: [now, { $ifNull: ['$lastInteract', now] }] },
+                AFFECTION_DECAY_INTERVAL_MS,
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
 
   const updated = await Relation.findOneAndUpdate(
     { _id: relation._id },
@@ -169,13 +234,18 @@ export async function updateRelationProfile(relation, { text, analysis }) {
           ...sessionFields,
           affection: {
             $max: [
-              affectionFloor,
+              affectionLowerBound,
               {
                 $min: [
-                  100,
+                  AFFECTION_MAX,
                   {
                     $add: [
-                      { $ifNull: ['$affection', Math.max(30, affectionFloor)] },
+                      {
+                        $subtract: [
+                          { $ifNull: ['$affection', affectionLowerBound] },
+                          decayPenalty,
+                        ],
+                      },
                       delta,
                     ],
                   },

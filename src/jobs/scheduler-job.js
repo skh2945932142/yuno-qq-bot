@@ -21,6 +21,7 @@ import {
 } from '../automation-tasks.js';
 import { isWithinQuietHours, listGroupRules } from '../group-automation.js';
 import { runYunoConversation } from '../yuno-core.js';
+import { cleanupExpiredMemoryVectors } from '../memory-retrieval.js';
 import { recordWorkflowMetric } from '../metrics.js';
 
 const SCHEDULER_INSTANCE_ID = process.env.YUNO_SCHEDULER_INSTANCE_ID
@@ -318,6 +319,15 @@ export function createScheduler(options = {}) {
       tasks.push(cron.schedule('*/10 * * * *', () => {
         cleanupGroupEventsRetention().catch((error) => {
           logger.warn('scheduler', 'Group event cleanup failed', { message: error.message });
+        });
+      }, { timezone }));
+
+      // Runs off-peak because it scrolls the whole vector collection. Mongo's
+      // TTL index expires the documents; this reconciles Qdrant against them so
+      // dead vectors stop occupying retrieval slots.
+      tasks.push(cron.schedule('25 4 * * *', () => {
+        cleanupExpiredMemoryVectors().catch((error) => {
+          logger.warn('scheduler', 'Memory vector cleanup failed', { message: error.message });
         });
       }, { timezone }));
 

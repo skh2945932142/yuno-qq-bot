@@ -41,7 +41,6 @@ test('explicit summons are never silenced', () => {
     { event: groupEvent({ rawText: '/help', text: '/help' }), analysis: { relevance: 0.1, ruleSignals: [] } },
     { event: groupEvent({ source: { postType: 'notice', subType: 'poke' } }), analysis: { reason: 'poke-trigger', relevance: 0.2 } },
     { event: groupEvent(), analysis: { reason: 'basic-direct-mention-pass', relevance: 0.2 } },
-    { event: { ...groupEvent(), chatType: 'private', chatId: '10001' }, analysis: { relevance: 0 } },
   ];
 
   for (const input of always) {
@@ -53,6 +52,98 @@ test('explicit summons are never silenced', () => {
     assert.equal(decision.mode, 'reply');
     assert.equal(decision.reason, 'explicit-trigger');
   }
+});
+
+test('private chat with real content always gets a full reply', () => {
+  resetParticipationState();
+  const decision = resolveParticipationDecision({
+    event: { ...groupEvent(), chatType: 'private', chatId: '10001' },
+    analysis: { relevance: 0 },
+    runtimeConfig: BASE_CONFIG,
+    random: () => 0,
+  });
+
+  // Private chat is no longer reported as an explicit summons: the reason now
+  // distinguishes "answered because it is private" from "answered because the
+  // user summoned the bot", which the participation metric can separate.
+  assert.deepEqual(decision, { mode: 'reply', reason: 'private-default-reply' });
+});
+
+test('private chat neither rate-limits consecutive replies nor samples them away', () => {
+  resetParticipationState();
+  const event = { ...groupEvent(), chatType: 'private', chatId: '10001' };
+  const now = Date.now();
+
+  for (let index = 0; index < 6; index += 1) {
+    recordParticipationReply(event, now);
+  }
+
+  const decision = resolveParticipationDecision({
+    event,
+    analysis: { relevance: 0 },
+    runtimeConfig: BASE_CONFIG,
+    now,
+    // A random draw of 0 would trigger both the reaction branch and the
+    // low-relevance sampling branch in group chat.
+    random: () => 0,
+  });
+
+  assert.deepEqual(decision, { mode: 'reply', reason: 'private-default-reply' });
+});
+
+test('private chat downgrades content-free messages to a reaction or silence', () => {
+  resetParticipationState();
+  const privateEvent = (text) => ({
+    ...groupEvent(),
+    chatType: 'private',
+    chatId: '10001',
+    rawText: text,
+    text,
+  });
+
+  for (const text of ['嗯', '。', '🤔', '？？']) {
+    const reaction = resolveParticipationDecision({
+      event: privateEvent(text),
+      analysis: { relevance: 0.4 },
+      runtimeConfig: BASE_CONFIG,
+      random: () => 0,
+    });
+    const skip = resolveParticipationDecision({
+      event: privateEvent(text),
+      analysis: { relevance: 0.4 },
+      runtimeConfig: BASE_CONFIG,
+      random: () => 0.9,
+    });
+
+    assert.deepEqual(reaction, { mode: 'reaction', reason: 'low-information-inbound' }, text);
+    assert.deepEqual(skip, { mode: 'skip', reason: 'low-information-inbound' }, text);
+  }
+});
+
+test('private chat still answers short commands and pokes', () => {
+  resetParticipationState();
+  const command = resolveParticipationDecision({
+    event: { ...groupEvent(), chatType: 'private', chatId: '10001', rawText: '/help', text: '/help' },
+    analysis: { relevance: 0 },
+    runtimeConfig: BASE_CONFIG,
+    random: () => 0.9,
+  });
+  const poke = resolveParticipationDecision({
+    event: {
+      ...groupEvent(),
+      chatType: 'private',
+      chatId: '10001',
+      rawText: '/poke',
+      text: '/poke',
+      source: { postType: 'notice', subType: 'poke' },
+    },
+    analysis: { reason: 'poke-trigger', relevance: 0 },
+    runtimeConfig: BASE_CONFIG,
+    random: () => 0.9,
+  });
+
+  assert.equal(command.mode, 'reply');
+  assert.equal(poke.mode, 'reply');
 });
 
 test('low information inbound becomes a reaction or a silent skip', () => {

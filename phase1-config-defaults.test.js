@@ -330,6 +330,8 @@ test('config exposes companion experience and external enhancement knobs', async
     EXTERNAL_TOOL_TIMEOUT_MS: '',
     MEMORY_EXTRACTION_ENABLED: '',
     MEME_VISION_ENABLED: '',
+    PRIVATE_SEMANTIC_ANALYSIS_ENABLED: '',
+    PRIVATE_SEMANTIC_TIMEOUT_MS: '',
   });
 
   assert.equal(config.botExperienceMode, 'companion');
@@ -337,6 +339,8 @@ test('config exposes companion experience and external enhancement knobs', async
   assert.equal(config.replyHardTimeoutMs, 22000);
   assert.equal(config.externalToolTimeoutMs, 4000);
   assert.equal(config.memoryExtractionEnabled, true);
+  assert.equal(config.privateSemanticAnalysisEnabled, true);
+  assert.equal(config.privateSemanticTimeoutMs, 3000);
   assert.equal(config.memeVisionEnabled, true);
   assert.equal(config.maxActiveRemindersPerUser, 20);
   assert.equal(config.maxActiveSubscriptionsPerUser, 10);

@@ -149,6 +149,37 @@ test('resolveReplyCadence compresses and then collapses under a tight budget', (
   assert.deepEqual(collapsed.segmentDelays, [0, 0]);
 });
 
+test('resolveReplyCadence credits time already spent generating the reply', () => {
+  const base = {
+    event: createEvent({ rawText: '在想一个问题，你怎么看', text: '在想一个问题，你怎么看' }),
+    segments: ['先说一句', '再补一句'],
+    random: NEUTRAL_RANDOM,
+  };
+
+  const cold = resolveReplyCadence(base);
+  const afterFastModel = resolveReplyCadence({ ...base, elapsedMs: 200 });
+  const afterSlowModel = resolveReplyCadence({ ...base, elapsedMs: 8000 });
+
+  assert.ok(cold.preDelayMs > 0);
+  assert.equal(afterFastModel.preDelayMs, Math.max(0, cold.preDelayMs - 200));
+  // A slow model call already made the user wait, so nothing is left to simulate.
+  assert.equal(afterSlowModel.preDelayMs, 0);
+  // Segment pauses sit between bubbles and are unrelated to generation time.
+  assert.deepEqual(afterSlowModel.segmentDelays, cold.segmentDelays);
+});
+
+test('resolveReplyCadence ignores a negative or unusable elapsed value', () => {
+  const base = {
+    event: createEvent(),
+    segments: ['一句话'],
+    random: NEUTRAL_RANDOM,
+  };
+
+  const cold = resolveReplyCadence(base);
+  assert.equal(resolveReplyCadence({ ...base, elapsedMs: -500 }).preDelayMs, cold.preDelayMs);
+  assert.equal(resolveReplyCadence({ ...base, elapsedMs: Number.NaN }).preDelayMs, cold.preDelayMs);
+});
+
 test('resolveReplyCadence returns a zero plan when cadence is disabled', () => {
   const cadence = resolveReplyCadence({
     event: createEvent(),

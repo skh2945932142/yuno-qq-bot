@@ -247,6 +247,12 @@ export const config = Object.freeze({
   searchBaseUrl: normalizeBaseUrl(process.env.SEARCH_BASE_URL || ''),
   memorySummaryModel: readTrimmed('MEMORY_SUMMARY_MODEL'),
   memoryExtractionEnabled: readBoolean('MEMORY_EXTRACTION_ENABLED', true),
+  // Private chat always answers, so it used to skip the classifier entirely and
+  // take sentiment/intent from regex rules. This runs a semantic pass in parallel
+  // with context loading so the persona layer gets accurate signals; on timeout
+  // the rule-based values are kept.
+  privateSemanticAnalysisEnabled: readBoolean('PRIVATE_SEMANTIC_ANALYSIS_ENABLED', true),
+  privateSemanticTimeoutMs: readNumber('PRIVATE_SEMANTIC_TIMEOUT_MS', 3000),
   specialUsers: readJson('SPECIAL_USERS_JSON', []),
   memeEnabled: readBoolean('MEME_ENABLED', true),
   memeAutoCollect: readBoolean('MEME_AUTO_COLLECT', true),
