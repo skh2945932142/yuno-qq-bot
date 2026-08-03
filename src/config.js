@@ -211,9 +211,11 @@ export const config = Object.freeze({
   qdrantUrl: normalizeBaseUrl(process.env.QDRANT_URL || ''),
   qdrantApiKey: process.env.QDRANT_API_KEY || '',
   qdrantCollection: process.env.QDRANT_COLLECTION || 'qq_bot_knowledge',
-  // Hybrid retrieval is opt-in while the old Dense collection remains available
-  // for rollback. The Gateway owns provider-specific BGE-M3 details.
+  // Retrieval v2 is opt-in while the old Dense collection remains available
+  // for rollback. The gateway supports full hybrid; SiliconFlow uses Dense +
+  // Rerank against the same v2 collection until a sparse provider is added.
   qdrantHybridCollection: process.env.QDRANT_HYBRID_COLLECTION || '',
+  retrievalProvider: readEnum('RETRIEVAL_PROVIDER', ['gateway', 'siliconflow'], 'gateway'),
   retrievalGatewayUrl: normalizeBaseUrl(process.env.RETRIEVAL_GATEWAY_URL || ''),
   retrievalGatewayApiKey: readTrimmed('RETRIEVAL_GATEWAY_API_KEY'),
   retrievalEmbeddingModel: readTrimmed('RETRIEVAL_GATEWAY_EMBED_MODEL', 'BAAI/bge-m3'),

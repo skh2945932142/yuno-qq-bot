@@ -28,14 +28,14 @@ export function isHybridRetrievalEnabled(options = {}) {
 }
 
 export function createHybridPoint({ id, embedding, payload = {} } = {}) {
-  if (!id || !embedding?.dense || !embedding?.sparse) {
-    throw new Error('Hybrid point requires id, dense vector, and sparse vector');
+  if (!id || !embedding?.dense) {
+    throw new Error('Retrieval point requires id and a dense vector');
   }
   return {
     id,
     vector: {
       dense: embedding.dense,
-      lexical: embedding.sparse,
+      ...(embedding.sparse ? { lexical: embedding.sparse } : {}),
     },
     payload,
   };
@@ -67,9 +67,9 @@ export function fuseReciprocalRank(denseHits = [], lexicalHits = [], k = RRF_K) 
 async function embedQuery(query, deps = {}) {
   const runtimeConfig = deps.config || config;
   const cache = deps.cache || retrievalCache;
-  const cacheKey = hashRetrievalCacheKey(['hybrid-query-vector/v1', runtimeConfig.retrievalEmbeddingModel, query]);
+  const cacheKey = hashRetrievalCacheKey(['retrieval-query-vector/v2', runtimeConfig.retrievalProvider || 'gateway', runtimeConfig.retrievalEmbeddingModel, query]);
   const cached = await cache.get(cacheKey);
-  if (cached?.dense && cached?.sparse) {
+  if (cached?.dense) {
     recordWorkflowMetric('yuno_retrieval_cache_hit_total', 1, { source: 'query-vector' });
     return cached;
   }
@@ -81,11 +81,12 @@ async function embedQuery(query, deps = {}) {
 
 function buildCandidateCacheKey(query, filter, options) {
   return hashRetrievalCacheKey([
-    'hybrid-candidates/v1',
+    'retrieval-candidates/v2',
     query,
     filter,
     Number(options.candidateLimit),
     String(options.collection || config.qdrantHybridCollection),
+    String(options.provider || config.retrievalProvider || 'gateway'),
   ]);
 }
 
@@ -103,7 +104,10 @@ async function retrieveCandidates(query, embedding, filter, options, deps) {
   }
 
   const search = deps.searchHybridPoints || searchHybridPoints;
-  const result = await search({ dense: embedding.dense, lexical: embedding.sparse }, {
+  const result = await search({
+    dense: embedding.dense,
+    ...(embedding.sparse ? { lexical: embedding.sparse } : {}),
+  }, {
     filter,
     limit: options.candidateLimit,
     collection: options.collection,
@@ -158,6 +162,7 @@ export async function retrieveHybridContext({
   const options = {
     candidateLimit: Math.max(1, Number(candidateLimit || runtimeConfig.retrievalCandidateLimit || 20)),
     rerankLimit: Math.max(1, Number(rerankLimit || runtimeConfig.retrievalRerankLimit || 12)),
+    provider: runtimeConfig.retrievalProvider || 'gateway',
     cacheKind,
     collection: collection || runtimeConfig.qdrantHybridCollection,
   };

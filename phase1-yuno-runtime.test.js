@@ -116,6 +116,7 @@ test('embedded runtime helper paths handle queue jobs, readiness, and unavailabl
   }), {
     qdrant: { enabled: false, ready: true, reason: 'not-configured' },
     voice: { enabled: false, ready: true, reason: 'disabled' },
+    retrievalGateway: { enabled: false, ready: true, reason: 'disabled' },
   });
 
   const normal = await processReplyQueueJob({ id: 'job' }, { id: 'queue-1' }, {

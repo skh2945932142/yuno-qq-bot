@@ -289,9 +289,13 @@ async function searchHybridVector(name, vector, options = {}) {
 export async function searchHybridPoints(vectors = {}, options = {}) {
   const dense = Array.isArray(vectors.dense) ? vectors.dense : null;
   const lexical = vectors.lexical || vectors.sparse || null;
-  if (!dense || !lexical) return { dense: [], lexical: [] };
+  if (!dense) return { dense: [], lexical: [] };
+  const densePromise = searchHybridVector('dense', dense, options);
+  if (!lexical) {
+    return { dense: await densePromise, lexical: [] };
+  }
   const [denseHits, lexicalHits] = await Promise.all([
-    searchHybridVector('dense', dense, options),
+    densePromise,
     searchHybridVector('lexical', lexical, options),
   ]);
   return { dense: denseHits, lexical: lexicalHits };

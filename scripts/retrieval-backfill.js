@@ -18,7 +18,7 @@ function asIso(value) {
 
 async function main() {
   if (!isHybridRetrievalEnabled({ config })) {
-    throw new Error('Hybrid retrieval requires RETRIEVAL_HYBRID_ENABLED, RETRIEVAL_GATEWAY_URL, QDRANT_URL, and QDRANT_HYBRID_COLLECTION');
+    throw new Error('Retrieval v2 requires RETRIEVAL_HYBRID_ENABLED, QDRANT_URL, QDRANT_HYBRID_COLLECTION, and a configured RETRIEVAL_PROVIDER');
   }
 
   await connectDB(config);

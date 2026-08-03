@@ -8,12 +8,21 @@ function normalizeUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '');
 }
 
+function resolveRetrievalProvider(value) {
+  return String(value || 'gateway').trim().toLowerCase() === 'siliconflow'
+    ? 'siliconflow'
+    : 'gateway';
+}
+
 function resolveRuntime(options = {}) {
   const runtimeConfig = options.config || config;
+  const provider = resolveRetrievalProvider(options.provider ?? runtimeConfig.retrievalProvider);
+  const usesSiliconFlow = provider === 'siliconflow';
   return {
-    url: normalizeUrl(options.url ?? runtimeConfig.retrievalGatewayUrl),
-    apiKey: String(options.apiKey ?? runtimeConfig.retrievalGatewayApiKey ?? '').trim(),
-    embeddingModel: String(options.embeddingModel ?? runtimeConfig.retrievalEmbeddingModel ?? '').trim(),
+    provider,
+    url: normalizeUrl(options.url ?? (usesSiliconFlow ? runtimeConfig.embeddingBaseUrl : runtimeConfig.retrievalGatewayUrl)),
+    apiKey: String(options.apiKey ?? (usesSiliconFlow ? runtimeConfig.embeddingApiKey : runtimeConfig.retrievalGatewayApiKey) ?? '').trim(),
+    embeddingModel: String(options.embeddingModel ?? runtimeConfig.retrievalEmbeddingModel ?? runtimeConfig.embeddingModel ?? '').trim(),
     rerankModel: String(options.rerankModel ?? runtimeConfig.retrievalRerankModel ?? '').trim(),
     embeddingTimeoutMs: Math.max(200, Number(options.embeddingTimeoutMs ?? runtimeConfig.retrievalGatewayTimeoutMs ?? 1800)),
     rerankTimeoutMs: Math.max(200, Number(options.rerankTimeoutMs ?? runtimeConfig.retrievalRerankTimeoutMs ?? 1800)),
@@ -21,9 +30,27 @@ function resolveRuntime(options = {}) {
   };
 }
 
-export function isRetrievalGatewayConfigured(options = {}) {
+export function getRetrievalProviderStatus(options = {}) {
   const runtime = resolveRuntime(options);
-  return Boolean(runtime.url && runtime.embeddingModel && runtime.rerankModel);
+  const missing = [];
+  if (!runtime.url) {
+    missing.push(runtime.provider === 'siliconflow' ? 'EMBEDDING_BASE_URL' : 'RETRIEVAL_GATEWAY_URL');
+  }
+  if (!runtime.embeddingModel) missing.push('RETRIEVAL_GATEWAY_EMBED_MODEL');
+  if (!runtime.rerankModel) missing.push('RETRIEVAL_RERANK_MODEL');
+  if (runtime.provider === 'siliconflow' && !runtime.apiKey) {
+    missing.push('EMBEDDING_API_KEY');
+  }
+  return {
+    provider: runtime.provider,
+    supportsSparse: runtime.provider === 'gateway',
+    configured: missing.length === 0,
+    missing,
+  };
+}
+
+export function isRetrievalGatewayConfigured(options = {}) {
+  return getRetrievalProviderStatus(options).configured;
 }
 
 function buildHeaders(runtime) {
@@ -32,7 +59,10 @@ function buildHeaders(runtime) {
 
 async function requestGateway(path, payload, timeoutMs, operation, options = {}) {
   const runtime = resolveRuntime(options);
-  if (!runtime.url) throw new Error('Retrieval Gateway is not configured');
+  const providerStatus = getRetrievalProviderStatus(options);
+  if (!providerStatus.configured) {
+    throw new Error(`Retrieval provider is not configured: ${providerStatus.missing.join(', ')}`);
+  }
 
   const startedAt = Date.now();
   try {
@@ -53,20 +83,24 @@ async function requestGateway(path, payload, timeoutMs, operation, options = {})
     recordWorkflowMetric('yuno_retrieval_gateway_requests_total', 1, {
       operation,
       result: 'success',
+      provider: runtime.provider,
     });
     recordWorkflowMetric('yuno_retrieval_gateway_duration_ms', Date.now() - startedAt, {
       operation,
       result: 'success',
+      provider: runtime.provider,
     }, 'histogram');
     return response.data;
   } catch (error) {
     recordWorkflowMetric('yuno_retrieval_gateway_requests_total', 1, {
       operation,
       result: 'error',
+      provider: runtime.provider,
     });
     recordWorkflowMetric('yuno_retrieval_gateway_duration_ms', Date.now() - startedAt, {
       operation,
       result: 'error',
+      provider: runtime.provider,
     }, 'histogram');
     throw error;
   }
@@ -92,16 +126,16 @@ function normalizeSparse(value) {
   };
 }
 
-function normalizeEmbeddingItem(item, index) {
+function normalizeEmbeddingItem(item, index, options = {}) {
   const dense = normalizeDense(item?.dense || item?.embedding || item?.vector);
   const sparse = normalizeSparse(item?.sparse || item?.lexical);
-  if (!dense || !sparse) {
-    throw new Error(`Retrieval Gateway returned invalid hybrid embedding at index ${index}`);
+  if (!dense || (options.requireSparse && !sparse)) {
+    throw new Error(`Retrieval provider returned invalid ${options.requireSparse ? 'hybrid' : 'dense'} embedding at index ${index}`);
   }
   return {
     id: String(item?.id ?? index),
     dense,
-    sparse,
+    ...(sparse ? { sparse } : {}),
   };
 }
 
@@ -119,14 +153,21 @@ export async function embedHybridTexts(texts, options = {}) {
   if (normalizedTexts.length === 0) return [];
 
   const runtime = resolveRuntime(options);
-  const data = await requestGateway('/v1/embed', {
-    model: runtime.embeddingModel,
-    task: options.task || 'query',
-    inputs: normalizedTexts.map((text, index) => ({ id: String(index), text })),
-  }, runtime.embeddingTimeoutMs, 'embed', options);
-  const items = readItems(data).map(normalizeEmbeddingItem);
+  const usesSiliconFlow = runtime.provider === 'siliconflow';
+  const data = await requestGateway(usesSiliconFlow ? '/embeddings' : '/v1/embed', usesSiliconFlow
+    ? {
+      model: runtime.embeddingModel,
+      input: normalizedTexts,
+      encoding_format: 'float',
+    }
+    : {
+      model: runtime.embeddingModel,
+      task: options.task || 'query',
+      inputs: normalizedTexts.map((text, index) => ({ id: String(index), text })),
+    }, runtime.embeddingTimeoutMs, 'embed', options);
+  const items = readItems(data).map((item, index) => normalizeEmbeddingItem(item, index, { requireSparse: !usesSiliconFlow }));
   if (items.length !== normalizedTexts.length) {
-    throw new Error(`Retrieval Gateway returned ${items.length} embeddings for ${normalizedTexts.length} inputs`);
+    throw new Error(`Retrieval provider returned ${items.length} embeddings for ${normalizedTexts.length} inputs`);
   }
   return items;
 }
@@ -153,11 +194,31 @@ export async function rerankHybridCandidates(query, documents = [], options = {}
   if (!normalizedQuery || normalizedDocuments.length === 0) return [];
 
   const runtime = resolveRuntime(options);
-  const data = await requestGateway('/v1/rerank', {
-    model: runtime.rerankModel,
-    query: normalizedQuery,
-    documents: normalizedDocuments,
-    topN: Math.min(normalizedDocuments.length, Math.max(1, Number(options.topN || normalizedDocuments.length))),
-  }, runtime.rerankTimeoutMs, 'rerank', options);
+  const topN = Math.min(normalizedDocuments.length, Math.max(1, Number(options.topN || normalizedDocuments.length)));
+  const usesSiliconFlow = runtime.provider === 'siliconflow';
+  const data = await requestGateway(usesSiliconFlow ? '/rerank' : '/v1/rerank', usesSiliconFlow
+    ? {
+      model: runtime.rerankModel,
+      query: normalizedQuery,
+      documents: normalizedDocuments.map((item) => item.text),
+      top_n: topN,
+    }
+    : {
+      model: runtime.rerankModel,
+      query: normalizedQuery,
+      documents: normalizedDocuments,
+      topN,
+    }, runtime.rerankTimeoutMs, 'rerank', options);
+  if (usesSiliconFlow) {
+    const rows = Array.isArray(data?.results) ? data.results : readItems(data);
+    return rows.map((item, index) => {
+      const document = normalizedDocuments[Number(item?.index)];
+      if (!document) throw new Error(`SiliconFlow returned an invalid rerank document index at ${index}`);
+      return {
+        id: document.id,
+        score: normalizeRerankItem(item, index).score,
+      };
+    });
+  }
   return readItems(data).map(normalizeRerankItem);
 }

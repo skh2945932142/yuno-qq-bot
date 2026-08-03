@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkEmbedding, checkOneBot, checkQdrant, checkVoiceRuntime, runCheck } from './doctor.js';
+import { checkEmbedding, checkOneBot, checkQdrant, checkRetrievalProvider, checkVoiceRuntime, runCheck } from './doctor.js';
 
 test('doctor supports OneBot WebSocket transport', async () => {
   let captured;
@@ -97,6 +97,53 @@ test('doctor fails embedding check when provider returns an empty vector set', a
 });
 
 test('doctor marks qdrant as fail when configured endpoint is unreachable', async () => {
+test('doctor validates the SiliconFlow Dense + Rerank retrieval provider', async () => {
+  const result = await checkRetrievalProvider({
+    config: {
+      retrievalHybridEnabled: true,
+      retrievalProvider: 'siliconflow',
+      embeddingBaseUrl: 'https://api.siliconflow.cn/v1',
+      embeddingApiKey: 'siliconflow-key',
+      retrievalEmbeddingModel: 'BAAI/bge-m3',
+      retrievalRerankModel: 'BAAI/bge-reranker-v2-m3',
+    },
+    embedHybridTexts: async () => [{ dense: [0.1, 0.2] }],
+    rerankHybridCandidates: async () => [{ id: 'probe', score: 0.9 }],
+  });
+
+  assert.match(result.detail, /provider=siliconflow/);
+  assert.match(result.detail, /mode=dense-rerank/);
+});
+
+test('doctor skips retrieval provider checks when retrieval v2 is disabled', async () => {
+  const result = await checkRetrievalProvider({
+    config: { retrievalHybridEnabled: false },
+  });
+
+  assert.equal(result.status, 'skip');
+  assert.match(result.detail, /disabled/);
+});
+
+test('doctor targets the v2 collection when retrieval v2 is enabled', async () => {
+  let requestedUrl = '';
+  const result = await checkQdrant({
+    config: {
+      retrievalHybridEnabled: true,
+      qdrantUrl: 'http://qdrant.invalid',
+      qdrantHybridCollection: 'qq_bot_retrieval_v2',
+      qdrantApiKey: '',
+      requestTimeoutMs: 1000,
+    },
+    httpGet: async (url) => {
+      requestedUrl = url;
+      return { data: { result: { config: { params: { vectors: { dense: { size: 1024 } } } } } } };
+    },
+  });
+
+  assert.equal(requestedUrl, 'http://qdrant.invalid/collections/qq_bot_retrieval_v2');
+  assert.match(result.detail, /qq_bot_retrieval_v2/);
+});
+
   const result = await runCheck('qdrant', () => checkQdrant({
     config: {
       qdrantUrl: 'http://127.0.0.1:6333',

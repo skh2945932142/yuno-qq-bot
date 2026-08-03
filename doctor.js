@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { config, describeHttpBaseUrlProblem, validateRuntimeConfig } from './src/config.js';
 import { resolveFfmpegPath } from './src/services/audio.js';
 import { createEmbeddings } from './src/minimax.js';
+import { embedHybridTexts, getRetrievalProviderStatus, rerankHybridCandidates } from './src/retrieval-gateway.js';
 
 function truncateValue(value, limit = 120) {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
@@ -312,10 +313,56 @@ async function checkEmbedding(options = {}) {
   };
 }
 
+async function checkRetrievalProvider(options = {}) {
+  const runtimeConfig = options.config || config;
+  if (!runtimeConfig.retrievalHybridEnabled) {
+    return {
+      status: 'skip',
+      detail: 'retrieval v2 is disabled',
+    };
+  }
+
+  const providerStatus = getRetrievalProviderStatus({ config: runtimeConfig });
+  if (!providerStatus.configured) {
+    throw new Error(`retrieval provider ${providerStatus.provider} is missing ${providerStatus.missing.join(', ')}`);
+  }
+
+  const embed = options.embedHybridTexts || embedHybridTexts;
+  const rerank = options.rerankHybridCandidates || rerankHybridCandidates;
+  const [embedding] = await embed(['retrieval health check'], {
+    task: 'query',
+    config: runtimeConfig,
+  });
+  if (!Array.isArray(embedding?.dense) || embedding.dense.length === 0) {
+    throw new Error('retrieval provider returned an invalid dense vector');
+  }
+  if (providerStatus.supportsSparse && !embedding?.sparse) {
+    throw new Error('retrieval gateway returned no sparse vector');
+  }
+
+  const reranked = await rerank('retrieval health check', [{ id: 'probe', text: 'retrieval health check' }], {
+    topN: 1,
+    config: runtimeConfig,
+  });
+  if (!Number.isFinite(Number(reranked?.[0]?.score)) || String(reranked?.[0]?.id) !== 'probe') {
+    throw new Error('retrieval provider returned an invalid rerank result');
+  }
+
+  return {
+    detail: `provider=${providerStatus.provider}, mode=${providerStatus.supportsSparse ? 'hybrid' : 'dense-rerank'}, vectorSize=${embedding.dense.length}, rerank=ok`,
+  };
+}
+
 async function checkQdrant(options = {}) {
   const runtimeConfig = options.config || config;
   const httpGet = options.httpGet || axios.get;
-  if (!runtimeConfig.qdrantUrl || !runtimeConfig.qdrantCollection) {
+  const collection = runtimeConfig.retrievalHybridEnabled
+    ? String(runtimeConfig.qdrantHybridCollection || '').trim()
+    : runtimeConfig.qdrantCollection;
+  if (!runtimeConfig.qdrantUrl || !collection) {
+    if (runtimeConfig.retrievalHybridEnabled) {
+      throw new Error('retrieval v2 is enabled but QDRANT_URL or QDRANT_HYBRID_COLLECTION is missing');
+    }
     return {
       status: 'skip',
       detail: 'retrieval is not configured. This is fine for text-only mode; set QDRANT_URL and QDRANT_COLLECTION, then run npm run kb:sync when you want RAG.',
@@ -336,7 +383,7 @@ async function checkQdrant(options = {}) {
 
   try {
     const response = await httpGet(
-      `${runtimeConfig.qdrantUrl}/collections/${runtimeConfig.qdrantCollection}`,
+      `${runtimeConfig.qdrantUrl}/collections/${collection}`,
       {
         headers,
         maxRedirects: 0,
@@ -352,14 +399,14 @@ async function checkQdrant(options = {}) {
 
     return {
       detail: size
-        ? `collection ${runtimeConfig.qdrantCollection} reachable (vectorSize=${size})`
-        : `collection ${runtimeConfig.qdrantCollection} reachable`,
+        ? `collection ${collection} reachable (vectorSize=${size})`
+        : `collection ${collection} reachable`,
     };
   } catch (error) {
     if (error.response?.status === 404) {
       return {
         status: 'warn',
-        detail: `Qdrant reachable but collection ${runtimeConfig.qdrantCollection} is missing; run npm run kb:sync`,
+        detail: `Qdrant reachable but collection ${collection} is missing; run ${runtimeConfig.retrievalHybridEnabled ? 'npm run retrieval:backfill' : 'npm run kb:sync'}`,
       };
     }
     throw error;
@@ -429,6 +476,7 @@ async function main() {
     ['onebot', checkOneBot],
     ['llm', checkLlm],
     ['embedding', checkEmbedding],
+    ['retrieval-provider', checkRetrievalProvider],
     ['qdrant', checkQdrant],
     ['voice', checkVoiceRuntime],
     ['queue', checkQueueRuntime],
@@ -455,6 +503,7 @@ export {
   callOneBotWebSocketAction,
   checkLlm,
   checkEmbedding,
+  checkRetrievalProvider,
   checkQdrant,
   checkVoiceRuntime,
   checkQueueRuntime,

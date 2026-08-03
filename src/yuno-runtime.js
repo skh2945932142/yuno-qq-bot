@@ -11,6 +11,7 @@ import { getRuntimeServices, resetRuntimeServices, setRuntimeServices } from './
 import { resolveFfmpegPath } from './services/audio.js';
 import { buildDeliveryKey, createDeliveryLedger } from './delivery-ledger.js';
 import { getActiveConversationCount, waitForConversationsIdle } from './conversation-executor.js';
+import { getRetrievalProviderStatus } from './retrieval-gateway.js';
 
 let activeRuntime = null;
 let initializingRuntime = null;
@@ -120,6 +121,39 @@ async function probeQdrantReadiness(runtimeConfig = config) {
   }
 }
 
+function probeRetrievalReadiness(runtimeConfig = config) {
+  if (!runtimeConfig.retrievalHybridEnabled) {
+    return { enabled: false, ready: true, reason: 'disabled' };
+  }
+
+  const providerStatus = getRetrievalProviderStatus({ config: runtimeConfig });
+  if (!runtimeConfig.qdrantUrl) {
+    return {
+      enabled: true,
+      ready: false,
+      reason: 'qdrant-config-missing',
+      provider: providerStatus.provider,
+    };
+  }
+  if (!runtimeConfig.qdrantHybridCollection || !providerStatus.configured) {
+    return {
+      enabled: true,
+      ready: false,
+      reason: providerStatus.configured
+        ? 'hybrid-collection-missing'
+        : `provider-config-missing:${providerStatus.missing.join(',')}`,
+      provider: providerStatus.provider,
+    };
+  }
+
+  return {
+    enabled: true,
+    ready: true,
+    reason: providerStatus.supportsSparse ? 'hybrid-configured' : 'dense-rerank-configured',
+    provider: providerStatus.provider,
+  };
+}
+
 async function probeVoiceReadiness(runtimeConfig = config) {
   if (!runtimeConfig.enableVoice) {
     return { enabled: false, ready: true, reason: 'disabled' };
@@ -141,11 +175,12 @@ async function probeVoiceReadiness(runtimeConfig = config) {
 }
 
 export async function probeRuntimeReadiness(runtimeConfig = config) {
-  const [qdrant, voice] = await Promise.all([
+  const [qdrant, retrievalGateway, voice] = await Promise.all([
     probeQdrantReadiness(runtimeConfig),
+    probeRetrievalReadiness(runtimeConfig),
     probeVoiceReadiness(runtimeConfig),
   ]);
-  return { qdrant, voice };
+  return { qdrant, retrievalGateway, voice };
 }
 
 export async function initializeYunoRuntime(options = {}) {
