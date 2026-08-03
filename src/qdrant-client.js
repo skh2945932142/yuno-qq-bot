@@ -184,3 +184,115 @@ export function getQdrantStatus(options = {}) {
     collection: options.collection ?? config.qdrantCollection,
   };
 }
+function resolveHybridCollection(options = {}) {
+  return String(options.collection ?? config.qdrantHybridCollection ?? '').trim();
+}
+
+function hybridOptions(options = {}) {
+  return {
+    ...options,
+    collection: resolveHybridCollection(options),
+  };
+}
+
+export function getHybridQdrantStatus(options = {}) {
+  const collection = resolveHybridCollection(options);
+  return {
+    enabled: Boolean((options.url ?? config.qdrantUrl) && collection),
+    collection,
+  };
+}
+
+export async function ensureHybridQdrantCollection(vectorSize, options = {}) {
+  const resolved = hybridOptions(options);
+  if (!getHybridQdrantStatus(resolved).enabled) {
+    return { enabled: false };
+  }
+
+  try {
+    const existing = await request('get', `/collections/${resolved.collection}`, null, 'inspect hybrid qdrant collection', resolved);
+    return {
+      enabled: true,
+      created: false,
+      vectorSize: extractVectorSize(existing.result),
+    };
+  } catch (error) {
+    if (error.response?.status !== 404) throw error;
+  }
+
+  await request('put', `/collections/${resolved.collection}`, {
+    vectors: {
+      dense: {
+        size: Number(vectorSize),
+        distance: options.distance || 'Cosine',
+      },
+    },
+    sparse_vectors: {
+      lexical: {},
+    },
+  }, 'create hybrid qdrant collection', resolved);
+  return { enabled: true, created: true, vectorSize: Number(vectorSize) };
+}
+
+const HYBRID_PAYLOAD_INDEXES = [
+  ['type', 'keyword'],
+  ['scope', 'keyword'],
+  ['userId', 'keyword'],
+  ['chatId', 'keyword'],
+  ['groupId', 'keyword'],
+  ['visibility', 'keyword'],
+  ['expiresAt', 'datetime'],
+];
+
+export async function ensureHybridPayloadIndexes(options = {}) {
+  const resolved = hybridOptions(options);
+  if (!getHybridQdrantStatus(resolved).enabled) return { enabled: false, count: 0 };
+
+  for (const [fieldName, fieldSchema] of HYBRID_PAYLOAD_INDEXES) {
+    try {
+      await request('put', `/collections/${resolved.collection}/index`, {
+        field_name: fieldName,
+        field_schema: fieldSchema,
+      }, 'ensure hybrid qdrant payload index', resolved);
+    } catch (error) {
+      // Qdrant returns a conflict when the index already exists. Treat it as
+      // success so repeated startup/backfill calls remain idempotent.
+      if (error.response?.status !== 409) throw error;
+    }
+  }
+  return { enabled: true, count: HYBRID_PAYLOAD_INDEXES.length };
+}
+
+export async function upsertHybridPoints(points, options = {}) {
+  const resolved = hybridOptions(options);
+  if (!getHybridQdrantStatus(resolved).enabled) return { enabled: false, count: 0 };
+  await request('put', `/collections/${resolved.collection}/points?wait=true`, {
+    points,
+  }, 'upsert hybrid qdrant points', resolved);
+  return { enabled: true, count: points.length };
+}
+
+async function searchHybridVector(name, vector, options = {}) {
+  const resolved = hybridOptions(options);
+  if (!getHybridQdrantStatus(resolved).enabled) return [];
+  const data = await request('post', `/collections/${resolved.collection}/points/search`, {
+    vector: { name, vector },
+    limit: options.limit || config.retrievalCandidateLimit || 20,
+    with_payload: true,
+    with_vector: false,
+    score_threshold: options.scoreThreshold,
+    filter: options.filter || undefined,
+  }, `search hybrid qdrant ${name}`, resolved);
+  return data.result || [];
+}
+
+export async function searchHybridPoints(vectors = {}, options = {}) {
+  const dense = Array.isArray(vectors.dense) ? vectors.dense : null;
+  const lexical = vectors.lexical || vectors.sparse || null;
+  if (!dense || !lexical) return { dense: [], lexical: [] };
+  const [denseHits, lexicalHits] = await Promise.all([
+    searchHybridVector('dense', dense, options),
+    searchHybridVector('lexical', lexical, options),
+  ]);
+  return { dense: denseHits, lexical: lexicalHits };
+}

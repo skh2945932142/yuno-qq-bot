@@ -12,6 +12,7 @@ import {
   searchKnowledge,
   upsertKnowledgePoints,
 } from './qdrant-client.js';
+import { indexHybridDocuments, isHybridRetrievalEnabled, retrieveHybridContext } from './retrieval-pipeline.js';
 import { isDbReady } from './db.js';
 
 function buildPointId(prefix, value) {
@@ -215,6 +216,37 @@ export async function indexUserMemoryEvents(memoryEvents = [], deps = {}) {
     return { enabled: false, count: 0 };
   }
 
+  if (isHybridRetrievalEnabled(deps)) {
+    const documents = memoryEvents
+      .map((memoryEvent) => ({
+        id: buildPointId('memory_fact', memoryEvent.memoryId),
+        text: String(memoryEvent.fact || memoryEvent.summary || '').trim(),
+        payload: {
+          type: 'memory_fact',
+          scope: memoryEvent.scope || 'private',
+          visibility: memoryEvent.visibility || memoryEvent.scope || 'private',
+          sourceId: String(memoryEvent.memoryId || ''),
+          memoryId: String(memoryEvent.memoryId || ''),
+          userId: String(memoryEvent.userId || ''),
+          chatId: String(memoryEvent.chatId || ''),
+          groupId: String(memoryEvent.groupId || ''),
+          category: memoryEvent.category || memoryEvent.eventType || '',
+          subject: memoryEvent.subject || '',
+          fact: memoryEvent.fact || memoryEvent.summary || '',
+          summary: memoryEvent.summary || '',
+          tags: memoryEvent.tags || [],
+          importanceScore: Number(memoryEvent.importanceScore || 0),
+          expiresAt: safeDateString(memoryEvent.expiresAt),
+        },
+      }))
+      .filter((item) => item.id && item.text);
+    const indexed = await (deps.indexHybridDocuments || indexHybridDocuments)(documents, {
+      ...deps,
+      forceEnabled: true,
+    });
+    return { enabled: Boolean(indexed?.enabled), count: indexed?.count || 0 };
+  }
+
   const points = [];
   for (const memoryEvent of memoryEvents) {
     const text = String(memoryEvent.embeddingSourceText || '').trim();
@@ -267,6 +299,41 @@ export async function retrieveMemoryContext({ userId, chatId = '', userTurn, lim
   }
   if (!deps.memoryModel && !deps.memeModel && !isDbReady()) {
     return { eventMemories: [], memeMemories: [] };
+  }
+
+  if (isHybridRetrievalEnabled(deps)) {
+    try {
+      const hybrid = await (deps.retrieveHybridContext || retrieveHybridContext)({
+        query: String(userTurn || '').trim(),
+        limit: limitEvents,
+        cacheKind: '',
+        filter: {
+          must: [
+            { key: 'type', match: { value: 'memory_fact' } },
+            { key: 'scope', match: { value: 'private' } },
+            { key: 'userId', match: { value: normalizedUserId } },
+          ],
+        },
+      }, deps);
+      const memoryIds = (hybrid.hits || [])
+        .map((item) => String(item.payload?.memoryId || item.payload?.sourceId || ''))
+        .filter(Boolean);
+      const memoryModel = deps.memoryModel || UserMemoryEvent;
+      const memoryDocs = memoryIds.length
+        ? await memoryModel.find({ memoryId: { $in: memoryIds }, userId: normalizedUserId, scope: 'private' })
+        : [];
+      const keepActive = activeFilter(now);
+      const memoryMap = new Map(memoryDocs.filter(keepActive).map((item) => [String(item.memoryId), item]));
+      return {
+        eventMemories: memoryIds.map((id) => memoryMap.get(id)).filter(Boolean).slice(0, limitEvents),
+        memeMemories: [],
+      };
+    } catch (error) {
+      logger.warn('retrieval', 'Hybrid memory retrieval failed; falling back to Dense retrieval', {
+        message: error.message,
+        userId: normalizedUserId,
+      });
+    }
   }
 
   try {

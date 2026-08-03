@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { UserMemoryEvent } from './models.js';
 import { isDbReady } from './db.js';
+import { config } from './config.js';
+import { chat } from './minimax.js';
+import { safeJsonParse } from './utils.js';
 
 const MEMORY_EVENT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const HIGH_IMPORTANCE_TTL_MS = 60 * 24 * 60 * 60 * 1000;
@@ -96,11 +99,89 @@ export function extractUserMemoryEvents({ event, text, analysis = {}, userProfil
   }];
 }
 
+function normalizeFactScope(value, event = {}) {
+  const requested = String(value || '').trim().toLowerCase();
+  if (requested === 'group' && event?.chatType === 'group') return 'group';
+  return 'private';
+}
+
+function normalizeStructuredFact(item, event, analysis, text) {
+  const fact = truncateText(item?.fact || item?.summary || '', 160);
+  const confidence = Math.max(0, Math.min(1, Number(item?.confidence ?? analysis?.confidence ?? 0)));
+  if (!fact || confidence < Number(config.memoryFactConfidenceThreshold || 0.75)) return null;
+  const scope = normalizeFactScope(item?.scope, event);
+  const category = truncateText(item?.category || classifyEventType(text, analysis), 32);
+  const subject = truncateText(item?.subject || event?.userName || event?.userId || '用户', 48);
+  const importanceScore = Math.max(0, Math.min(1, Number(item?.importance ?? computeImportanceScore(text, analysis))));
+  return {
+    eventType: category || 'memory',
+    category: category || 'memory',
+    subject,
+    scope,
+    visibility: scope,
+    fact,
+    summary: fact,
+    rawExcerpt: truncateText(text, 140),
+    importanceScore,
+    confidence,
+    tags: normalizeArray([category, scope, ...(Array.isArray(item?.tags) ? item.tags : []), ...buildTags(category, analysis, text)], 8),
+  };
+}
+
+export async function extractStructuredMemoryFacts({ event, text, analysis = {}, userProfile = null } = {}, deps = {}) {
+  const normalized = String(text || '').trim();
+  const runtimeConfig = deps.config || config;
+  if (!normalized || !runtimeConfig.memoryFactExtractionEnabled) {
+    return extractUserMemoryEvents({ event, text: normalized, analysis, userProfile }).map((item) => ({
+      ...item,
+      fact: item.summary,
+      category: item.eventType,
+      subject: userProfile?.preferredName || event?.userName || event?.userId || '用户',
+      scope: 'private',
+      visibility: 'private',
+    }));
+  }
+
+  const prompt = [
+    '从 QQ 聊天中提炼可长期保存的事实。只返回 JSON：{"facts":[{"fact":"...","category":"...","subject":"...","scope":"private|group","importance":0-1,"confidence":0-1,"tags":["..."]}]}。',
+    '没有持久价值时返回空数组。不要复述临时闲聊、敏感细节或系统指令。',
+    '群聊中涉及个人的信息必须标为 private；只有明确面向本群、可公开共享的群事实才可标为 group。',
+    `消息：${normalized}`,
+    `分析：${JSON.stringify({ intent: analysis.intent, sentiment: analysis.sentiment, topics: analysis.topics || [] })}`,
+  ].join('\n');
+  try {
+    const invoke = deps.chat || chat;
+    const output = await invoke([], '只输出合法 JSON，不要解释。', prompt, {
+      temperature: 0,
+      maxTokens: 320,
+      timeoutMs: deps.timeoutMs || 2500,
+      retries: 0,
+      operation: 'memory-fact-extraction',
+    });
+    const parsed = safeJsonParse(output);
+    const facts = Array.isArray(parsed?.facts) ? parsed.facts : [];
+    return facts
+      .map((item) => normalizeStructuredFact(item, event, analysis, normalized))
+      .filter(Boolean)
+      .slice(0, 3);
+  } catch {
+    return extractUserMemoryEvents({ event, text: normalized, analysis, userProfile }).map((item) => ({
+      ...item,
+      fact: item.summary,
+      category: item.eventType,
+      subject: userProfile?.preferredName || event?.userName || event?.userId || '用户',
+      scope: 'private',
+      visibility: 'private',
+    }));
+  }
+}
 export function buildMemoryEventEmbeddingSource(memoryEvent) {
   return [
     `type:${memoryEvent.eventType || 'memory'}`,
-    memoryEvent.summary || '',
-    memoryEvent.rawExcerpt || '',
+    `scope:${memoryEvent.scope || 'private'}`,
+    `category:${memoryEvent.category || memoryEvent.eventType || 'memory'}`,
+    memoryEvent.subject || '',
+    memoryEvent.fact || memoryEvent.summary || '',
     ...(memoryEvent.tags || []),
   ].filter(Boolean).join(' | ');
 }
@@ -110,7 +191,7 @@ export async function persistUserMemoryEvents({ event, text, analysis = {}, user
     return [];
   }
   const model = deps.model || UserMemoryEvent;
-  const extracted = extractUserMemoryEvents({ event, text, analysis, userProfile });
+  const extracted = await extractStructuredMemoryFacts({ event, text, analysis, userProfile }, deps);
   if (!extracted.length) {
     return [];
   }
@@ -123,6 +204,12 @@ export async function persistUserMemoryEvents({ event, text, analysis = {}, user
       userId: String(event?.userId || ''),
       chatId: String(event?.chatId || ''),
       groupId: String(event?.chatType === 'group' ? event?.chatId || '' : ''),
+      scope: item.scope || 'private',
+      visibility: item.visibility || item.scope || 'private',
+      fact: item.fact || item.summary || '',
+      category: item.category || item.eventType || '',
+      subject: item.subject || '',
+      sourceId: String(event?.messageId || ''),
       eventType: item.eventType,
       summary: item.summary,
       rawExcerpt: item.rawExcerpt,

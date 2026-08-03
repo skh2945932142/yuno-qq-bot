@@ -16,6 +16,7 @@
     "eval:style:report": "node evals/run-style-evals.js --report reports/eval-reply-style.md",
     "eval:style:model": "node evals/run-style-model-evals.js --report reports/eval-reply-style-model.md",
     "kb:sync": "node scripts/kb-sync.js",
+    "retrieval:backfill": "node scripts/retrieval-backfill.js",
     "meme:import": "node scripts/meme-import.js",
     "doctor": "node doctor.js",
     "smoke": "node smoke.js",

@@ -7,6 +7,7 @@ import {
   recordGroupEvent,
   updateGroupStateFromAnalysis,
 } from './state/group-state-runtime.js';
+import { appendGroupDialogueChunk } from './group-dialogue.js';
 
 const DEFAULT_KEYWORD_TOPICS = [
   'deploy',
@@ -171,6 +172,14 @@ export async function recordInboundGroupObservation(event, deps = {}) {
     },
     summary,
     now: createdAt,
+  });
+
+  await (deps.appendGroupDialogueChunk || appendGroupDialogueChunk)(event).catch((error) => {
+    logger.warn('retrieval', 'Group dialogue chunking failed', {
+      chatId: event.chatId,
+      messageId: event.messageId,
+      message: error.message,
+    });
   });
 
   recordWorkflowMetric('yuno_group_observations_total', 1, {

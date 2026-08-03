@@ -11,7 +11,11 @@ import {
   searchKnowledge,
   setKnowledgeManifest,
   upsertKnowledgePoints,
+  ensureHybridPayloadIndexes,
+  ensureHybridQdrantCollection,
 } from './qdrant-client.js';
+import { embedHybridTexts } from './retrieval-gateway.js';
+import { indexHybridDocuments, isHybridRetrievalEnabled, retrieveHybridContext } from './retrieval-pipeline.js';
 import { logger } from './logger.js';
 import { recordWorkflowMetric } from './metrics.js';
 import { getRuntimeServices } from './runtime-services.js';
@@ -383,6 +387,43 @@ async function deleteOrphanKnowledgePoints(validIds) {
   return orphanIds.length;
 }
 
+async function syncHybridKnowledgeBase(documents, options = {}) {
+  const runtimeConfig = options.config || config;
+  const embed = options.embedHybridTexts || embedHybridTexts;
+  const ensureCollection = options.ensureHybridQdrantCollection || ensureHybridQdrantCollection;
+  const ensureIndexes = options.ensureHybridPayloadIndexes || ensureHybridPayloadIndexes;
+  const [probe] = await embed([documents[0].text], { task: 'document', config: runtimeConfig });
+  const collection = await ensureCollection(probe.dense.length, { collection: runtimeConfig.qdrantHybridCollection });
+  await ensureIndexes({ collection: runtimeConfig.qdrantHybridCollection });
+  const version = createKnowledgeVersion(documents);
+  const indexed = await (options.indexHybridDocuments || indexHybridDocuments)(documents.map((item) => ({
+    id: item.id,
+    text: item.text,
+    payload: {
+      type: 'knowledge',
+      scope: 'global',
+      visibility: 'public',
+      sourceId: item.id,
+      version,
+      ...item.metadata,
+      text: item.text,
+    },
+  })), {
+    ...options,
+    config: runtimeConfig,
+    forceEnabled: true,
+    collection: runtimeConfig.qdrantHybridCollection,
+  });
+  return {
+    enabled: Boolean(indexed?.enabled),
+    count: indexed?.count || 0,
+    orphanCount: 0,
+    collection: runtimeConfig.qdrantHybridCollection,
+    version,
+    created: Boolean(collection?.created),
+  };
+}
+
 export async function syncKnowledgeBase(options = {}) {
   const documents = options.documents || await loadKnowledgeDocuments(options.rootDir);
   if (documents.length === 0) {
@@ -391,6 +432,10 @@ export async function syncKnowledgeBase(options = {}) {
       count: 0,
       reason: 'knowledge-directory-empty',
     };
+  }
+
+  if (isHybridRetrievalEnabled({ ...options, config: options.config || config })) {
+    return syncHybridKnowledgeBase(documents, options);
   }
 
   const embed = options.createEmbeddings || createEmbeddings;
@@ -477,6 +522,38 @@ export async function retrieveKnowledge(query, options = {}) {
       reason: 'empty-query',
     };
   }
+  if (isHybridRetrievalEnabled({ ...options, config: options.config || config })) {
+    const hybrid = await retrieveHybridContext({
+      query,
+      limit: options.limit || config.qdrantTopK,
+      cacheKind: 'knowledge',
+      collection: options.collection || config.qdrantHybridCollection,
+      filter: {
+        must: [{ key: 'type', match: { value: 'knowledge' } }],
+      },
+    }, options);
+    const documents = (hybrid.hits || []).map((hit) => ({
+      id: hit.id,
+      score: hit.rerankScore ?? hit.score,
+      text: truncateText(hit.payload?.text || '', options.charLimit || config.qdrantCharLimit),
+      metadata: {
+        category: hit.payload?.category || '',
+        title: hit.payload?.title || '',
+        tags: hit.payload?.tags || [],
+        priority: hit.payload?.priority || 1,
+        source: hit.payload?.source || '',
+        version: hit.payload?.version || '',
+      },
+    })).filter((item) => item.text);
+    return {
+      enabled: hybrid.enabled,
+      query,
+      source: 'qdrant-hybrid',
+      documents,
+      reason: hybrid.reason,
+    };
+  }
+
 
   const embed = options.createEmbeddings || createEmbeddings;
   const search = options.searchKnowledge || searchKnowledge;

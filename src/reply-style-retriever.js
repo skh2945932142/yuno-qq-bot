@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeWhitespace, stripCqCodes, uniqueCompact } from './utils.js';
+import { isHybridRetrievalEnabled, retrieveHybridContext } from './retrieval-pipeline.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -185,6 +186,34 @@ export async function retrieveReplyStyleExamples({
     userTurn,
   });
   const resolvedLimit = resolveLimit(replyLengthProfile, limit);
+
+  if (isHybridRetrievalEnabled(deps)) {
+    const hybrid = await (deps.retrieveHybridContext || retrieveHybridContext)({
+      query: `${query.intent} ${query.emotion} ${query.tags.join(' ')} ${userTurn}`.trim(),
+      limit: resolvedLimit,
+      cacheKind: '',
+      filter: {
+        must: [
+          { key: 'type', match: { value: 'style_example' } },
+          { key: 'scope', match: { value: 'global' } },
+        ],
+      },
+    }, deps).catch(() => ({ hits: [] }));
+    const hybridExamples = (hybrid.hits || [])
+      .map((hit) => normalizeReplyStyleExample({
+        id: hit.payload?.sourceId || hit.id,
+        scene: hit.payload?.scene || 'any',
+        intent: hit.payload?.intent || 'chat',
+        emotion: hit.payload?.emotion || '',
+        userText,
+        humanReply: hit.payload?.humanReply || '',
+        tags: hit.payload?.tags || [],
+        quality: hit.payload?.quality || 0.75,
+      }))
+      .filter(Boolean)
+      .slice(0, resolvedLimit);
+    if (hybridExamples.length > 0) return hybridExamples;
+  }
 
   return examples
     .map((example) => ({

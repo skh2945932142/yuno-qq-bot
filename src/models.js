@@ -146,6 +146,12 @@ const UserMemoryEventSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   chatId: { type: String, default: '' },
   groupId: { type: String, default: '' },
+  scope: { type: String, enum: ['private', 'group'], default: 'private' },
+  visibility: { type: String, enum: ['private', 'group'], default: 'private' },
+  fact: { type: String, default: '' },
+  category: { type: String, default: '' },
+  subject: { type: String, default: '' },
+  sourceId: { type: String, default: '' },
   eventType: { type: String, default: 'milestone' },
   summary: { type: String, required: true },
   rawExcerpt: { type: String, default: '' },
@@ -160,6 +166,7 @@ const UserMemoryEventSchema = new mongoose.Schema({
 }, { minimize: false });
 UserMemoryEventSchema.index({ platform: 1, userId: 1, createdAt: -1 });
 UserMemoryEventSchema.index({ platform: 1, userId: 1, expiresAt: 1 });
+UserMemoryEventSchema.index({ platform: 1, scope: 1, userId: 1, chatId: 1, groupId: 1, expiresAt: 1 });
 // expiresAt was only ever honoured in application code, so expired memories
 // accumulated forever in Mongo while their Qdrant vectors kept consuming the
 // retrieval budget. A TTL index makes expiry real. Documents with a null
@@ -273,3 +280,40 @@ DeliveryRecordSchema.index({ status: 1, lockedUntil: 1 });
 const DELIVERY_RECORD_RETENTION_SECONDS = 7 * 24 * 60 * 60;
 DeliveryRecordSchema.index({ createdAt: 1 }, { expireAfterSeconds: DELIVERY_RECORD_RETENTION_SECONDS });
 export const DeliveryRecord = mongoose.model('DeliveryRecord', DeliveryRecordSchema);
+const MessageLogSchema = new mongoose.Schema({
+  messageKey: { type: String, required: true, unique: true },
+  platform: { type: String, default: 'qq' },
+  chatType: { type: String, default: 'group' },
+  chatId: { type: String, required: true },
+  groupId: { type: String, default: '' },
+  userId: { type: String, default: '' },
+  role: { type: String, enum: ['user', 'assistant'], required: true },
+  messageId: { type: String, default: '' },
+  replyToMessageId: { type: String, default: '' },
+  content: { type: String, default: '' },
+  attachments: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  deliveryKey: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now },
+}, { minimize: false });
+MessageLogSchema.index({ chatId: 1, createdAt: -1 });
+MessageLogSchema.index({ userId: 1, createdAt: -1 });
+MessageLogSchema.index({ messageId: 1 });
+MessageLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
+export const MessageLog = mongoose.model('MessageLog', MessageLogSchema);
+
+const GroupDialogueChunkSchema = new mongoose.Schema({
+  chunkId: { type: String, required: true, unique: true },
+  platform: { type: String, default: 'qq' },
+  groupId: { type: String, required: true },
+  userId: { type: String, required: true },
+  startAt: { type: Date, required: true },
+  endAt: { type: Date, required: true },
+  sourceMessageIds: { type: [String], default: [] },
+  summary: { type: String, required: true },
+  embeddingSourceText: { type: String, default: '' },
+  expiresAt: { type: Date, required: true },
+  indexedAt: { type: Date, default: null },
+}, { minimize: false });
+GroupDialogueChunkSchema.index({ groupId: 1, userId: 1, endAt: -1 });
+GroupDialogueChunkSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+export const GroupDialogueChunk = mongoose.model('GroupDialogueChunk', GroupDialogueChunkSchema);

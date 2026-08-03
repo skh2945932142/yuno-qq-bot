@@ -39,6 +39,9 @@ import { resolvePersonalityStrategy } from './personality-strategy.js';
 import { persistUserMemoryEvents, touchReferencedMemoryEvents } from './user-memory-events.js';
 import { collectMemeAssetForEvent } from './meme-collector.js';
 import { indexMemeAssetSemantics, indexUserMemoryEvents, retrieveMemoryContext } from './memory-retrieval.js';
+import { isMemoryQuery, rewriteRetrievalQuery } from './retrieval-query.js';
+import { appendGroupDialogueChunk, retrieveGroupDialogueContext } from './group-dialogue.js';
+import { recordInboundMessageLog, recordOutboundMessageLog } from './message-log.js';
 import { markMemeUsed } from './meme-library.js';
 import { planContextualMemeReply } from './meme-reply-planner.js';
 import { getMemeCandidates, mergeMemeCandidates } from './meme-provider.js';
@@ -829,7 +832,12 @@ export function createWorkflowDeps(deps = {}, options = {}) {
     indexUserMemoryEvents: deps.indexUserMemoryEvents || indexUserMemoryEvents,
     indexMemeAssetSemantics: deps.indexMemeAssetSemantics || indexMemeAssetSemantics,
     retrieveMemoryContext: deps.retrieveMemoryContext || retrieveMemoryContext,
+    appendGroupDialogueChunk: deps.appendGroupDialogueChunk || appendGroupDialogueChunk,
+    retrieveGroupDialogueContext: deps.retrieveGroupDialogueContext || retrieveGroupDialogueContext,
     retrieveKnowledge: deps.retrieveKnowledge || retrieveKnowledge,
+    rewriteRetrievalQuery: deps.rewriteRetrievalQuery || rewriteRetrievalQuery,
+    recordInboundMessageLog: deps.recordInboundMessageLog || recordInboundMessageLog,
+    recordOutboundMessageLog: deps.recordOutboundMessageLog || recordOutboundMessageLog,
     recordGroupEvent: deps.recordGroupEvent || recordGroupEvent,
     updateGroupStateFromAnalysis: deps.updateGroupStateFromAnalysis || updateGroupStateFromAnalysis,
     resolveEmotion: deps.resolveEmotion || resolveEmotion,
@@ -949,11 +957,7 @@ export async function buildWorkflowContext(event, trace, deps, options = {}) {
       deps.getConversationState(session),
       isAdvanced && !lightweight ? deps.ensureGroupState(event.chatId) : Promise.resolve(null),
       event.chatType === 'group' && !lightweight ? deps.getRecentEvents(event.chatId, 5) : Promise.resolve([]),
-      deps.retrieveMemoryContext({
-        userId: event.userId,
-        chatId: event.chatId,
-        userTurn: stripCqCodes(event.rawText || event.text || ''),
-      }),
+      Promise.resolve({ eventMemories: [], memeMemories: [] }),
     ]),
     {
       chatType: event.chatType,
@@ -1398,6 +1402,13 @@ async function persistReplyState(context, payload, trace, deps, options = {}) {
     });
   }
 
+  if (context.event.chatType === 'group') {
+    namedTasks.push({
+      name: 'append-group-dialogue-chunk',
+      run: () => deps.appendGroupDialogueChunk(context.event),
+    });
+  }
+
   if (context.isAdvanced) {
     namedTasks.push({
       name: 'update-group-state',
@@ -1642,6 +1653,16 @@ export async function processPersistJob(jobData, options = {}) {
 export async function processIncomingMessage(event, precomputed = null, options = {}) {
   const deps = createWorkflowDeps(options.deps, options);
   const normalizedEvent = normalizeLegacyMessageEvent(event);
+  try {
+    await deps.recordInboundMessageLog(normalizedEvent);
+  } catch (error) {
+    deps.logger.warn('memory', 'Inbound message log write failed', {
+      chatId: normalizedEvent.chatId,
+      messageId: normalizedEvent.messageId,
+      message: error.message,
+    });
+  }
+
   const trace = precomputed?.trace || options.trace || createTraceContext('incoming-message', {
     chatType: normalizedEvent.chatType,
     chatId: normalizedEvent.chatId,
@@ -1782,8 +1803,42 @@ export async function processIncomingMessage(event, precomputed = null, options 
       }
     }
 
-    const knowledge = task.requiresRetrieval
-      ? await withTraceSpan(trace, 'retrieve-knowledge', () => deps.retrieveKnowledge(userTurn, {
+    const retrievalMode = task.retrievalMode
+      || (isMemoryQuery(userTurn) ? 'memory' : (task.category === 'follow_up' ? 'hybrid' : (task.requiresRetrieval ? 'knowledge' : 'none')));
+    task = { ...task, retrievalMode };
+    const retrievalQuery = retrievalMode === 'none'
+      ? { query: userTurn, memoryIntent: false, rewritten: false, reason: 'fast-path' }
+      : await withTraceSpan(trace, 'rewrite-retrieval-query', () => deps.rewriteRetrievalQuery({
+          event: normalizedEvent,
+          route: task,
+          userTurn,
+          conversationState: workflowContext.conversationState,
+          recentEvents: workflowContext.recentEvents,
+        }), { route: task.category, retrievalMode });
+
+    if (retrievalMode === 'memory' || retrievalMode === 'hybrid') {
+      if (normalizedEvent.chatType === 'private') {
+        workflowContext.memoryContext = await withTraceSpan(trace, 'retrieve-memory', () => deps.retrieveMemoryContext({
+          userId: normalizedEvent.userId,
+          chatId: normalizedEvent.chatId,
+          userTurn: retrievalQuery.query || userTurn,
+        }), { route: task.category });
+      } else if (normalizedEvent.chatType === 'group') {
+        const groupDialogues = await withTraceSpan(trace, 'retrieve-group-dialogue', () => deps.retrieveGroupDialogueContext({
+          groupId: normalizedEvent.chatId,
+          query: retrievalQuery.query || userTurn,
+          limit: 2,
+        }), { route: task.category });
+        workflowContext.memoryContext = {
+          eventMemories: [],
+          memeMemories: [],
+          groupDialogues,
+        };
+      }
+    }
+
+    const knowledge = (retrievalMode === 'knowledge' || retrievalMode === 'hybrid')
+      ? await withTraceSpan(trace, 'retrieve-knowledge', () => deps.retrieveKnowledge(retrievalQuery.query || userTurn, {
           reason: task.reason,
           preferredTags: getSpecialUserKnowledgeTags(workflowContext.specialUser),
         }), {
@@ -2499,6 +2554,18 @@ export async function processIncomingMessage(event, precomputed = null, options 
       }, options.deliveryKey);
 
       const deliveredPlan = delivery.value?.plan || candidatePlan;
+      if (delivery.sent) {
+        await deps.recordOutboundMessageLog(normalizedEvent, replyText, {
+          deliveryKey: delivery.deliveryKey,
+        }).catch((error) => {
+          deps.logger.warn('memory', 'Outbound message log write failed', {
+            chatId: normalizedEvent.chatId,
+            messageId: normalizedEvent.messageId,
+            message: error.message,
+          });
+        });
+      }
+
       if (delivery.sent && deliveredPlan.type === 'structured-meme') {
         memeDecision.recordSent?.();
         recordWorkflowMetric('yuno_meme_auto_sent_total', 1, {

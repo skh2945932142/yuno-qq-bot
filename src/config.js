@@ -211,6 +211,23 @@ export const config = Object.freeze({
   qdrantUrl: normalizeBaseUrl(process.env.QDRANT_URL || ''),
   qdrantApiKey: process.env.QDRANT_API_KEY || '',
   qdrantCollection: process.env.QDRANT_COLLECTION || 'qq_bot_knowledge',
+  // Hybrid retrieval is opt-in while the old Dense collection remains available
+  // for rollback. The Gateway owns provider-specific BGE-M3 details.
+  qdrantHybridCollection: process.env.QDRANT_HYBRID_COLLECTION || '',
+  retrievalGatewayUrl: normalizeBaseUrl(process.env.RETRIEVAL_GATEWAY_URL || ''),
+  retrievalGatewayApiKey: readTrimmed('RETRIEVAL_GATEWAY_API_KEY'),
+  retrievalEmbeddingModel: readTrimmed('RETRIEVAL_GATEWAY_EMBED_MODEL', 'BAAI/bge-m3'),
+  retrievalRerankModel: readTrimmed('RETRIEVAL_RERANK_MODEL', 'BAAI/bge-reranker-v2-m3'),
+  retrievalGatewayTimeoutMs: readNumber('RETRIEVAL_GATEWAY_TIMEOUT_MS', 1800),
+  retrievalRerankTimeoutMs: readNumber('RETRIEVAL_RERANK_TIMEOUT_MS', 1800),
+  retrievalHybridEnabled: readBoolean('RETRIEVAL_HYBRID_ENABLED', false),
+  retrievalCandidateLimit: readNumber('RETRIEVAL_CANDIDATE_LIMIT', 20),
+  retrievalRerankLimit: readNumber('RETRIEVAL_RERANK_LIMIT', 12),
+  retrievalQueryRewriteEnabled: readBoolean('RETRIEVAL_QUERY_REWRITE_ENABLED', true),
+  retrievalQueryRewriteTimeoutMs: readNumber('RETRIEVAL_QUERY_REWRITE_TIMEOUT_MS', 900),
+  retrievalQueryRewriteCacheTtlMs: readNumber('RETRIEVAL_QUERY_REWRITE_CACHE_TTL_MS', 300000),
+  retrievalVectorCacheTtlMs: readNumber('RETRIEVAL_VECTOR_CACHE_TTL_MS', 600000),
+  retrievalKnowledgeCacheTtlMs: readNumber('RETRIEVAL_KNOWLEDGE_CACHE_TTL_MS', 60000),
   qdrantTopK: readNumber('QDRANT_TOP_K', 4),
   qdrantMinScore: readNumber('QDRANT_MIN_SCORE', 0.25),
   qdrantCharLimit: readNumber('QDRANT_CHAR_LIMIT', 1200),
@@ -247,6 +264,10 @@ export const config = Object.freeze({
   searchBaseUrl: normalizeBaseUrl(process.env.SEARCH_BASE_URL || ''),
   memorySummaryModel: readTrimmed('MEMORY_SUMMARY_MODEL'),
   memoryExtractionEnabled: readBoolean('MEMORY_EXTRACTION_ENABLED', true),
+  memoryFactExtractionEnabled: readBoolean('MEMORY_FACT_EXTRACTION_ENABLED', false),
+  memoryFactConfidenceThreshold: readNumber('MEMORY_FACT_CONFIDENCE_THRESHOLD', 0.75),
+  messageLogRetentionDays: readNumber('MESSAGE_LOG_RETENTION_DAYS', 30),
+  groupDialogueWindowMs: readNumber('GROUP_DIALOGUE_WINDOW_MS', 3 * 60 * 1000),
   // Private chat always answers, so it used to skip the classifier entirely and
   // take sentiment/intent from regex rules. This runs a semantic pass in parallel
   // with context loading so the persona layer gets accurate signals; on timeout

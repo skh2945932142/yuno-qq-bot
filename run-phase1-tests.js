@@ -24,6 +24,7 @@ await import('./phase1-reply-intent-plan.test.js');
 await import('./phase1-workflow-coverage.test.js');
 await import('./phase1-memory-retrieval-coverage.test.js');
 await import('./phase1-reply-style-retrieval.test.js');
+await import('./phase1-hybrid-retrieval.test.js');
 await import('./phase1-reply-segmenter.test.js');
 await import('./phase1-reply-cadence.test.js');
 await import('./phase1-participation-policy.test.js');

@@ -280,6 +280,17 @@ function buildLongTermMemorySection(userProfile, memoryContext = {}) {
       lines.push(`- 重要事件=${summaries.join(' / ')}`);
     }
   }
+  const groupDialogues = Array.isArray(memoryContext?.groupDialogues) ? memoryContext.groupDialogues : [];
+  if (groupDialogues.length > 0) {
+    const summaries = groupDialogues
+      .slice(0, 2)
+      .map((item) => compactText(item.summary, 120, ''))
+      .filter(Boolean);
+    if (summaries.length > 0) {
+      lines.push(`- 当前群相关上下文=${summaries.join(' / ')}`);
+    }
+  }
+
 
   const memeMemories = Array.isArray(memoryContext?.memeMemories) ? memoryContext.memeMemories : [];
   if (memeMemories.length > 0) {

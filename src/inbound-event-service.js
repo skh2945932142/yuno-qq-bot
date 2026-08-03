@@ -6,6 +6,7 @@ import { evaluateGroupAutomation } from './group-automation.js';
 import { shouldRespondToEvent } from './message-workflow.js';
 import { recordParticipationReply, resolveParticipationDecision } from './participation-policy.js';
 import { getRuntimeServices } from './runtime-services.js';
+import { recordInboundMessageLog } from './message-log.js';
 
 const groupObservationTails = new Map();
 
@@ -32,6 +33,7 @@ function createInboundDeps(deps = {}) {
     recordWorkflowMetric: deps.recordWorkflowMetric || recordWorkflowMetric,
     resolveParticipationDecision: deps.resolveParticipationDecision || resolveParticipationDecision,
     recordParticipationReply: deps.recordParticipationReply || recordParticipationReply,
+    recordInboundMessageLog: deps.recordInboundMessageLog || recordInboundMessageLog,
     reactToMessage: deps.reactToMessage || (async (event) => {
       const adapter = getRuntimeServices().protocolAdapter;
       if (typeof adapter?.reactToMessage !== 'function') return false;
@@ -133,6 +135,16 @@ function buildSuppressedResult(event, reason, extras = {}) {
 
 export async function handleInboundEvent(event, options = {}) {
   const deps = createInboundDeps(options.deps);
+
+  try {
+    await deps.recordInboundMessageLog(event);
+  } catch (error) {
+    deps.logger.warn('memory', 'Inbound message log write failed', {
+      chatId: event.chatId,
+      messageId: event.messageId,
+      message: error.message,
+    });
+  }
 
   if (event.chatType === 'group' && deps.isNonTargetPokeEvent(event)) {
     deps.recordWorkflowMetric('yuno_poke_ignored_total', 1, {
