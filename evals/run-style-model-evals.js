@@ -18,9 +18,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 const DEFAULT_REPORT_PATH = path.join('reports', 'eval-reply-style-model.md');
-const BANTER_SIGNAL_REGEX = /(懒狗|菜狗|菜鸡|笨|怂|脑子|手欠|没出息|长蘑菇|倒霉蛋|夜猫子|黏人精|离谱|抽象|手贱|搞砸|折腾|逞能|你这|真敢|小废猫|爪子|售后|算命)/;
+const PERSONALITY_SIGNAL_REGEX = /(我(?:不太)?站|我先|先(?:把|看|停|说|去)|完整(?:报错|日志)|这(?:句|段|件).{0,10}(?:确实|重点)|数据|重点|直接说|行[，,。]|在[，,。]|别硬撑|回来再说|节目效果)/;
 const HARD_NATURALNESS_FLAGS = new Set([
   'unsupported-motive-attribution',
+  'unprompted-belittling',
   'possessive-control',
   'personal-attack',
   'repeated-edge',
@@ -81,7 +82,7 @@ function buildReplyPlan(context) {
     questionNeeded: false,
     interpretation: {
       subIntent: knowledge ? '知识回答' : needsEmpathy ? '情绪承接' : '接话',
-      tone: '毒舌自然',
+      tone: '观察自然',
       expectsDepth: knowledge ? 'medium' : 'short',
       needsEmpathy,
     },
@@ -195,7 +196,7 @@ export function evaluateModelReply(scenario, reply, promptContext) {
   if (hardFlags.length > 0) notes.push(`hard flags=${hardFlags.join(',')}`);
   const mechanicalPhrases = DEFAULT_FORBIDDEN_REPLY_PHRASES.filter((phrase) => reply.includes(phrase));
   if (mechanicalPhrases.length > 0) notes.push(`mechanical=${mechanicalPhrases.join(',')}`);
-  if (!BANTER_SIGNAL_REGEX.test(reply)) notes.push('missing toxic-banter signal');
+  if (!PERSONALITY_SIGNAL_REGEX.test(reply)) notes.push('missing observant-stance signal');
   const requiredReplyAny = scenario.expected?.requiredReplyAny || [];
   if (requiredReplyAny.length > 0 && !requiredReplyAny.some((pattern) => reply.includes(pattern))) {
     notes.push(`missing content=${requiredReplyAny.join('/')}`);

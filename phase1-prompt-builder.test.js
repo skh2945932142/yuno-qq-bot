@@ -92,8 +92,8 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
   assert.match(prompt, /追问最多一个/);
   assert.match(prompt, /服务式收尾/);
   assert.match(prompt, /未来日记/);
-  assert.match(prompt, /毒舌损友/);
-  assert.match(prompt, /懒狗、菜狗、笨蛋、怂/);
+  assert.match(prompt, /敏锐观察者和有主见/);
+  assert.match(prompt, /默认不使用“懒狗、菜狗、笨蛋、怂”/);
   assert.match(prompt, /本轮辨识度动作/);
   assert.match(prompt, /接话规划/);
   assert.match(prompt, /当前理解/);
@@ -102,7 +102,7 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
   assert.match(prompt, /不要复述 JSON、字段名、分数、模型名/);
 });
 
-test('buildReplyContext separates private and group toxic-banter guidance without counseling templates', () => {
+test('buildReplyContext keeps private and group replies concise without counseling templates', () => {
   const base = {
     relation: { affection: 45, memorySummary: '' },
     userState: { currentEmotion: 'CALM' },
@@ -141,6 +141,7 @@ test('buildReplyContext separates private and group toxic-banter guidance withou
   assert.match(privatePrompt, /直接表达偏爱、开心、想念、吃味和不爽/);
   assert.match(groupPrompt, /群聊通常 1 句/);
   assert.match(groupPrompt, /不展开私人记忆或暧昧内容/);
+  assert.match(groupPrompt, /接话更快、立场更清楚/);
   assert.doesNotMatch(privatePrompt, /我理解你的感受|你选一个|最耗你的|我从你选的那块接/);
   assert.doesNotMatch(groupPrompt, /我理解你的感受|你选一个|最耗你的|我从你选的那块接/);
 });
@@ -517,7 +518,7 @@ test('micro style is injected into strategy lines and adds per-turn density rule
     personalityStrategy: { microStyle: 'spicy', memoryUse: { level: 'none' } },
   }));
   assert.match(spicy, /本轮语气密度=spicy/);
-  assert.match(spicy, /这轮可以更冲一点/);
+  assert.doesNotMatch(spicy, /这轮可以更冲一点/);
 
   const normal = buildReplyContext(createNaturalnessBase({
     personalityStrategy: { microStyle: 'normal', memoryUse: { level: 'none' } },
@@ -555,17 +556,15 @@ test('group style profile is injected for any group chat regardless of prompt pr
   assert.match(standard, /群风格=这个群喜欢短句和梗图/);
   assert.match(fast, /群风格=这个群喜欢短句和梗图/);
 });
-test('persona keeps sarcasm but caps its intensity and target', () => {
+test('persona keeps a distinct observant stance without default toxic banter', () => {
   const prompt = buildReplyContext(createNaturalnessBase());
 
-  // 讽刺能力保留
-  assert.match(prompt, /毒舌损友/);
-  assert.match(prompt, /日常可以讽刺、可以损/);
-  // 强度与打击面被收窄
-  assert.match(prompt, /默认走轻量档/);
-  assert.match(prompt, /不要连着两句贬损/);
+  assert.match(prompt, /敏锐观察/);
+  assert.match(prompt, /有主见/);
+  assert.match(prompt, /不把人当笑点/);
   assert.match(prompt, /不否定对方整个人/);
-  assert.match(prompt, /低频使用/);
   assert.match(prompt, /智力或长相/);
-  assert.doesNotMatch(prompt, /毒舌强度不降/);
+  assert.doesNotMatch(prompt, /毒舌损友/);
+  assert.doesNotMatch(prompt, /日常可以讽刺、可以损/);
+  assert.doesNotMatch(prompt, /这轮可以更冲一点/);
 });

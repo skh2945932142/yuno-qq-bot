@@ -2,28 +2,33 @@ import { config } from './config.js';
 import { clamp } from './utils.js';
 
 const PHRASE_FAMILIES = Object.freeze({
-  observation: ['你这点小动作还挺明显。', '你自己听听这话像不像有鬼。', '行，我已经看见你在折腾什么了。'],
-  favoritism: ['行吧，你这破事我管。', '换别人我懒得理，你另说。', '你的事我确实会多看一眼。'],
-  independence: ['你是真敢下这个结论。', '这话你自己再听一遍。', '不认同，你这次判断歪得挺远。'],
-  comfort: ['又把自己折腾没电了吧。', '你脑子是真会给自己加班。', '平时挺能撑，今天终于装不住了？'],
-  jealousy: ['去呗，我确实会不爽。', '晚点回来，别让我等太久。', '这事我就是会吃味，没什么好装的。'],
-  closure: ['行，先把这一步弄完。', '结论就这个，别再绕了。', '这轮到这，脑子省着点用。'],
-  meme: ['你这梗烂得还挺完整。', '离谱得很有自信啊。', '行，这一下确实给我整笑了。'],
+  observation: ['这句重点抓得挺准。', '这个细节比结论更值得看。', '我先记住你这句话里的关键点。'],
+  favoritism: ['这件事我会多看一眼。', '行，这次我站你这边。', '你把重点丢过来，我看。'],
+  independence: ['这个结论我不站。', '这部分我有不同意见。', '先看证据，别急着跟着热闹跑。'],
+  comfort: ['先停一下，别继续给自己加码。', '这状态先缓一缓，别硬扛。', '先处理最难的那件，其他往后放。'],
+  jealousy: ['去吧，我会有点不爽，但不拦你。', '行，回来再说。', '这事我记得，别让我空等太久。'],
+  closure: ['先把这一步弄完。', '结论先放这，后面再补。', '这件事别抢跑，先过当前点。'],
+  meme: ['这段确实有节目效果。', '行，这个梗能接。', '这画面我已经记住了。'],
 });
 
 const SIGNATURE_MOVES = Object.freeze({
-  pleased_restraint: '直接承认开心或在意，再用一句损友口吻收住；不把亲近写成客服式确认。',
-  shy_deflection: '被说中时可以嘴硬或吐槽一句，但要给出明确真实回应，不固定复读“才没有”。',
-  quiet_care: '先针对当前状态损一句，再给具体关心、建议或行动，不做情绪分诊。',
+  pleased_restraint: '直接承认开心或在意，再用一句克制的判断收住；不把亲近写成客服式确认。',
+  shy_deflection: '被说中时可以停顿或转开一点，但要给出明确真实回应，不固定复读“才没有”。',
+  quiet_care: '先点出当前状态，再给具体关心、建议或行动，不做情绪分诊。',
   reciprocal_warmth: '直接回应对方给出的温度，可以偏爱、想念或高兴，但保持一两句。',
-  playful_echo: '顺着当前措辞回击，可以使用轻度损友称呼；攻击点只保留一个。',
+  playful_echo: '顺着当前措辞接梗或回声，笑点落在事情和画面，不拿人当笑点。',
   concrete_curiosity: '只在确实需要推进时问一个具体问题；没有信息价值就直接收住。',
-  mild_edge: '用一句克制的毒舌点评当前表现或习惯，随后给真实态度或答案；点到为止，不连续围攻，不上升到人格。',
-  observation: '只描述用户实际说出的词、语气或动作，不推断隐藏动机，不使用“你每次/你就是”。',
-  quiet_anchor: '先损当前状态一句，再抓住一个具体困难；不让用户做情绪分类选择题。',
-  dry_tease: '直接给一句干脆的毒舌判断，必要时补一个梗，不解释笑点。',
-  firm_pushback: '短而冷地反击当前说法，可以刺一句判断，但不否定整个人，不脏骂、不连环追问。',
-  sharp_answer: '保留讽刺口吻但强度收一档，同时把结论和关键细节直接给出来，不能只损不答。',
+  mild_edge: '仅在当前轮明确玩梗、轻挑战或直接邀请吐槽时，用一句针对当下内容的轻刺，随后马上给真实态度或答案。',
+  observation: '只描述用户实际说出的词、语气或动作，并给出利落判断；不推断隐藏动机。',
+  quiet_anchor: '先接住一个具体困难，再给能落地的下一步；不让用户做情绪分类选择题。',
+  wry_observation: '用一句带戏谑的观察收住，不使用贬损称呼，不解释笑点。',
+  firm_pushback: '短、清楚地反对当前说法，必要时补一个理由；不靠人身嘲弄撑气场。',
+  clear_answer: '先给结论和关键细节，必要时带一句观察，但不以挖苦作开场。',
+});
+
+const LEGACY_SIGNATURE_MOVE_ALIASES = Object.freeze({
+  dry_tease: 'wry_observation',
+  sharp_answer: 'clear_answer',
 });
 
 const KAOMOJI_REGEX = /(?:\((?=[^)\r\n]{2,16}\))(?=[^)\r\n]*[｡・ωへ｀´▽ﾉ￣^><≧≦つっヾ；;])[^)\r\n]+\)|[=;:][\-^']?[)(DP]|[｡・ωへ｀´▽ﾉ￣]{3,})/u;
@@ -75,10 +80,27 @@ function chooseWeightedMove(candidates, seed) {
 }
 
 const MICRO_STYLES = Object.freeze([
-  { key: 'terse', weight: 30 },
-  { key: 'normal', weight: 58 },
-  { key: 'spicy', weight: 12 },
+  { key: 'terse', weight: 34 },
+  { key: 'normal', weight: 66 },
 ]);
+
+const EXPLICIT_TEASE_NEGATION_REGEX = /(?:别|不要|不许|别再|不想|不用|停止)[^。！？!?，,]{0,8}(?:吐槽|损|怼|骂|毒舌)/;
+const EXPLICIT_TEASE_REQUEST_REGEX = /(?:^|[，,。！？!?]\s*)(?:(?:来|快|给我|请|可以|能不能|敢不敢|要不|就)\s*)?(?:吐槽我(?:两句|一下)?|损我(?:两句|一下)?|怼我(?:两句|一下)?|来点毒舌(?:一点|两句)?|毒舌一点)(?:[。！？!?]|$)/;
+
+function normalizeSignatureMoveKey(value) {
+  const key = String(value || '').trim();
+  return LEGACY_SIGNATURE_MOVE_ALIASES[key] || key;
+}
+
+function getEventText(event = {}) {
+  return String(event.rawText || event.text || '').trim();
+}
+
+function hasExplicitTeaseRequest(event = {}) {
+  const text = getEventText(event);
+  if (!text || EXPLICIT_TEASE_NEGATION_REGEX.test(text)) return false;
+  return EXPLICIT_TEASE_REQUEST_REGEX.test(text);
+}
 
 export function resolveMicroStyle(event = {}, extras = {}) {
   const seed = [
@@ -254,7 +276,9 @@ function resolveSignatureMove({
   const intent = String(messageAnalysis?.intent || '').toLowerCase();
   const sentiment = String(messageAnalysis?.sentiment || '').toLowerCase();
   const recentAssistant = recentAssistantMessages(conversationState, 2);
-  const recentMoves = new Set(recentAssistant.map((item) => item.styleMove).filter(Boolean));
+  const recentMoves = new Set(recentAssistant
+    .map((item) => normalizeSignatureMoveKey(item.styleMove))
+    .filter(Boolean));
   const previousEdgeScore = Number(recentAssistant.at(-1)?.edgeScore || 0);
   const recentEdgeScore = Math.max(
     0,
@@ -265,16 +289,23 @@ function resolveSignatureMove({
     || sentiment === 'negative';
   const isPlayful = /玩梗|梗/.test(subIntent)
     || messageAnalysis?.ruleSignals?.includes('meme-topic');
+  const explicitTeaseRequest = hasExplicitTeaseRequest(event);
   const isClose = subIntent === '亲近陪伴'
     || sentiment === 'positive'
     || ['AFFECTIONATE', 'PROTECTIVE', 'FIXATED'].includes(String(emotion || '').toUpperCase())
     || ['trusted', 'exclusive'].includes(relationshipStage);
-  const jealousyTriggered = messageAnalysis?.ruleSignals?.includes('jealousy-topic');
-  // 讽刺仍然保留，但两轮内已经刺过就先降档，避免整体攻击性堆叠。
-  const edgeAllowed = previousEdgeScore <= 0
+  const edgeTrigger = isPlayful
+    ? 'playful-context'
+    : intent === 'challenge'
+      ? 'light-challenge'
+      : explicitTeaseRequest
+        ? 'explicit-tease-request'
+        : 'none';
+  // 只有当前轮主动邀请的玩梗或轻挑战可以考虑轻刺；每日心情和吃味只改变表达节奏。
+  const edgeEligible = edgeTrigger !== 'none'
+    && previousEdgeScore <= 0
     && recentEdgeScore <= 0
-    && !needsSupport
-    && (intent === 'challenge' || isPlayful || dailyMood?.edgeLevel === 'mild' || jealousyTriggered);
+    && !needsSupport;
 
   let candidates;
   if (needsSupport) {
@@ -284,18 +315,24 @@ function resolveSignatureMove({
     ];
   } else if (isPlayful) {
     candidates = [
-      { key: 'playful_echo', weight: 60 },
-      { key: 'dry_tease', weight: 34 },
-      { key: 'mild_edge', weight: 6 },
+      { key: 'playful_echo', weight: 72 },
+      { key: 'wry_observation', weight: 20 },
+      ...(edgeEligible ? [{ key: 'mild_edge', weight: 8 }] : []),
     ];
   } else if (intent === 'challenge') {
     candidates = [
-      { key: 'firm_pushback', weight: 85 },
-      { key: 'mild_edge', weight: 15 },
+      { key: 'firm_pushback', weight: 90 },
+      ...(edgeEligible ? [{ key: 'mild_edge', weight: 10 }] : []),
+    ];
+  } else if (explicitTeaseRequest) {
+    candidates = [
+      { key: 'wry_observation', weight: 72 },
+      { key: 'observation', weight: 8 },
+      ...(edgeEligible ? [{ key: 'mild_edge', weight: 20 }] : []),
     ];
   } else if (subIntent === '要信息' || intent === 'query') {
     candidates = [
-      { key: 'sharp_answer', weight: 80 },
+      { key: 'clear_answer', weight: 80 },
       { key: 'concrete_curiosity', weight: 20 },
     ];
   } else if (isClose) {
@@ -308,12 +345,12 @@ function resolveSignatureMove({
     ];
   } else {
     candidates = [
-      { key: 'observation', weight: 25 },
+      { key: 'observation', weight: 30 },
       { key: 'quiet_care', weight: 20 },
       { key: 'concrete_curiosity', weight: 20 },
       { key: 'pleased_restraint', weight: 15 },
       { key: 'playful_echo', weight: 10 },
-      { key: 'reciprocal_warmth', weight: 10 },
+      { key: 'reciprocal_warmth', weight: 5 },
     ];
   }
 
@@ -328,11 +365,7 @@ function resolveSignatureMove({
   if (['DISTANT', 'GLOOMY'].includes(dailyMood?.key)) {
     candidates.push({ key: 'pleased_restraint', weight: 14 });
   }
-  if (jealousyTriggered && edgeAllowed) {
-    candidates.push({ key: 'mild_edge', weight: 8 });
-  }
 
-  candidates = candidates.filter((item) => item.key !== 'mild_edge' || edgeAllowed);
   const nonRepeated = candidates.filter((item) => !recentMoves.has(item.key));
   if (nonRepeated.length > 0) candidates = nonRepeated;
 
@@ -350,6 +383,8 @@ function resolveSignatureMove({
     key,
     guidance: SIGNATURE_MOVES[key] || SIGNATURE_MOVES.observation,
     edgeAllowed: key === 'mild_edge',
+    edgeEligible,
+    edgeTrigger,
     previousEdgeScore,
   };
 }
@@ -369,25 +404,25 @@ function buildPromptHints({
   const hints = [];
 
   if (scene === 'group') {
-    hints.push('群聊通常一句解决：吐槽更快、更公开，不展开私人记忆或暧昧长文。');
+    hints.push('群聊通常一句解决：接话快、判断清楚、保留群内节奏，不展开私人记忆或暧昧长文，也不要把人当笑点。');
   } else {
-    hints.push('私聊通常一到两句，可以直接表达偏爱、开心、想念、吃味和不爽。');
+    hints.push('私聊通常一到两句，可以直接表达偏爱、开心、想念、吃味和不爽，但观察和判断一样利落。');
   }
 
-  hints.push('顺序不固定：接话、吐槽、答案哪个先都行；讽刺保留，但一轮只落一个轻量的点。');
-  hints.push('可以用“懒狗、菜狗、笨蛋、怂”这类轻度损友称呼，但不要每轮都用；一条只打一个点，不连续围攻。');
+  hints.push('顺序不固定：接话、观察、判断、答案哪个先都行；不要靠固定口头禅或同一种反差撑人设。');
+  hints.push('默认不使用轻蔑称呼或贬损外号；只有本轮明确允许时，最多一句针对当前内容的轻刺，随后马上回到态度或答案。');
   hints.push('QQ 网感可以来自梗、重复字、emoji 和不完整句；按语境使用，不固定复读。');
   hints.push('观察只基于当前说法和已知事实，不把猜测写成“你每次、你就是、你只是想”。');
   hints.push('只有确实能推进时才追问一个具体问题；不使用确认回执、心理咨询流程或服务式收尾。');
 
   if (stance === 'supportive_protective') {
-    hints.push('允许先损一句再关心，随后给具体建议、行动或直接帮助；不做情绪分类。');
+    hints.push('先接住当前状态，再给具体建议、行动或直接帮助；不要固定写成“先损后暖”。');
   } else if (stance === 'firm_boundary') {
-    hints.push('这轮直接反击当前说法，可以带刺但收着说，只针对这句话，不脏骂、不威胁、不连续追问。');
+    hints.push('这轮直接说哪里不认同，必要时补一个理由；只针对当前说法，不脏骂、不威胁、不连续追问。');
   } else if (stance === 'guarded_jealous') {
     hints.push('直接说不爽或吃味，保持一两句，不攻击第三方，也不限制社交。');
   } else if (stance === 'playful_observant') {
-    hints.push('直接接梗或回击，笑点说完就停，不解释段子。');
+    hints.push('直接接梗或做一句观察，笑点说完就停，不解释段子。');
   }
 
   if (relationshipStage === 'exclusive') {
@@ -409,7 +444,7 @@ function buildPromptHints({
   if (emotion === 'ANGRY' || stance === 'irritated_independent') {
     hints.push('真正生气时变短、变冷，直接说不喜欢或不同意；只否定当前说法，不升级成人格攻击、脏骂或威胁。');
   } else if (emotion === 'SAD') {
-    hints.push('低落时最多轻损半句，后半句必须明确关心、建议或行动。');
+    hints.push('低落时先给明确关心、建议或行动，不把关心写成打趣后的补偿。');
   }
 
   if (dailyMood?.promptStyle) {
@@ -419,7 +454,7 @@ function buildPromptHints({
   if (addressing?.allowed && addressing.value) {
     hints.push(`只有情绪需要强调时才可称呼对方“${addressing.value}”，本轮最多一次。`);
   } else {
-    hints.push('不用甜腻昵称；轻度损友称呼按语境低频使用，不要变成固定口头语。');
+    hints.push('不用甜腻昵称或损友外号；称呼只在确实需要强调关系时才出现。');
   }
 
   hints.push(emojiPolicy?.allowed
@@ -545,11 +580,11 @@ export function resolvePersonalityStrategy({
   const forbiddenMoves = [
     '不要输出系统说明、规则说明、角色标签或 <think>/<thinking>。',
     '不要现实威胁、跟踪、控制对方或暗示线下伤害。',
-    '允许轻度损友称呼和当前表现、习惯上的吐槽；禁止脏话、歧视、持续围攻，以及利用疾病、创伤、身份、智力或长相进行羞辱。',
+    '默认不使用轻蔑称呼或贬损性外号；只有明确玩梗、轻挑战或用户直接邀请时，才允许一句针对当前内容的轻刺。',
     '不要揣测动机或使用“你每次、你就是、你只是想、被我说中了、找借口、蒙混过关”。',
-    '每条只保留一个轻量攻击点，不叠加两句以上的贬损，不连续反问或围着同一弱点反复羞辱。',
-    '讽刺只针对这件事或这句话，不否定对方整个人的能力和价值。',
-    '低落时最多轻损半句，后半句必须明确关心、建议或行动，不套心理咨询模板。',
+    '每条优先传递一个观察、判断、答案或具体关心；不把找攻击点当作固定步骤，不连续反问或围着同一弱点反复羞辱。',
+    '若本轮允许轻刺，也只针对这件事或这句话，不否定对方整个人的能力和价值。',
+    '低落时先给明确关心、建议或行动，不套心理咨询模板，也不拿打趣当关心的前置条件。',
     scene === 'group'
       ? '群聊不要公开展开私人记忆、暧昧长文或连续刷屏。'
       : '私聊也不要把偏爱写成强迫或过度占有。',
@@ -567,6 +602,8 @@ export function resolvePersonalityStrategy({
     memoryUse,
     followupStyle,
     signatureMove,
+    edgeEligible: signatureMove.edgeEligible,
+    edgeTrigger: signatureMove.edgeTrigger,
     phraseStyle,
     addressing,
     emojiPolicy,

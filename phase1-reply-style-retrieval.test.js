@@ -110,7 +110,7 @@ test('retrieveReplyStyleExamples prefers direct attention over generic comfort f
   assert.equal(selected[0].id, 'direct-attention');
 });
 
-test('production reply style corpus retrieves toxic technical samples without counseling templates', async () => {
+test('production reply style corpus retrieves observant technical samples without toxic tags', async () => {
   const selected = await retrieveReplyStyleExamples({
     event: { chatType: 'private' },
     route: { category: 'knowledge_qa' },
@@ -126,9 +126,45 @@ test('production reply style corpus retrieves toxic technical samples without co
   });
 
   assert.equal(selected.length, 3);
-  assert.equal(selected[0].tags.includes('toxic-banter'), true);
+  assert.equal(selected[0].tags.includes('toxic-banter'), false);
   assert.equal(selected[0].tags.includes('technical'), true);
   for (const example of selected) {
-    assert.doesNotMatch(example.humanReply, /我理解你的感受|先不逼你解释|你选一个|最耗你的|我从你选的那块接/);
+    assert.doesNotMatch(example.humanReply, /我理解你的感受|先不逼你解释|你选一个|最耗你的|我从你选的那块接|懒狗|菜狗|笨蛋/);
   }
+});
+
+test('reply style retrieval filters deprecated toxic examples before ranking', async () => {
+  const selected = await retrieveReplyStyleExamples({
+    event: { chatType: 'group' },
+    route: { category: 'group_chat' },
+    analysis: { intent: 'chat', sentiment: 'neutral', ruleSignals: ['direct-mention'] },
+    emotionResult: { emotion: 'CALM' },
+    userTurn: '在吗',
+    replyLengthProfile: { promptProfile: 'standard' },
+  }, {
+    examples: [
+      {
+        id: 'legacy-toxic',
+        scene: 'group',
+        intent: 'chat',
+        emotion: 'CALM',
+        userText: '在吗',
+        humanReply: '哪个倒霉蛋又把事搞砸了？',
+        tags: ['group', 'toxic-banter'],
+        quality: 0.99,
+      },
+      {
+        id: 'observant-presence',
+        scene: 'group',
+        intent: 'chat',
+        emotion: 'CALM',
+        userText: '在吗',
+        humanReply: '在。今天群里有什么新节目？',
+        tags: ['group', 'observant', 'first-turn'],
+        quality: 0.95,
+      },
+    ],
+  });
+
+  assert.deepEqual(selected.map((item) => item.id), ['observant-presence']);
 });

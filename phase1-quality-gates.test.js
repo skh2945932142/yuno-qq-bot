@@ -109,7 +109,7 @@ test('companion prompt snapshot keeps natural preference boundaries', () => {
     },
   });
 
-  assert.match(prompt, /毒舌损友|偏爱和情绪反差/);
+  assert.match(prompt, /敏锐观察者和有主见|偏爱和情绪反差/);
   assert.match(prompt, /严重边界|现实威胁|跟踪控制/);
   assert.match(prompt, /当前理解/);
   assert.match(prompt, /表情风格记忆/);
@@ -129,7 +129,7 @@ test('personality strategy keeps jealousy bounded by safety rules', () => {
 
   assert.equal(strategy.stance, 'guarded_jealous');
   assert.match(strategy.forbiddenMoves.join(' '), /现实威胁/);
-  assert.match(strategy.forbiddenMoves.join(' '), /严重羞辱|持续围攻/);
+  assert.match(strategy.forbiddenMoves.join(' '), /轻蔑称呼|反复羞辱/);
 });
 
 test('failure formatter gives a bounded user-visible reply', () => {

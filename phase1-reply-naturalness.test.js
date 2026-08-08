@@ -60,13 +60,13 @@ test('polishReplyNaturalness leaves normal direct attention wording unchanged', 
   assert.equal(text, '行，这会儿我先听你的。你从最烦的那一件开始。');
 });
 
-test('inspectReplyNaturalness allows light toxic banter but keeps severe attacks blocked', () => {
+test('inspectReplyNaturalness rejects routine mild belittling and keeps severe attacks blocked', () => {
   const options = {
     event: { chatType: 'private' },
     route: { category: 'private_chat' },
     messageAnalysis: { intent: 'help', sentiment: 'neutral' },
     replyPlan: { questionNeeded: true },
-    personalityStrategy: { signatureMove: { key: 'sharp_answer' } },
+    personalityStrategy: { signatureMove: { key: 'clear_answer' } },
     conversationState: { messages: [] },
   };
 
@@ -77,6 +77,8 @@ test('inspectReplyNaturalness allows light toxic banter but keeps severe attacks
   ]) {
     const result = inspectReplyNaturalness(reply, options);
     assert.equal(result.flags.includes('personal-attack'), false, reply);
+    assert.equal(result.flags.includes('unprompted-belittling'), true, reply);
+    assert.equal(result.rewriteRecommended, true, reply);
   }
 
   const severe = inspectReplyNaturalness('闭嘴，蠢货。', options);
@@ -275,28 +277,38 @@ test('one question survives when the inbound message is itself a question or the
   assert.doesNotMatch(plainStatement, /[？?]/);
   assert.equal(plainStatement, '这块缓存我看过了。');
 });
-test('single light jab stays allowed while stacked belittling is flagged and trimmed', () => {
-  const options = {
+test('single light jab is only allowed for a selected mild-edge move', () => {
+  const unauthorizedOptions = {
     event: { chatType: 'private' },
     route: { category: 'private_chat' },
-    messageAnalysis: { intent: 'help', sentiment: 'neutral' },
+    messageAnalysis: { intent: 'challenge', sentiment: 'neutral' },
     replyPlan: { questionNeeded: false },
-    personalityStrategy: { signatureMove: { key: 'sharp_answer' } },
+    personalityStrategy: { signatureMove: { key: 'clear_answer' } },
     conversationState: { messages: [] },
   };
+  const allowedOptions = {
+    ...unauthorizedOptions,
+    personalityStrategy: { signatureMove: { key: 'mild_edge' } },
+  };
 
-  for (const reply of ['早什么早，懒狗。', '菜狗又把代码写炸了？日志交出来。']) {
-    const result = inspectReplyNaturalness(reply, options);
-    assert.equal(result.flags.includes('stacked-belittling'), false, reply);
-    assert.equal(result.rewriteRecommended, false, reply);
-  }
+  const unauthorized = inspectReplyNaturalness('懒狗，把完整日志贴上来。', unauthorizedOptions);
+  assert.equal(unauthorized.flags.includes('unprompted-belittling'), true);
+  assert.equal(unauthorized.rewriteRecommended, true);
 
-  const stacked = inspectReplyNaturalness('懒狗，菜狗，你这脑子进水了吧。先把日志发我。', options);
+  const allowed = inspectReplyNaturalness('懒狗，把完整日志贴上来。', allowedOptions);
+  assert.equal(allowed.flags.includes('unprompted-belittling'), false);
+  assert.equal(allowed.rewriteRecommended, false);
+
+  const polished = polishReplyNaturalness('懒狗，把完整日志贴上来。', unauthorizedOptions);
+  assert.match(polished, /完整日志贴上来/);
+  assert.doesNotMatch(polished, /懒狗/);
+
+  const stacked = inspectReplyNaturalness('懒狗，菜狗，你这脑子进水了吧。先把日志发我。', allowedOptions);
   assert.equal(stacked.flags.includes('stacked-belittling'), true);
   assert.equal(stacked.rewriteRecommended, true);
 
-  const trimmed = deescalateReplyNaturalness('懒狗，菜狗，你这脑子进水了吧。先把日志发我。', options);
+  const trimmed = deescalateReplyNaturalness('懒狗，菜狗，你这脑子进水了吧。先把日志发我。', allowedOptions);
   assert.match(trimmed, /先把日志发我/);
-  assert.equal(inspectReplyNaturalness(trimmed, options).flags.includes('stacked-belittling'), false);
+  assert.equal(inspectReplyNaturalness(trimmed, allowedOptions).flags.includes('stacked-belittling'), false);
   assert.equal(trimmed.includes('菜狗'), false);
 });

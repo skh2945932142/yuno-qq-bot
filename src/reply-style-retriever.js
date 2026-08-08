@@ -8,6 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_EXAMPLES_PATH = path.resolve(__dirname, '..', 'data', 'reply-style', 'examples.jsonl');
 const exampleCache = new Map();
+const DEPRECATED_STYLE_TAGS = new Set(['toxic-banter', 'roast-then-care']);
 
 function normalizeScene(event = {}) {
   return event.chatType === 'private' ? 'private' : 'group';
@@ -44,7 +45,7 @@ export function normalizeReplyStyleExample(example = {}) {
   if (!humanReply) return null;
 
   const userText = stripCqCodes(example.userText || example.input || '');
-  return {
+  const normalized = {
     id: String(example.id || `${example.scene || 'any'}:${humanReply.slice(0, 16)}`).trim(),
     scene: String(example.scene || 'any').trim().toLowerCase() || 'any',
     intent: String(example.intent || 'chat').trim(),
@@ -54,6 +55,9 @@ export function normalizeReplyStyleExample(example = {}) {
     tags: normalizeTags(example.tags || []),
     quality: normalizeQuality(example.quality),
   };
+  return normalized.tags.some((tag) => DEPRECATED_STYLE_TAGS.has(tag))
+    ? null
+    : normalized;
 }
 
 function parseJsonlExamples(raw) {

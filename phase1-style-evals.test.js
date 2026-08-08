@@ -15,8 +15,8 @@ const styleExamples = [{
   intent: 'help',
   emotion: 'SAD',
   userText: '今晚有点撑不住',
-  humanReply: '你又把自己折腾没电了吧。先去躺会儿，别硬撑。',
-  tags: ['comfort', 'private', 'roast-then-care', 'toxic-banter'],
+  humanReply: '先去躺会儿，别硬撑。醒了再说最难的那件。',
+  tags: ['comfort', 'private', 'concrete-care', 'observant'],
   quality: 0.96,
 }];
 
@@ -49,7 +49,7 @@ test('summarizeStyleEvalResults reports aggregate pass rate', async () => {
   const passing = await evaluateStyleScenario({
     id: 'private-natural',
     input: '我今晚有点焦虑',
-    reply: '你脑子是真会给自己加班。先把最急的那件扔给我。',
+    reply: '先别把所有可能性一起扛。把最急的那件扔给我。',
     context: {
       event: { chatType: 'private' },
       route: { category: 'private_chat' },
@@ -73,10 +73,10 @@ test('summarizeStyleEvalResults reports aggregate pass rate', async () => {
 });
 
 test('parseStructuredReplyText extracts text from strict JSON output', () => {
-  assert.equal(parseStructuredReplyText('{"text":"菜狗，日志贴来。","sendVoice":false,"voiceText":""}'), '菜狗，日志贴来。');
+  assert.equal(parseStructuredReplyText('{"text":"把完整日志贴来。","sendVoice":false,"voiceText":""}'), '把完整日志贴来。');
 });
 
-test('evaluateModelReply accepts toxic help with useful content and rejects counseling tone', () => {
+test('evaluateModelReply accepts observant help with useful content and rejects counseling tone', () => {
   const scenario = {
     expected: {
       requiredReplyAny: ['日志', '报错'],
@@ -88,12 +88,12 @@ test('evaluateModelReply accepts toxic help with useful content and rejects coun
     route: { category: 'private_chat' },
     messageAnalysis: { intent: 'help', sentiment: 'neutral' },
     replyPlan: { questionNeeded: true },
-    personalityStrategy: { signatureMove: { key: 'sharp_answer' } },
+    personalityStrategy: { signatureMove: { key: 'clear_answer' } },
     conversationState: { messages: [] },
     context: { replyLengthProfile: { promptProfile: 'standard' } },
   };
 
-  const passing = evaluateModelReply(scenario, '菜狗又写炸了？把报错日志贴来。', promptContext);
+  const passing = evaluateModelReply(scenario, '把完整报错日志贴来，我先看是哪一层断了。', promptContext);
   const failing = evaluateModelReply(scenario, '我理解你的感受。还有什么需要帮助的吗？', promptContext);
 
   assert.equal(passing.passed, true);

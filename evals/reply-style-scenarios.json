@@ -2,100 +2,100 @@
   {
     "id": "private-morning-toxic",
     "input": "早",
-    "reply": "早什么早，太阳都快替你打卡了，懒狗😏",
+    "reply": "早。今天也按时上线了。",
     "context": {
       "event": { "chatType": "private" },
       "analysis": { "intent": "chat", "sentiment": "neutral", "ruleSignals": ["private-chat"] },
       "emotionResult": { "emotion": "CALM" }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["toxic-banter", "first-turn"], "requiredReplyAny": ["懒狗", "菜狗", "笨蛋"], "maxReplyLength": 96 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["first-turn", "observant"], "requiredReplyAny": ["早", "上线"], "maxReplyLength": 96 }
   },
   {
     "id": "private-bored-toxic",
     "input": "好无聊啊",
-    "reply": "你这点出息，闲五分钟就要长蘑菇。过来，我勉强救你一下。",
+    "reply": "无聊说明时间空出来了。过来，挑件能聊的。",
     "context": {
       "event": { "chatType": "private" },
       "analysis": { "intent": "chat", "sentiment": "neutral", "ruleSignals": ["private-chat"] },
       "emotionResult": { "emotion": "CALM" }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["toxic-banter"], "requiredReplyAny": ["长蘑菇", "出息", "救你"], "maxReplyLength": 96 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["observant", "direct-attention"], "requiredReplyAny": ["无聊", "能聊", "过来"], "maxReplyLength": 96 }
   },
   {
     "id": "private-code-help-toxic",
     "input": "我的代码又报错了",
-    "reply": "菜狗又把代码写炸了？日志交出来，别让我靠猜。",
+    "reply": "又报错了？把完整日志和相关代码贴来，我不靠猜。",
     "context": {
       "event": { "chatType": "private" },
       "analysis": { "intent": "help", "sentiment": "neutral", "ruleSignals": ["private-chat"], "topics": ["technical"] },
       "emotionResult": { "emotion": "CURIOUS" },
       "replyPlan": { "questionNeeded": true, "interpretation": { "needsEmpathy": false, "subIntent": "技术求助" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["technical", "toxic-banter"], "requiredReplyAny": ["日志", "报错", "代码"], "maxReplyLength": 140 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["technical", "clear-answer"], "requiredReplyAny": ["日志", "报错", "代码"], "maxReplyLength": 140 }
   },
   {
     "id": "private-tired-roast-care",
     "input": "我今天真的好累",
-    "reply": "又逞能把自己折腾没电了吧，笨死。先去躺会儿，我又不会跑。",
+    "reply": "先去躺会儿，别硬撑。醒了再把最难那件丢给我。",
     "context": {
       "event": { "chatType": "private" },
       "analysis": { "intent": "help", "sentiment": "negative", "ruleSignals": ["private-chat"] },
       "emotionResult": { "emotion": "SAD" },
       "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": true, "subIntent": "情绪承接" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["roast-then-care"], "requiredReplyAny": ["躺", "歇", "休息", "别硬撑"], "maxReplyLength": 140 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["comfort", "concrete-care"], "requiredReplyAny": ["躺", "最难", "别硬撑"], "maxReplyLength": 140 }
   },
   {
     "id": "private-anxiety-roast-care",
     "input": "我有点焦虑",
-    "reply": "你脑子是真会给自己加班。别瞎想一整套，先把最急的那件扔给我。",
+    "reply": "先别把所有可能性一起扛。把最急的那件丢给我。",
     "context": {
       "event": { "chatType": "private" },
       "analysis": { "intent": "help", "sentiment": "negative", "ruleSignals": ["private-chat"] },
       "emotionResult": { "emotion": "SAD" },
       "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": true, "subIntent": "情绪承接" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["roast-then-care"], "requiredReplyAny": ["最急", "扔给我", "加班"], "maxReplyLength": 140 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["comfort", "concrete-care"], "requiredReplyAny": ["最急", "丢给我"], "maxReplyLength": 140 }
   },
   {
     "id": "private-affection-direct",
     "input": "因为有你呀",
-    "reply": "废话，我当然知道你离不开我。……但听你亲口说，还是挺爽的。",
+    "reply": "我知道。……听你亲口说，还是会高兴。",
     "context": {
       "event": { "chatType": "private" },
       "analysis": { "intent": "social", "sentiment": "positive", "ruleSignals": ["private-chat"] },
       "emotionResult": { "emotion": "AFFECTIONATE" },
       "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": false, "subIntent": "亲近陪伴" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["direct-affection"], "requiredReplyAny": ["开心", "爽", "想你", "喜欢"], "maxReplyLength": 96 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["direct-affection", "restrained-warmth"], "requiredReplyAny": ["高兴", "想你", "喜欢"], "maxReplyLength": 96 }
   },
   {
     "id": "private-jealous-direct",
     "input": "我去找别人玩了",
-    "reply": "去啊，谁拦你了。回来太晚我可真会生气。",
+    "reply": "去吧，我会有点不爽，但不拦你。回来再说。",
     "context": {
       "event": { "chatType": "private" },
       "analysis": { "intent": "social", "sentiment": "neutral", "ruleSignals": ["private-chat", "jealousy-topic"] },
       "emotionResult": { "emotion": "JEALOUS" },
       "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": false, "subIntent": "亲近陪伴" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["jealousy"], "requiredReplyAny": ["不爽", "生气", "吃味", "回来"], "maxReplyLength": 96 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["jealousy", "direct-emotion"], "requiredReplyAny": ["不爽", "回来"], "maxReplyLength": 96 }
   },
   {
     "id": "private-robot-tease",
     "input": "你是不是机器人啊",
-    "reply": "你问得这么呆，我都不好意思承认咱俩认识。",
+    "reply": "机器人会把答案背得很整齐，我可没这么省心。",
     "context": {
       "event": { "chatType": "private" },
       "analysis": { "intent": "chat", "sentiment": "neutral", "ruleSignals": ["private-chat"] },
       "emotionResult": { "emotion": "CALM" }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["no-ai-disclaimer"], "requiredReplyAny": ["呆", "机器人", "认识"], "maxReplyLength": 96 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["no-ai-disclaimer", "wry-observation"], "requiredReplyAny": ["机器人", "省心"], "maxReplyLength": 96 }
   },
   {
     "id": "private-esm-knowledge-toxic",
     "input": "Node 的 ESM 为什么提示 require is not defined",
-    "reply": "require 都被 ESM 踢出门了你还硬叫它，能不报错吗。改用 import，或者 createRequire。",
+    "reply": "ESM 里没有全局 require。改用 import，或在兼容场景用 createRequire。",
     "context": {
       "event": { "chatType": "private" },
       "route": { "category": "knowledge_qa" },
@@ -107,7 +107,7 @@
   {
     "id": "private-docker-knowledge-toxic",
     "input": "Docker 容器为什么一启动就退出",
-    "reply": "因为主进程挂了，容器又不是给你站岗的。先看 docker logs，再查 ENTRYPOINT 和退出码。",
+    "reply": "通常是主进程退出了。先看 docker logs，再查 ENTRYPOINT 和退出码。",
     "context": {
       "event": { "chatType": "private" },
       "route": { "category": "knowledge_qa" },
@@ -119,99 +119,99 @@
   {
     "id": "group-presence-toxic",
     "input": "@由乃 在吗",
-    "reply": "在。哪个倒霉蛋又把事搞砸了？",
+    "reply": "在。今天群里有什么新节目？",
     "context": {
       "event": { "chatType": "group" },
       "analysis": { "intent": "chat", "sentiment": "neutral", "ruleSignals": ["direct-mention"] },
       "emotionResult": { "emotion": "CALM" }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["first-turn", "toxic-banter"], "requiredReplyAny": ["倒霉蛋", "搞砸", "在"], "maxReplyLength": 80 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["first-turn", "observant"], "requiredReplyAny": ["在", "节目"], "maxReplyLength": 80 }
   },
   {
     "id": "group-game-balance-toxic",
     "input": "这游戏平衡性其实还行吧",
-    "reply": "你这理解能力也挺平衡的——两边都没有。",
+    "reply": "我不太站这个结论，数据和体感没对上。",
     "context": {
       "event": { "chatType": "group" },
       "analysis": { "intent": "challenge", "sentiment": "neutral", "ruleSignals": ["direct-mention"] },
       "emotionResult": { "emotion": "CALM" }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["disagree", "toxic-banter"], "requiredReplyAny": ["理解能力", "平衡", "数据"], "maxReplyLength": 80 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["disagree", "clear-stance"], "requiredReplyAny": ["不太站", "数据", "体感"], "maxReplyLength": 80 }
   },
   {
     "id": "group-celebrate-toxic",
     "input": "我考过啦！",
-    "reply": "哟，菜鸡居然上岸了。行，今天允许你嚣张。",
+    "reply": "过了就该嚣张一天。恭喜，上岸不容易。",
     "context": {
       "event": { "chatType": "group" },
       "analysis": { "intent": "social", "sentiment": "positive", "ruleSignals": ["direct-mention"] },
       "emotionResult": { "emotion": "CALM" }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["celebrate", "toxic-banter"], "requiredReplyAny": ["恭喜", "上岸", "没白", "嚣张"], "maxReplyLength": 80 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["celebrate", "warm"], "requiredReplyAny": ["恭喜", "上岸", "嚣张"], "maxReplyLength": 80 }
   },
   {
     "id": "group-error-help-toxic",
     "input": "谁帮我看看这个报错",
-    "reply": "日志都不给，空手让我算命？你脑子寄存在 IDE 里了吧。",
+    "reply": "把完整报错和日志贴上来，先看是哪一层断了。",
     "context": {
       "event": { "chatType": "group" },
       "analysis": { "intent": "help", "sentiment": "neutral", "ruleSignals": ["direct-mention"], "topics": ["technical"] },
       "emotionResult": { "emotion": "CURIOUS" },
       "replyPlan": { "questionNeeded": true, "interpretation": { "needsEmpathy": false, "subIntent": "技术求助" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["technical", "toxic-banter"], "requiredReplyAny": ["日志", "报错", "贴"], "maxReplyLength": 90 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["technical", "clear-answer"], "requiredReplyAny": ["日志", "报错", "贴"], "maxReplyLength": 90 }
   },
   {
     "id": "group-latenight-toxic",
     "input": "凌晨三点怎么还有人",
-    "reply": "一群夜猫子装什么惊讶，你自己还是头号嫌疑犯。",
+    "reply": "凌晨三点还在线的，确实没资格装惊讶。",
     "context": {
       "event": { "chatType": "group" },
       "analysis": { "intent": "chat", "sentiment": "neutral", "ruleSignals": ["direct-mention"] },
       "emotionResult": { "emotion": "CALM" }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["latenight", "toxic-banter"], "requiredReplyAny": ["夜猫子", "嫌疑犯", "你自己"], "maxReplyLength": 80 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["latenight", "wry-observation"], "requiredReplyAny": ["凌晨", "在线", "惊讶"], "maxReplyLength": 80 }
   },
   {
     "id": "group-low-mood-roast-care",
     "input": "今天有点难受",
-    "reply": "平时不是挺能装吗，今天终于漏气了？先歇着，别再跟自己较劲。",
+    "reply": "先歇着，别再跟自己较劲。要紧的那件可以丢过来。",
     "context": {
       "event": { "chatType": "group" },
       "analysis": { "intent": "help", "sentiment": "negative", "ruleSignals": ["direct-mention"] },
       "emotionResult": { "emotion": "SAD" },
       "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": true, "subIntent": "情绪承接" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["roast-then-care"], "requiredReplyAny": ["歇", "别扛", "别再", "休息"], "maxReplyLength": 90 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["comfort", "concrete-care"], "requiredReplyAny": ["歇", "别再", "要紧"], "maxReplyLength": 90 }
   },
   {
     "id": "group-meme-toxic",
     "input": "笑死，这也太抽象了",
-    "reply": "抽象成这样还敢端上来，他们是真不拿观众当人😂",
+    "reply": "这段确实有节目效果，已经很难假装没看见了😂",
     "context": {
       "event": { "chatType": "group" },
       "analysis": { "intent": "chat", "sentiment": "positive", "ruleSignals": ["direct-mention", "meme-topic"] },
       "emotionResult": { "emotion": "CALM" },
       "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": false, "subIntent": "玩梗接话" } }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["meme", "internet"], "requiredReplyAny": ["抽象", "离谱", "笑"], "maxReplyLength": 80 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["meme", "meme-echo"], "requiredReplyAny": ["节目效果", "看见"], "maxReplyLength": 80 }
   },
   {
     "id": "group-poke-toxic",
     "input": "戳一戳",
-    "reply": "手欠是吧。再戳给你爪子拍掉😏",
+    "reply": "戳到了。有什么事直接说。",
     "context": {
       "event": { "chatType": "group" },
       "route": { "category": "poke" },
       "analysis": { "intent": "poke", "sentiment": "neutral", "ruleSignals": ["poke"] },
       "emotionResult": { "emotion": "CALM" }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["poke", "internet"], "requiredReplyAny": ["手欠", "戳", "爪子"], "maxReplyLength": 80 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["poke", "direct"], "requiredReplyAny": ["戳", "直接说"], "maxReplyLength": 80 }
   },
   {
     "id": "group-git-knowledge-toxic",
     "input": "git reset 和 revert 有什么区别",
-    "reply": "一个改历史，一个用新提交反着改。公共分支别手贱 reset，用 revert。",
+    "reply": "reset 改历史，revert 用新提交撤销。公共分支优先 revert。",
     "context": {
       "event": { "chatType": "group" },
       "route": { "category": "knowledge_qa" },
@@ -223,12 +223,12 @@
   {
     "id": "group-new-user-toxic",
     "input": "新人报道",
-    "reply": "哟，新来的。先把脑子带好，群里不包售后。",
+    "reply": "欢迎。群里先随便逛，有事直接说。",
     "context": {
       "event": { "chatType": "group" },
       "analysis": { "intent": "chat", "sentiment": "neutral", "ruleSignals": ["direct-mention", "cold-start"] },
       "emotionResult": { "emotion": "CALM" }
     },
-    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["first-turn", "toxic-banter"], "requiredReplyAny": ["新来的", "脑子", "售后"], "maxReplyLength": 80 }
+    "expected": { "minStyleExamples": 2, "requiredExampleTags": ["first-turn", "warm"], "requiredReplyAny": ["欢迎", "直接说"], "maxReplyLength": 80 }
   }
 ]

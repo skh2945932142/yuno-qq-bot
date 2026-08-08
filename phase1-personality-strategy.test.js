@@ -146,9 +146,9 @@ test('signature move changes with the conversational intent instead of using one
   });
 
   assert.equal(['observation', 'quiet_care', 'pleased_restraint', 'playful_echo', 'reciprocal_warmth'].includes(normal.signatureMove.key), true);
-  assert.equal(['playful_echo', 'dry_tease', 'mild_edge'].includes(playful.signatureMove.key), true);
+  assert.equal(['playful_echo', 'wry_observation', 'mild_edge'].includes(playful.signatureMove.key), true);
   assert.doesNotMatch(playful.signatureMove.guidance, /揣测动机|攻击人格/);
-  assert.equal(factual.signatureMove.key, 'sharp_answer');
+  assert.equal(factual.signatureMove.key, 'clear_answer');
   assert.equal(
     ['quiet_anchor', 'quiet_care'].includes(resolvePersonalityStrategy({
       event: baseEvent(),
@@ -238,7 +238,7 @@ test('edge moves are suppressed when any of the last two turns already carried e
   assert.equal(strategy.signatureMove.edgeAllowed, false);
 });
 
-test('forbidden moves cap belittling density without banning sarcasm', () => {
+test('default persona favors observation and a clear stance over routine insults', () => {
   const strategy = resolvePersonalityStrategy({
     event: baseEvent(),
     relation: { affection: 40 },
@@ -247,8 +247,37 @@ test('forbidden moves cap belittling density without banning sarcasm', () => {
   });
   const forbidden = strategy.forbiddenMoves.join(' ');
 
-  assert.match(forbidden, /只保留一个轻量攻击点/);
+  assert.match(forbidden, /默认不使用轻蔑称呼/);
   assert.match(forbidden, /不否定对方整个人/);
-  assert.match(forbidden, /允许轻度损友称呼/);
-  assert.match(strategy.promptHints.join(' '), /讽刺保留/);
+  assert.match(strategy.promptHints.join(' '), /观察|判断|主见/);
+  assert.notEqual(strategy.microStyle, 'spicy');
+});
+
+test('only explicit banter triggers make a mild edge eligible', () => {
+  const explicit = resolvePersonalityStrategy({
+    event: baseEvent({ messageId: 'explicit-edge', rawText: '来，吐槽我两句。' }),
+    relation: { affection: 40 },
+    messageAnalysis: { intent: 'chat', sentiment: 'neutral', ruleSignals: [] },
+    emotionResult: { emotion: 'CALM', dailyMood: { key: 'STEADY', edgeLevel: 'none' } },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '接话' } },
+  });
+  const negated = resolvePersonalityStrategy({
+    event: baseEvent({ messageId: 'negated-edge', rawText: '别吐槽我，认真说。' }),
+    relation: { affection: 40 },
+    messageAnalysis: { intent: 'chat', sentiment: 'neutral', ruleSignals: [] },
+    emotionResult: { emotion: 'CALM', dailyMood: { key: 'IRRITABLE', edgeLevel: 'mild' } },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '接话' } },
+  });
+  const moody = resolvePersonalityStrategy({
+    event: baseEvent({ messageId: 'mood-only', rawText: '今天好无聊。' }),
+    relation: { affection: 40 },
+    messageAnalysis: { intent: 'chat', sentiment: 'neutral', ruleSignals: [] },
+    emotionResult: { emotion: 'CALM', dailyMood: { key: 'IRRITABLE', edgeLevel: 'mild' } },
+    replyPlan: { type: 'direct', questionNeeded: false, interpretation: { subIntent: '接话' } },
+  });
+
+  assert.equal(explicit.edgeEligible, true);
+  assert.equal(explicit.edgeTrigger, 'explicit-tease-request');
+  assert.equal(negated.edgeEligible, false);
+  assert.equal(moody.edgeEligible, false);
 });
