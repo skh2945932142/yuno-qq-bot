@@ -3,7 +3,12 @@ import { config, describeHttpBaseUrlProblem, validateRuntimeConfig } from './con
 import { connectDB, disconnectDB, isDbReady } from './db.js';
 import { logger } from './logger.js';
 import { startScheduler, stopScheduler } from './scheduler.js';
-import { processPersistJob, processReplyJob } from './message-workflow.js';
+import {
+  processIncomingMessage,
+  processPersistJob,
+  processReplyJob,
+  shouldRespondToEvent,
+} from './message-workflow.js';
 import { runYunoConversation } from './yuno-core.js';
 import { createQueueManager } from './queue-manager.js';
 import { initializeTelemetry, shutdownTelemetry } from './telemetry.js';
@@ -12,6 +17,11 @@ import { resolveFfmpegPath } from './services/audio.js';
 import { buildDeliveryKey, createDeliveryLedger } from './delivery-ledger.js';
 import { getActiveConversationCount, waitForConversationsIdle } from './conversation-executor.js';
 import { getRetrievalProviderStatus } from './retrieval-gateway.js';
+import { handleInboundEvent } from './inbound-event-service.js';
+import { createYunoApplication as createDefaultYunoApplication } from './application/create-yuno-application.js';
+import { createLegacyWorkflowPort } from './application/ports/legacy-workflow-port.js';
+import { createRuntimePorts as createDefaultRuntimePorts } from './composition/create-runtime-ports.js';
+import { APPLICATION_JOB_VERSION, normalizeApplicationJob } from './application/contracts/queue-job.js';
 
 let activeRuntime = null;
 let initializingRuntime = null;
@@ -48,12 +58,23 @@ async function deliverAutomationToolResult(event, toolResult, options = {}) {
 }
 
 export async function processReplyQueueJob(payload, job = {}, deps = {}) {
-  if (payload?.kind === 'automation-tool-result') {
+  const normalizedJob = normalizeApplicationJob(payload, 'reply');
+  const request = normalizedJob.version === 0 ? payload : (normalizedJob.request || payload);
+  if (normalizedJob.kind === 'automation-tool-result') {
     const deliver = deps.deliverAutomationToolResult || deliverAutomationToolResult;
-    return deliver(payload.event, payload.toolResult, { deliveryKey: payload.deliveryKey });
+    return deliver(request.event, request.toolResult, { deliveryKey: request.deliveryKey });
   }
 
-  return (deps.processReplyJob || processReplyJob)(payload, { queueJobId: job.id });
+  if (typeof deps.processReplyJob === 'function') {
+    return deps.processReplyJob(request, { queueJobId: job.id });
+  }
+
+  const application = deps.application || getRuntimeServices().application;
+  if (application?.handleReplyJob) {
+    return application.handleReplyJob(normalizedJob.version === 0 ? payload : normalizedJob, job, deps);
+  }
+
+  return processReplyJob(request, { queueJobId: job.id });
 }
 
 export function dispatchAutomationToolResults(event, toolResults = []) {
@@ -69,7 +90,10 @@ export function dispatchAutomationToolResults(event, toolResults = []) {
   const deliveries = toolResults.map((toolResult, index) => {
     const deliveryKey = buildAutomationDeliveryKey(event, toolResult, index);
     return queueManager.enqueueReply({
+      version: APPLICATION_JOB_VERSION,
       kind: 'automation-tool-result',
+      request: { event, toolResult, deliveryKey },
+      // Keep the legacy fields while queued jobs transition to the versioned shape.
       event,
       toolResult,
       deliveryKey,
@@ -198,17 +222,26 @@ export async function initializeYunoRuntime(options = {}) {
   const stopRuntimeScheduler = options.stopScheduler || stopScheduler;
   const createRuntimeLedger = options.createDeliveryLedger || createDeliveryLedger;
   const probeReadiness = options.probeRuntimeReadiness || probeRuntimeReadiness;
+  const createRuntimePorts = options.createRuntimePorts || createDefaultRuntimePorts;
+  const createApplication = options.createYunoApplication || createDefaultYunoApplication;
 
   initializingRuntime = (async () => {
     let queueManager = null;
     let scheduler = null;
+    let application = null;
     try {
       validateRuntimeConfig(runtimeConfig);
       await connectDatabase(runtimeConfig);
       await initializeRuntimeTelemetry(runtimeConfig);
       queueManager = await createRuntimeQueue(runtimeConfig, {
         replyJob: processReplyQueueJob,
-        persistJob: async (payload, job) => processPersistJob(payload, { queueJobId: job.id }),
+        persistJob: async (payload, job) => {
+          const runtimeApplication = getRuntimeServices().application;
+          if (runtimeApplication?.handlePersistJob) {
+            return runtimeApplication.handlePersistJob(payload, job);
+          }
+          return processPersistJob(payload, { queueJobId: job.id });
+        },
         workers: { reply: true, persist: true },
         deferWorkers: true,
       }, {
@@ -217,12 +250,33 @@ export async function initializeYunoRuntime(options = {}) {
 
       const readiness = await probeReadiness(runtimeConfig);
       const deliveryLedger = createRuntimeLedger();
+      const ports = createRuntimePorts({
+        runtimeConfig,
+        queueManager,
+        deliveryLedger,
+        deliveryAdapter: options.deliveryAdapter || null,
+        protocolAdapter: options.protocolAdapter || null,
+      });
+      const legacyWorkflow = createLegacyWorkflowPort({
+        shouldRespondToEvent,
+        processIncomingMessage,
+        processPersistJob,
+        processReplyJob,
+        handleInboundEvent,
+      });
+      application = createApplication({
+        config: runtimeConfig,
+        ports,
+        legacyWorkflow,
+      });
       setRuntimeServices({
         queueManager,
         readiness,
         deliveryLedger,
         deliveryAdapter: options.deliveryAdapter || null,
         protocolAdapter: options.protocolAdapter || null,
+        ports,
+        application,
       });
       await queueManager.startWorkers();
       scheduler = options.startScheduler === false ? null : startRuntimeScheduler({ config: runtimeConfig });
@@ -232,6 +286,8 @@ export async function initializeYunoRuntime(options = {}) {
         queueManager,
         readiness,
         deliveryLedger,
+        ports,
+        application,
         scheduler,
         accepting: true,
         initializedAt: new Date(),

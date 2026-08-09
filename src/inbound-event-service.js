@@ -3,7 +3,6 @@ import { recordWorkflowMetric } from './metrics.js';
 import { isNonTargetPokeEvent } from './message-analysis.js';
 import { recordInboundGroupObservation } from './group-ops.js';
 import { evaluateGroupAutomation } from './group-automation.js';
-import { shouldRespondToEvent } from './message-workflow.js';
 import { recordParticipationReply, resolveParticipationDecision } from './participation-policy.js';
 import { getRuntimeServices } from './runtime-services.js';
 import { recordInboundMessageLog } from './message-log.js';
@@ -28,7 +27,9 @@ function createInboundDeps(deps = {}) {
     observeGroupEvent: deps.observeGroupEvent || recordInboundGroupObservation,
     evaluateGroupAutomation: deps.evaluateGroupAutomation || evaluateGroupAutomation,
     dispatchAutomationToolResults: deps.dispatchAutomationToolResults || (async () => []),
-    shouldRespondToEvent: deps.shouldRespondToEvent || shouldRespondToEvent,
+    shouldRespondToEvent: deps.shouldRespondToEvent || (async () => {
+      throw new Error('INBOUND_DECISION_USE_CASE_REQUIRED');
+    }),
     onReplyApproved: deps.onReplyApproved || (async ({ decision }) => decision),
     recordWorkflowMetric: deps.recordWorkflowMetric || recordWorkflowMetric,
     resolveParticipationDecision: deps.resolveParticipationDecision || resolveParticipationDecision,

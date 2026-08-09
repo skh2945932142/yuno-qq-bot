@@ -3,6 +3,8 @@ let runtimeServices = {
   deliveryLedger: null,
   deliveryAdapter: null,
   protocolAdapter: null,
+  application: null,
+  ports: null,
   readiness: {
     qdrant: { enabled: false, ready: false, reason: 'unknown' },
     voice: { enabled: false, ready: false, reason: 'unknown' },
@@ -26,6 +28,8 @@ export function resetRuntimeServices() {
     deliveryLedger: null,
     deliveryAdapter: null,
     protocolAdapter: null,
+    application: null,
+    ports: null,
     readiness: {
       qdrant: { enabled: false, ready: false, reason: 'unknown' },
       voice: { enabled: false, ready: false, reason: 'unknown' },

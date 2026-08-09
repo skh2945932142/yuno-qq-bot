@@ -46,6 +46,7 @@ await import('./phase1-retry.test.js');
 await import('./phase1-formatter-coverage.test.js');
 await import('./phase1-tool-config.test.js');
 await import('./phase1-yuno-core.test.js');
+await import('./phase1-architecture-application.test.js');
 await import('./phase1-koishi-session-adapter.test.js');
 await import('./phase1-koishi-adapters.test.js');
 await import('./phase1-yuno-runtime.test.js');

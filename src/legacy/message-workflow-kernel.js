@@ -1,0 +1,2765 @@
+﻿import { config } from '../config.js';
+import { readFile } from 'node:fs/promises';
+import { logger } from '../logger.js';
+import { chat, tts, analyzeMessage } from '../minimax.js';
+import { sendReply, sendStructuredReply, sendVoice } from '../sender.js';
+import { analyzeTrigger, analyzeTriggerFast } from '../message-analysis.js';
+import { resolveEmotion, shouldSendVoiceForEmotion } from '../emotion-engine.js';
+import { resolveDailyMood } from '../daily-mood.js';
+import {
+  ensureGroupState,
+  getRecentEvents,
+  recordGroupEvent,
+  updateGroupStateFromAnalysis,
+} from '../state/group-state-runtime.js';
+import {
+  ensureRelation,
+  ensureUserState,
+  updateRelationProfile,
+  updateUserState,
+} from '../session-state.js';
+import { getConversationState, appendConversationMessages } from '../conversation-memory.js';
+import { ensureUserProfileMemory, updateUserProfileMemory } from '../profile-memory.js';
+import { retrieveKnowledge } from '../knowledge-base.js';
+import { buildReplyContext, buildUserTurnContext } from '../prompt-builder.js';
+import { createTraceContext, failTrace, finalizeTrace, withTraceSpan } from '../runtime-tracing.js';
+import { planIncomingTask } from '../task-router.js';
+import { registerQueryTools } from '../query-tools.js';
+import { toolRegistry } from '../tools/registry.js';
+import { normalizeLegacyMessageEvent } from '../chat/session.js';
+import { safeJsonParse, stripCqCodes } from '../utils.js';
+import { getRuntimeServices } from '../runtime-services.js';
+import { recordWorkflowMetric } from '../metrics.js';
+import { getSpecialUserByUserId, getSpecialUserKnowledgeTags } from '../special-users.js';
+import { resolveUserPersonaPolicy } from '../persona-policy.js';
+import { formatToolResultAsYuno, normalizeFormatterOutputs } from '../yuno-formatter.js';
+import { resolveReplyLengthProfile } from '../reply-length.js';
+import { resolveReplyIntentPlan } from '../reply-intent-plan.js';
+import { resolvePersonalityStrategy } from '../personality-strategy.js';
+import { persistUserMemoryEvents, touchReferencedMemoryEvents } from '../user-memory-events.js';
+import { collectMemeAssetForEvent } from '../meme-collector.js';
+import { indexMemeAssetSemantics, indexUserMemoryEvents, retrieveMemoryContext } from '../memory-retrieval.js';
+import { isMemoryQuery, rewriteRetrievalQuery } from '../retrieval-query.js';
+import { appendGroupDialogueChunk, retrieveGroupDialogueContext } from '../group-dialogue.js';
+import { recordInboundMessageLog, recordOutboundMessageLog } from '../message-log.js';
+import { markMemeUsed } from '../meme-library.js';
+import { planContextualMemeReply } from '../meme-reply-planner.js';
+import { getMemeCandidates, mergeMemeCandidates } from '../meme-provider.js';
+import { retrieveReplyStyleExamples } from '../reply-style-retriever.js';
+import {
+  deescalateReplyNaturalness,
+  inspectReplyNaturalness,
+  polishReplyNaturalness,
+} from '../reply-naturalness.js';
+import {
+  resolveSegmentDelayMs,
+  shouldSegmentReply,
+  splitReplyIntoSegments,
+} from '../reply-segmenter.js';
+import { resolveReplyCadence, sleep as cadenceSleep } from '../reply-cadence.js';
+import {
+  buildBudgetFallbackVariant,
+  buildModelFallbackVariant,
+} from '../reply-variants.js';
+import { withConversationExecution } from '../conversation-executor.js';
+import { executeTrackedDelivery as executeDeliveryTask } from '../delivery-ledger.js';
+
+registerQueryTools(toolRegistry);
+
+const ALLOWED_SOFT_EMOJIS = new Set([
+  '\u2764', '\u2665', '\u{1F495}', '\u{1F49E}', '\u2728',
+  '\u{1F602}', '\u{1F923}', '\u{1F60A}', '\u{1F605}', '\u{1F914}',
+  '\u{1F644}', '\u{1F62E}', '\u{1F97A}', '\u{1F624}', '\u{1F634}',
+  '\u{1F44D}', '\u{1F44C}', '\u{1F389}', '\u{1F31F}', '\u{1F308}',
+  '\u{1F60F}', '\u{1F612}', '\u{1F643}', '\u{1F971}', '\u{1F636}',
+  '\u{1F61C}', '\u{1F92D}', '\u{1F615}', '\u{1F979}', '\u{1F440}',
+]);
+const EMOJI_REGEX = /\p{Extended_Pictographic}/gu;
+const THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*?<\/\1>/gi;
+const OPEN_THINK_BLOCK_REGEX = /<(think|thinking)\b[^>]*>[\s\S]*$/i;
+const THINK_FENCE_REGEX = /```(?:think|thinking|reasoning|analysis)\s*[\s\S]*?```/gi;
+const REASONING_LABEL_REGEX = /^(?:\s{0,3}(?:思考过程|思路|分析|推理|内心独白|reasoning|analysis|thought process|thinking)\s*[:：]|(?:step\s*\d+|步骤\s*\d+)\s*[:：])/i;
+const REASONING_CONTINUATION_REGEX = /^(?:\s*[-*•]\s+|\s*\d+[.)]\s+|\s*[（(]?\d+[）)]\s+|\s*首先[，,:：]?\s*|\s*然后[，,:：]?\s*|\s*最后[，,:：]?\s*)/i;
+const MARKDOWN_CODE_FENCE_REGEX = /```[\s\S]*?```/g;
+const MARKDOWN_INLINE_CODE_REGEX = /`([^`]+)`/g;
+const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\([^)]+\)/g;
+const MARKDOWN_DECORATION_REGEX = /[*_~>#]+/g;
+const VOICE_REQUEST_REGEX = /(语音|声音|念给我|读给我|说给我听|用嘴说|开麦|voice|tts)/i;
+const VOICE_TEXT_HARD_MAX_CHARS = 220;
+const REPLY_BUDGET_MIN_GENERATION_MS = 350;
+const REPLY_STYLE_REWRITE_MIN_BUDGET_MS = 900;
+const REPLY_STYLE_REWRITE_TIMEOUT_MS = 5000;
+const FALLBACK_REPLY_MIN_MAX_TOKENS = 384;
+const lastVoiceSentAtByChat = new Map();
+
+function summarizeIncomingMessage(username, text) {
+  const cleaned = stripCqCodes(text).slice(0, 80);
+  if (!cleaned) return '';
+  return `${username}: ${cleaned}`;
+}
+
+export function enforceEmojiBudget(text, emotionResult) {
+  const budget = emotionResult?.emojiBudget ?? 0;
+  const style = emotionResult?.emojiStyle || 'none';
+  let used = 0;
+
+  const sanitized = String(text || '').replace(EMOJI_REGEX, (emoji) => {
+    if (budget <= 0) {
+      return '';
+    }
+
+    if (style === 'soft' && !ALLOWED_SOFT_EMOJIS.has(emoji)) {
+      return '';
+    }
+
+    if (used >= budget) {
+      return '';
+    }
+
+    used += 1;
+    return emoji;
+  });
+
+  return sanitized
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+}
+
+function isLikelyStructuredLine(line) {
+  const normalized = String(line || '').trim();
+  if (!normalized) return false;
+  return /^([*-]|#{1,6}\s|\d+[.)]|[A-Za-z0-9_/-]+\s*:|```)/.test(normalized);
+}
+
+function joinReplyLines(lines) {
+  return lines.reduce((result, line, index) => {
+    const current = String(line || '').trim();
+    if (!current) return result;
+    if (index === 0) return current;
+
+    const previous = result.slice(-1);
+    const needsSpace = /[A-Za-z0-9]$/.test(result) && /^[A-Za-z0-9]/.test(current);
+    return `${result}${needsSpace ? ' ' : ''}${current}`;
+  }, '');
+}
+
+function normalizeEllipsis(text, limit = 2) {
+  const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.round(Number(limit))) : 2;
+  const target = '…'.repeat(Math.min(safeLimit, 3));
+  return String(text || '').replace(/(\.{3,}|…{2,}|\.{2,}…+|…+\.{2,})/g, target);
+}
+
+function dedupeConsecutiveShortSentences(text) {
+  const input = String(text || '').trim();
+  if (!input) return '';
+  const segments = input.match(/[^。！？!?…]+[。！？!?…]?/g);
+  if (!segments || segments.length < 2) return input;
+
+  const kept = [];
+  let previousCanonical = '';
+  for (const segment of segments) {
+    const normalized = segment.trim();
+    if (!normalized) continue;
+
+    const canonical = normalized
+      .replace(/[，,。！？!?…\s]/g, '')
+      .toLowerCase()
+      .slice(0, 24);
+    const shortSegment = normalized.length <= 26;
+    if (shortSegment && canonical && canonical === previousCanonical) {
+      continue;
+    }
+
+    kept.push(normalized);
+    previousCanonical = canonical;
+  }
+
+  return kept.join('');
+}
+
+function isModelUnavailableError(error) {
+  const code = String(error?.code || '').toUpperCase();
+  const status = Number(error?.status || error?.response?.status || 0);
+  return code === 'MODEL_TIMEOUT'
+    || code === 'MODEL_CIRCUIT_OPEN'
+    || code === 'MODEL_INVALID_REPLY'
+    || code === 'ECONNRESET'
+    || code === 'ETIMEDOUT'
+    || status === 429
+    || status >= 500;
+}
+
+function normalizeProviderEndpoint(value) {
+  return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function hasDistinctReplyFallback(fallbackModel, options = {}) {
+  const normalizedFallbackModel = String(fallbackModel || '').trim();
+  if (!normalizedFallbackModel) return false;
+
+  const primaryModel = String(options.replyLlmChatModel || config.replyLlmChatModel || '').trim();
+  const primaryBaseUrl = normalizeProviderEndpoint(
+    options.replyLlmBaseUrl ?? config.replyLlmBaseUrl
+  );
+  const fallbackBaseUrl = normalizeProviderEndpoint(
+    options.replyLlmFallbackBaseUrl ?? config.replyLlmFallbackBaseUrl
+  );
+  const primaryApiKey = String(options.replyLlmApiKey ?? config.replyLlmApiKey ?? '');
+  const fallbackApiKey = String(
+    options.replyLlmFallbackApiKey ?? config.replyLlmFallbackApiKey ?? ''
+  );
+
+  return normalizedFallbackModel !== primaryModel
+    || fallbackBaseUrl !== primaryBaseUrl
+    || fallbackApiKey !== primaryApiKey;
+}
+
+function createInvalidModelReplyError(rawReplyText) {
+  const error = new Error('Model returned incomplete structured reply boilerplate');
+  error.code = 'MODEL_INVALID_REPLY';
+  error.replyPreview = String(rawReplyText || '').trim().slice(0, 80);
+  return error;
+}
+
+function createReplyBudgetExceededError(timeoutMs) {
+  const error = new Error(`Reply budget exceeded after ${timeoutMs}ms`);
+  error.code = 'REPLY_BUDGET_EXCEEDED';
+  error.timeoutMs = timeoutMs;
+  return error;
+}
+
+async function runReplyWithBudget(task, timeoutMs) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return task();
+  }
+
+  let timer = null;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(createReplyBudgetExceededError(timeoutMs)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function buildModelFallbackReply(event, task, error) {
+  return buildModelFallbackVariant({ event, route: task, error });
+}
+
+function buildReplyBudgetFallbackReply(event, task) {
+  return buildBudgetFallbackVariant({ event, route: task });
+}
+
+export function shapeChatReplyText(text, emotionResult, options = {}) {
+  let output = normalizeReplyFormatting(enforceEmojiBudget(text, emotionResult), options);
+  output = normalizeEllipsis(output, config.chatEllipsisLimit);
+
+  if (config.chatStyleRepeatGuard) {
+    output = dedupeConsecutiveShortSentences(output);
+  }
+
+  return output
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export function normalizeReplyFormatting(text, options = {}) {
+  const normalized = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+
+  if (!normalized.includes('\n')) {
+    return normalized;
+  }
+
+  const lines = normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length <= 1) {
+    return lines[0] || '';
+  }
+
+  if (lines.some(isLikelyStructuredLine)) {
+    return lines.join('\n');
+  }
+
+  // Private chat keeps up to two bubbles so the segmenter can pace them naturally.
+  if (options.chatType === 'private' && lines.length === 2) {
+    return lines.join('\n');
+  }
+
+  return joinReplyLines(lines)
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+export function stripHiddenReasoning(text) {
+  const stripped = String(text || '')
+    .replace(THINK_BLOCK_REGEX, ' ')
+    .replace(THINK_FENCE_REGEX, ' ')
+    .replace(OPEN_THINK_BLOCK_REGEX, ' ')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n');
+
+  const lines = stripped.split('\n');
+  const kept = [];
+  let skippingReasoning = true;
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || '');
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (!skippingReasoning && kept.length > 0 && kept[kept.length - 1] !== '') {
+        kept.push('');
+      }
+      continue;
+    }
+
+    if (skippingReasoning) {
+      if (REASONING_LABEL_REGEX.test(trimmed) || REASONING_CONTINUATION_REGEX.test(trimmed)) {
+        continue;
+      }
+      skippingReasoning = false;
+    }
+
+    kept.push(trimmed);
+  }
+
+  return kept
+    .join('\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function normalizeVoiceReplyText(text) {
+  return normalizeReplyFormatting(stripHiddenReasoning(text));
+}
+
+function hasRecordAttachment(event) {
+  return (event?.attachments || []).some((item) => String(item?.type || '').toLowerCase() === 'record');
+}
+
+function hasExplicitVoiceRequest(event) {
+  return VOICE_REQUEST_REGEX.test(stripCqCodes(event?.rawText || event?.text || ''));
+}
+
+function getVoiceChatCooldownKey(event) {
+  return `${event?.chatType || 'unknown'}:${event?.chatId || ''}`;
+}
+
+function normalizeVoiceReplyMode(value) {
+  const mode = String(value || 'auto').trim().toLowerCase();
+  return ['off', 'model', 'auto', 'force'].includes(mode) ? mode : 'auto';
+}
+
+function normalizeVoiceMaxChars(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 90;
+  }
+
+  return Math.min(Math.round(parsed), VOICE_TEXT_HARD_MAX_CHARS);
+}
+
+function resolveVoicePolicyRuntimeConfig(runtimeConfig = {}) {
+  const maxChars = Number(runtimeConfig.maxChars ?? runtimeConfig.voiceReplyMaxChars ?? config.voiceReplyMaxChars);
+  const cooldownMs = Number(runtimeConfig.cooldownMs ?? runtimeConfig.voiceReplyCooldownMs ?? config.voiceReplyCooldownMs);
+
+  return {
+    enableVoice: Boolean(runtimeConfig.enableVoice ?? config.enableVoice),
+    voiceName: String(runtimeConfig.voiceName ?? config.ttsVoice ?? config.yunoVoiceUri ?? '').trim(),
+    mode: normalizeVoiceReplyMode(runtimeConfig.mode ?? config.voiceReplyMode),
+    maxChars: normalizeVoiceMaxChars(maxChars),
+    cooldownMs: Number.isFinite(cooldownMs) && cooldownMs > 0 ? Math.round(cooldownMs) : 0,
+    onUserRecord: Boolean(runtimeConfig.onUserRecord ?? config.voiceReplyOnUserRecord),
+  };
+}
+
+function normalizeVoiceTtsTextBase(text) {
+  const withoutHidden = stripHiddenReasoning(text)
+    .replace(MARKDOWN_CODE_FENCE_REGEX, ' ')
+    .replace(/\[CQ:[^\]]+\]/g, ' ')
+    .replace(MARKDOWN_LINK_REGEX, '$1')
+    .replace(MARKDOWN_INLINE_CODE_REGEX, '$1')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+[.)]\s+/gm, '')
+    .replace(MARKDOWN_DECORATION_REGEX, ' ')
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, '链接')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+  const normalized = normalizeReplyFormatting(withoutHidden)
+    .replace(/[“”"]/g, '')
+    .replace(/\s*([，。！？!?、；;：:])\s*/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+  return normalized;
+}
+
+export function normalizeVoiceTtsText(text, options = {}) {
+  const maxChars = normalizeVoiceMaxChars(options.maxChars || config.voiceReplyMaxChars);
+  const normalized = normalizeVoiceTtsTextBase(text);
+
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+
+  const sentenceMatch = normalized.match(/^.{1,220}?[。！？!?]/);
+  if (sentenceMatch && sentenceMatch[0].length <= maxChars) {
+    return sentenceMatch[0].trim();
+  }
+
+  return normalized.slice(0, maxChars).replace(/[，、；;：:,.\s]+$/g, '').trim();
+}
+
+function shouldAllowVoiceReplyForEvent(event) {
+  if (event?.chatType === 'private') {
+    return true;
+  }
+
+  if (event?.chatType !== 'group') {
+    return false;
+  }
+
+  return Boolean(event?.mentionsBot) || hasExplicitVoiceRequest(event);
+}
+
+function isVoiceFriendlyRoute(route) {
+  return !['knowledge_qa', 'command', 'ignore'].includes(String(route?.category || ''));
+}
+
+function isVoiceFriendlyEmotion(emotionResult = {}) {
+  return ['AFFECTIONATE', 'SAD', 'ANGRY', 'PROTECTIVE', 'FIXATED'].includes(emotionResult.emotion)
+    && Number(emotionResult.intensity || 0) >= 0.55;
+}
+
+export function resolveVoiceReplyDecision({
+  event,
+  route,
+  replyDecision,
+  replyText,
+  voiceText,
+  emotionResult,
+  nowMs = Date.now(),
+  runtimeConfig = {},
+  lastVoiceSentAtByChat: cooldownState = lastVoiceSentAtByChat,
+} = {}) {
+  const resolvedConfig = resolveVoicePolicyRuntimeConfig(runtimeConfig);
+  const fullVoiceText = normalizeVoiceTtsTextBase(voiceText || replyText);
+  const candidateText = normalizeVoiceTtsText(fullVoiceText, {
+    maxChars: resolvedConfig.maxChars,
+  });
+  const allowedByScene = shouldAllowVoiceReplyForEvent(event);
+  const modelSuggested = Boolean(replyDecision?.sendVoice);
+  const userSentVoice = hasRecordAttachment(event);
+  const explicitRequest = hasExplicitVoiceRequest(event);
+  const emotionSuggested = isVoiceFriendlyEmotion(emotionResult);
+
+  if (!resolvedConfig.enableVoice) {
+    return { shouldSend: false, reason: 'voice-disabled', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  if (!resolvedConfig.voiceName) {
+    return { shouldSend: false, reason: 'missing-voice', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  if (resolvedConfig.mode === 'off') {
+    return { shouldSend: false, reason: 'mode-off', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  if (!allowedByScene) {
+    return { shouldSend: false, reason: 'scene-not-allowed', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  if (!fullVoiceText) {
+    return { shouldSend: false, reason: 'empty-voice-text', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  if (fullVoiceText.length > resolvedConfig.maxChars) {
+    return { shouldSend: false, reason: 'voice-text-too-long', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  if (!isVoiceFriendlyRoute(route) && !explicitRequest) {
+    return { shouldSend: false, reason: 'route-not-voice-friendly', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  const shouldSendByPolicy = resolvedConfig.mode === 'force'
+    || (resolvedConfig.mode === 'model' && modelSuggested)
+    || (resolvedConfig.mode === 'auto' && (
+      modelSuggested
+      || explicitRequest
+      || (resolvedConfig.onUserRecord && userSentVoice)
+      || emotionSuggested
+    ));
+
+  if (!shouldSendByPolicy) {
+    return { shouldSend: false, reason: 'policy-not-suggested', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  const cooldownKey = getVoiceChatCooldownKey(event);
+  const lastSentAt = Number(cooldownState?.get?.(cooldownKey) || 0);
+  if (resolvedConfig.cooldownMs > 0 && lastSentAt > 0 && nowMs - lastSentAt < resolvedConfig.cooldownMs) {
+    return { shouldSend: false, reason: 'voice-cooldown', voiceText: candidateText, modelSuggested, allowedByScene };
+  }
+
+  let reason = 'policy-suggested';
+  if (resolvedConfig.mode === 'force') reason = 'mode-force';
+  else if (explicitRequest) reason = 'explicit-request';
+  else if (resolvedConfig.onUserRecord && userSentVoice) reason = 'user-sent-voice';
+  else if (modelSuggested) reason = 'model-suggested';
+  else if (emotionSuggested) reason = 'emotion-suggested';
+
+  return {
+    shouldSend: true,
+    reason,
+    voiceText: candidateText,
+    modelSuggested,
+    allowedByScene,
+    cooldownKey,
+  };
+}
+
+function isIncompleteStructuredReplyBoilerplate(value) {
+  const normalized = stripHiddenReasoning(String(value || ''))
+    .replace(/```(?:json)?/gi, ' ')
+    .replace(/^[\s"'`]+|[\s"'`.,!?:：，。！？]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  if (!normalized) return true;
+
+  return /^(?:sure[,，]?\s*)?here(?:'s| is)(?: the)?(?: requested)?(?: json(?: requested)?| response| result)?$/i.test(normalized)
+    || /^(?:以下是|这是)(?:请求的)?\s*json(?:结果|响应)?$/i.test(normalized);
+}
+
+function parseChatReplyDecision(rawReplyText, options = {}) {
+  const raw = String(rawReplyText || '').trim();
+  const withoutHidden = stripHiddenReasoning(raw);
+  const unusable = isIncompleteStructuredReplyBoilerplate(withoutHidden);
+  const fallbackText = unusable
+    ? ''
+    : (normalizeVoiceReplyText(raw) || '刚才那句被我吞掉了，你再说一遍。');
+  const jsonCandidates = [raw, withoutHidden];
+  const objectStart = withoutHidden.indexOf('{');
+  const objectEnd = withoutHidden.lastIndexOf('}');
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    jsonCandidates.push(withoutHidden.slice(objectStart, objectEnd + 1));
+  }
+  const parsed = jsonCandidates
+    .map((candidate) => safeJsonParse(String(candidate || '').trim()))
+    .find((candidate) => candidate && !Array.isArray(candidate) && typeof candidate === 'object');
+
+  if (!parsed) {
+    return {
+      text: fallbackText,
+      sendVoice: Boolean(options.defaultSendVoice),
+      voiceText: fallbackText,
+      structured: false,
+      unusable,
+    };
+  }
+
+  const text = normalizeVoiceReplyText(parsed.text || parsed.reply || parsed.message || '') || fallbackText;
+  const voiceText = normalizeVoiceReplyText(parsed.voiceText || parsed.voice_text || '') || text;
+  const sendVoice = typeof parsed.sendVoice === 'boolean'
+    ? parsed.sendVoice
+    : Boolean(options.defaultSendVoice);
+
+  return {
+    text,
+    sendVoice,
+    voiceText,
+    structured: true,
+    unusable: false,
+  };
+}
+
+function buildStyleRewriteSystemPrompt(event) {
+  const isPrivate = event?.chatType === 'private';
+  return [
+    '你是由乃QQ聊天回复的最终风格编辑。只返回严格JSON对象，字段为text、sendVoice、voiceText。',
+    '保留原回复的事实、结论、关系状态和当日表达强度，不增加新事实。',
+    '删除无依据的动机揣测、第二人称指责、审问式反问、人格讽刺和控制式占有。',
+    '删除“我记下了、我记住了、这句我收下了、我听到了、我知道了、收到、明白了”等机械确认；改成具体情绪、态度或下一步。',
+    '安静偏冷要写成短、克制和停顿，不要写成敌意。用户示好时先接住，再允许克制反转。',
+    '只有输入中的 allowMildEdge=true 时才可保留一句指向当前内容的轻刺；否则删除所有轻蔑称呼和贬损性短语。上一轮已有轻刺时，本轮完全去掉。',
+    '不要道歉式讨好、客服套话、系统说明，也不要复述修改规则。“接住”是写作要求，不能直接回复“我接住了”。',
+    isPrivate
+      ? '普通私聊保持1-2句、约15-55个汉字；安慰或必要解释最多3句。'
+      : '群聊保持1句，必要时2句，不刷屏。',
+    '除非输入明确允许追问，否则不要添加问句。每条最多一个emoji或颜文字。',
+  ].join('\n');
+}
+
+function buildStyleRewriteUserTurn({
+  event,
+  originalDecision,
+  naturalness,
+  voiceNaturalness,
+  personalityStrategy,
+  emotionResult,
+  relation,
+  conversationState,
+  replyPlan,
+}) {
+  const recentAssistant = (conversationState?.messages || [])
+    .filter((item) => item?.role === 'assistant')
+    .slice(-2)
+    .map((item) => ({ content: item.content, styleMove: item.styleMove, edgeScore: item.edgeScore }));
+  return JSON.stringify({
+    currentUserText: String(event?.rawText || event?.text || '').slice(0, 240),
+    original: {
+      text: originalDecision.text,
+      sendVoice: Boolean(originalDecision.sendVoice),
+      voiceText: originalDecision.voiceText || '',
+    },
+    qualityFlags: [...new Set([...(naturalness?.flags || []), ...(voiceNaturalness?.flags || [])])],
+    edgeScore: Math.max(Number(naturalness?.edgeScore || 0), Number(voiceNaturalness?.edgeScore || 0)),
+    relationshipStage: personalityStrategy?.relationshipStage || 'familiar',
+    signatureMove: personalityStrategy?.signatureMove?.key || 'observation',
+    allowMildEdge: personalityStrategy?.signatureMove?.key === 'mild_edge',
+    questionAllowed: Boolean(replyPlan?.questionNeeded),
+    emotion: emotionResult?.emotion || 'CALM',
+    dailyMood: emotionResult?.dailyMood?.key || 'STEADY',
+    affection: Number(relation?.affection || 0),
+    recentAssistant,
+  });
+}
+
+async function rewriteReplyStyle({
+  event,
+  decision,
+  naturalness,
+  voiceNaturalness,
+  personalityStrategy,
+  emotionResult,
+  relation,
+  conversationState,
+  replyPlan,
+  replyProviderKind,
+  replyProviderModel,
+  getRemainingReplyBudgetMs,
+  trace,
+  deps,
+}) {
+  const remainingBudgetMs = getRemainingReplyBudgetMs();
+  if (remainingBudgetMs !== null && remainingBudgetMs < REPLY_STYLE_REWRITE_MIN_BUDGET_MS) {
+    return { outcome: 'skipped-budget', decision: null };
+  }
+
+  const timeoutMs = remainingBudgetMs === null
+    ? REPLY_STYLE_REWRITE_TIMEOUT_MS
+    : Math.max(
+        REPLY_BUDGET_MIN_GENERATION_MS,
+        Math.min(REPLY_STYLE_REWRITE_TIMEOUT_MS, remainingBudgetMs - 150)
+      );
+  const systemPrompt = buildStyleRewriteSystemPrompt(event);
+  const userTurn = buildStyleRewriteUserTurn({
+    event,
+    originalDecision: decision,
+    naturalness,
+    voiceNaturalness,
+    personalityStrategy,
+    emotionResult,
+    relation,
+    conversationState,
+    replyPlan,
+  });
+  const raw = await withTraceSpan(trace, 'rewrite-reply-style', () => runReplyWithBudget(() => deps.chat(
+    [],
+    systemPrompt,
+    userTurn,
+    {
+      traceContext: trace,
+      promptVersion: 'reply-style-rewrite/v1',
+      operation: 'reply-style-rewrite',
+      providerKind: replyProviderKind,
+      ...(replyProviderModel ? { model: replyProviderModel } : {}),
+      expectStructuredReply: true,
+      reasoningEffort: 'minimal',
+      maxTokens: event?.chatType === 'private' ? 160 : 100,
+      historyLimit: 0,
+      temperature: 0.35,
+      timeoutMs,
+    }
+  ), timeoutMs), {
+    providerKind: replyProviderKind,
+    flags: naturalness?.flags || [],
+    edgeScore: naturalness?.edgeScore || 0,
+  });
+
+  const rewritten = parseChatReplyDecision(raw, {
+    defaultSendVoice: Boolean(decision.sendVoice),
+  });
+  if (rewritten.unusable || !rewritten.text) {
+    throw createInvalidModelReplyError(raw);
+  }
+
+  return {
+    outcome: 'success',
+    decision: {
+      ...rewritten,
+      sendVoice: Boolean(decision.sendVoice),
+      voiceText: rewritten.voiceText || rewritten.text,
+    },
+  };
+}
+
+function resolveVoiceRuntimeConfig() {
+  return {
+    enableVoice: Boolean(config.enableVoice),
+    voiceName: String(config.ttsVoice || config.yunoVoiceUri || '').trim(),
+    mode: config.voiceReplyMode,
+    cooldownMs: config.voiceReplyCooldownMs,
+    maxChars: config.voiceReplyMaxChars,
+    onUserRecord: config.voiceReplyOnUserRecord,
+  };
+}
+
+function resolveUserTurn(event) {
+  const cleanText = stripCqCodes(event.rawText || event.text || '');
+  if (cleanText) return cleanText;
+
+  if ((event.attachments || []).some((item) => item.type === 'face')) return `[${event.userName} 发来了一张表情]`;
+  if ((event.attachments || []).some((item) => item.type === 'image')) return `[${event.userName} 发来了一张图片]`;
+  if ((event.attachments || []).some((item) => item.type === 'record')) return `[${event.userName} 发来了一条语音]`;
+  if ((event.attachments || []).some((item) => item.type === 'video')) return `[${event.userName} 发来了一段视频]`;
+  if ((event.attachments || []).length > 0) return `[${event.userName} 发来了一条消息]`;
+
+  return cleanText;
+}
+
+function isLikelyLocalImagePath(value) {
+  const source = String(value || '').trim();
+  if (!source) return false;
+  if (/^(?:https?:|data:|base64:\/\/|file:\/\/)/i.test(source)) {
+    return false;
+  }
+  return true;
+}
+
+export async function buildMemeImageOutput(asset = {}, options = {}, deps = {}) {
+  const storagePath = String(asset.storagePath || '').trim();
+  const imageUrl = String(asset.imageUrl || '').trim();
+
+  if (options.preferBase64 && storagePath && isLikelyLocalImagePath(storagePath)) {
+    const bytes = await (deps.readFile || readFile)(storagePath);
+    return {
+      type: 'image',
+      image: {
+        base64: bytes.toString('base64'),
+      },
+    };
+  }
+
+  return {
+    type: 'image',
+    image: {
+      file: storagePath || imageUrl,
+    },
+  };
+}
+
+async function loadMemeCandidatesForReply({ event, trace, memoryContext }, deps) {
+  const memoryCandidates = Array.isArray(memoryContext?.memeMemories)
+    ? memoryContext.memeMemories
+    : [];
+
+  try {
+    const providerCandidates = await withTraceSpan(trace, 'load-meme-candidates', () => deps.getMemeCandidates({
+      chatId: event.chatId,
+      userId: event.userId,
+      limit: 8,
+      provider: config.memeProvider,
+    }, {
+      protocolAdapter: deps.protocolAdapter,
+    }), {
+      chatType: event.chatType,
+      chatId: event.chatId,
+      provider: config.memeProvider,
+    });
+    return mergeMemeCandidates(memoryCandidates, providerCandidates);
+  } catch (error) {
+    logger.warn('meme', 'Meme provider lookup failed; using memory candidates only', {
+      traceId: trace.traceId,
+      chatType: event.chatType,
+      chatId: event.chatId,
+      userId: event.userId,
+      message: error.message,
+    });
+    return mergeMemeCandidates(memoryCandidates);
+  }
+}
+
+export function createWorkflowDeps(deps = {}, options = {}) {
+  const runtimeServices = getRuntimeServices();
+  const deliveryLedgerEnabled = options.responseMode !== 'capture' && deps.disableDeliveryLedger !== true;
+  const runtimeDelivery = deliveryLedgerEnabled
+    ? runtimeServices.deliveryLedger?.execute?.bind(runtimeServices.deliveryLedger)
+    : null;
+
+  return {
+    analyzeTrigger: deps.analyzeTrigger || analyzeTrigger,
+    analyzeTriggerFast: deps.analyzeTriggerFast || analyzeTriggerFast,
+    analyzeMessage: deps.analyzeMessage || analyzeMessage,
+    planIncomingTask: deps.planIncomingTask || planIncomingTask,
+    ensureRelation: deps.ensureRelation || ensureRelation,
+    ensureUserState: deps.ensureUserState || ensureUserState,
+    ensureUserProfileMemory: deps.ensureUserProfileMemory || ensureUserProfileMemory,
+    getConversationState: deps.getConversationState || getConversationState,
+    ensureGroupState: deps.ensureGroupState || ensureGroupState,
+    getRecentEvents: deps.getRecentEvents || getRecentEvents,
+    updateRelationProfile: deps.updateRelationProfile || updateRelationProfile,
+    updateUserState: deps.updateUserState || updateUserState,
+    appendConversationMessages: deps.appendConversationMessages || appendConversationMessages,
+    updateUserProfileMemory: deps.updateUserProfileMemory || updateUserProfileMemory,
+    persistUserMemoryEvents: deps.persistUserMemoryEvents || persistUserMemoryEvents,
+    touchReferencedMemoryEvents: deps.touchReferencedMemoryEvents || touchReferencedMemoryEvents,
+    collectMemeAssetForEvent: deps.collectMemeAssetForEvent || collectMemeAssetForEvent,
+    indexUserMemoryEvents: deps.indexUserMemoryEvents || indexUserMemoryEvents,
+    indexMemeAssetSemantics: deps.indexMemeAssetSemantics || indexMemeAssetSemantics,
+    retrieveMemoryContext: deps.retrieveMemoryContext || retrieveMemoryContext,
+    appendGroupDialogueChunk: deps.appendGroupDialogueChunk || appendGroupDialogueChunk,
+    retrieveGroupDialogueContext: deps.retrieveGroupDialogueContext || retrieveGroupDialogueContext,
+    retrieveKnowledge: deps.retrieveKnowledge || retrieveKnowledge,
+    rewriteRetrievalQuery: deps.rewriteRetrievalQuery || rewriteRetrievalQuery,
+    recordInboundMessageLog: deps.recordInboundMessageLog || recordInboundMessageLog,
+    recordOutboundMessageLog: deps.recordOutboundMessageLog || recordOutboundMessageLog,
+    recordGroupEvent: deps.recordGroupEvent || recordGroupEvent,
+    updateGroupStateFromAnalysis: deps.updateGroupStateFromAnalysis || updateGroupStateFromAnalysis,
+    resolveEmotion: deps.resolveEmotion || resolveEmotion,
+    resolveDailyMood: deps.resolveDailyMood || resolveDailyMood,
+    shouldSendVoiceForEmotion: deps.shouldSendVoiceForEmotion || shouldSendVoiceForEmotion,
+    resolvePersonalityStrategy: deps.resolvePersonalityStrategy || resolvePersonalityStrategy,
+    buildReplyContext: deps.buildReplyContext || buildReplyContext,
+    chat: deps.chat || chat,
+    tts: deps.tts || tts,
+    sendReply: deps.sendReply || sendReply,
+    sendStructuredReply: deps.sendStructuredReply || sendStructuredReply,
+    sendVoice: deps.sendVoice || sendVoice,
+    markMemeUsed: deps.markMemeUsed || markMemeUsed,
+    planContextualMemeReply: deps.planContextualMemeReply || planContextualMemeReply,
+    getMemeCandidates: deps.getMemeCandidates || getMemeCandidates,
+    protocolAdapter: deps.protocolAdapter || runtimeServices.protocolAdapter || null,
+    buildMemeImageOutput: deps.buildMemeImageOutput || buildMemeImageOutput,
+    logger: deps.logger || logger,
+    retrieveReplyStyleExamples: deps.retrieveReplyStyleExamples || retrieveReplyStyleExamples,
+    inspectReplyNaturalness: deps.inspectReplyNaturalness || inspectReplyNaturalness,
+    polishReplyNaturalness: deps.polishReplyNaturalness || polishReplyNaturalness,
+    deescalateReplyNaturalness: deps.deescalateReplyNaturalness || deescalateReplyNaturalness,
+    resolveVoiceRuntimeConfig: deps.resolveVoiceRuntimeConfig || resolveVoiceRuntimeConfig,
+    toolRegistry: deps.toolRegistry || toolRegistry,
+    enqueuePersistJob: deps.enqueuePersistJob || runtimeServices.queueManager?.enqueuePersist || null,
+    executeDelivery: deliveryLedgerEnabled ? (deps.executeDelivery || runtimeDelivery) : null,
+    resolveReplyCadence: deps.resolveReplyCadence || resolveReplyCadence,
+    sleep: deps.sleep || cadenceSleep,
+    setTyping: deps.setTyping
+      || (async (target, active) => {
+        const adapter = getRuntimeServices().protocolAdapter;
+        if (typeof adapter?.setTyping !== 'function') return false;
+        return adapter.setTyping(target, active);
+      }),
+  };
+}
+
+function resolveGroupReplyQuoteId({
+  event,
+  route = null,
+  recentEvents = [],
+  runtimeConfig = config,
+}) {
+  if (event?.chatType !== 'group' || !event.messageId) return '';
+  if (route?.category === 'poke') return '';
+
+  const legacyEnabled = runtimeConfig.groupReplyQuoteEnabled ?? config.groupReplyQuoteEnabled ?? true;
+  if (!legacyEnabled) return '';
+
+  const mode = String(runtimeConfig.groupReplyQuoteMode ?? config.groupReplyQuoteMode ?? 'auto').toLowerCase();
+  if (mode === 'never') return '';
+  if (mode === 'always') return event.messageId;
+
+  // auto: only quote when the thread already moved on past this message.
+  const others = (Array.isArray(recentEvents) ? recentEvents : [])
+    .filter((item) => String(item?.messageId || '') !== String(event.messageId));
+  const latest = others[0];
+  if (latest && String(latest.userId || '') !== String(event.userId || '')) {
+    return event.messageId;
+  }
+  return '';
+}
+
+async function executeTrackedDelivery(deps, event, kind, task, explicitKey = '') {
+  const trackedDelivery = typeof deps.executeDelivery === 'function';
+  const result = await executeDeliveryTask({
+    executeDelivery: deps.executeDelivery,
+    event,
+    kind,
+    task,
+    explicitKey,
+  });
+  if (trackedDelivery) {
+    recordWorkflowMetric('yuno_delivery_attempts_total', 1, {
+      chat_type: event.chatType,
+      kind,
+      result: result?.deduplicated ? `deduplicated_${result.status || 'unknown'}` : 'sent',
+    });
+  }
+  return result;
+}
+
+function shouldUseLightweightContext(event, analysis = null) {
+  if (analysis?.reason === 'poke-trigger') {
+    return true;
+  }
+
+  if (analysis?.reason === 'command-trigger') {
+    return true;
+  }
+
+  const normalizedText = stripCqCodes(event?.rawText || event?.text || '');
+  return event?.source?.postType === 'message' && /^\/\S+/.test(normalizedText);
+}
+
+export async function buildWorkflowContext(event, trace, deps, options = {}) {
+  const runtimeConfig = options.runtimeConfig || config;
+  const session = {
+    platform: event.platform,
+    chatType: event.chatType,
+    chatId: event.chatId,
+    userId: event.userId,
+  };
+  const isAdvanced = event.chatType === 'group'
+    && Boolean(runtimeConfig.targetGroupId)
+    && String(event.chatId) === String(runtimeConfig.targetGroupId);
+  const lightweight = Boolean(options.lightweight);
+  const specialUser = getSpecialUserByUserId(event.userId);
+
+  const [relation, userState, userProfile, conversationState, groupState, recentEvents, memoryContext] = await withTraceSpan(
+    trace,
+    'load-context',
+    () => Promise.all([
+      deps.ensureRelation(session),
+      deps.ensureUserState(session),
+      deps.ensureUserProfileMemory({ platform: event.platform, userId: event.userId, userName: event.userName, specialUser }),
+      deps.getConversationState(session),
+      isAdvanced && !lightweight ? deps.ensureGroupState(event.chatId) : Promise.resolve(null),
+      event.chatType === 'group' && !lightweight ? deps.getRecentEvents(event.chatId, 5) : Promise.resolve([]),
+      Promise.resolve({ eventMemories: [], memeMemories: [] }),
+    ]),
+    {
+      chatType: event.chatType,
+      chatId: event.chatId,
+      userId: event.userId,
+      contextMode: lightweight ? 'lightweight' : 'full',
+    }
+  );
+
+  return {
+    event,
+    session,
+    runtimeConfig,
+    relation,
+    userState,
+    userProfile,
+    conversationState,
+    groupState,
+    recentEvents,
+    memoryContext: memoryContext || { eventMemories: [], memeMemories: [] },
+    specialUser,
+    isAdmin: event.userId === runtimeConfig.adminQq,
+    isAdvanced,
+    contextMode: lightweight ? 'lightweight' : 'full',
+  };
+}
+
+async function resolveContext(event, precomputed, trace, deps, options) {
+  if (precomputed?.relation && precomputed?.userState && precomputed?.conversationState) {
+    return {
+      ...precomputed,
+      event,
+      trace,
+    };
+  }
+
+  const context = await buildWorkflowContext(event, trace, deps, {
+    lightweight: shouldUseLightweightContext(event, precomputed?.analysis),
+    runtimeConfig: options.runtimeConfig,
+  });
+  if (precomputed?.analysis) {
+    return {
+      ...context,
+      analysis: precomputed.analysis,
+      trace,
+    };
+  }
+
+  const decision = await shouldRespondToEvent(event, { ...options, trace, deps });
+  return {
+    ...context,
+    analysis: decision.analysis,
+    trace,
+  };
+}
+
+const PRIVATE_SEMANTIC_TIMEOUT_MS = 3000;
+
+// Private chat is answered unconditionally, so analyzeTriggerFast returns before
+// the classifier ever runs and sentiment/intent come from regex rules only. That
+// left the persona layer's `challenge` / `help` / negative-sentiment branches
+// unreachable in the scene where they matter most. This adds a semantic pass that
+// runs concurrently with context loading, so the cost is max(context, llm) rather
+// than the sum, and falls back to the rule values on timeout or error.
+async function resolvePrivateSemanticAnalysis(event, fastAnalysis, deps, trace, options = {}) {
+  const runtimeConfig = options.runtimeConfig || config;
+  if (runtimeConfig.privateSemanticAnalysisEnabled === false) return null;
+  // Commands and pokes are already structured; classifying them buys nothing.
+  if (shouldUseLightweightContext(event, fastAnalysis)) return null;
+
+  const text = stripCqCodes(event.rawText || event.text || '');
+  if (!text) return null;
+
+  const timeoutMs = Math.max(
+    500,
+    Number(runtimeConfig.privateSemanticTimeoutMs || PRIVATE_SEMANTIC_TIMEOUT_MS)
+  );
+  let timer = null;
+
+  try {
+    const semantic = await Promise.race([
+      deps.analyzeMessage(text, {
+        isAdmin: String(event.userId || '') === String(runtimeConfig.adminQq || ''),
+        ruleSignals: fastAnalysis.ruleSignals || [],
+      }, {
+        traceContext: trace,
+        operation: 'private-semantic-analysis',
+        // The inner timeout aborts the HTTP request; the race below is the hard
+        // ceiling that keeps the reply path moving even if a provider ignores it.
+        timeoutMs: timeoutMs,
+        retries: 0,
+      }),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+
+    recordWorkflowMetric('yuno_private_semantic_analysis_total', 1, {
+      result: semantic ? 'ok' : 'timeout',
+    });
+    return semantic;
+  } catch (error) {
+    recordWorkflowMetric('yuno_private_semantic_analysis_total', 1, { result: 'failed' });
+    (deps.logger || logger).warn('analysis', 'Private semantic analysis failed; keeping rule signals', {
+      traceId: trace?.traceId,
+      chatId: event.chatId,
+      userId: event.userId,
+      message: error.message,
+    });
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function mergePrivateSemanticAnalysis(fastAnalysis, semantic) {
+  if (!semantic) return fastAnalysis;
+
+  return {
+    ...fastAnalysis,
+    // shouldRespond and relevance stay as the policy decided: private chat is
+    // always answered, and the classifier is only here to sharpen the semantic
+    // fields that drive persona strategy, emotion and affection.
+    intent: semantic.intent || fastAnalysis.intent,
+    sentiment: semantic.sentiment || fastAnalysis.sentiment,
+    topics: Array.isArray(semantic.topics) && semantic.topics.length > 0
+      ? semantic.topics
+      : fastAnalysis.topics,
+    replyStyle: semantic.replyStyle || fastAnalysis.replyStyle,
+    confidence: Math.max(
+      Number(fastAnalysis.confidence || 0),
+      Number(semantic.confidence || 0)
+    ),
+    semanticSource: 'llm',
+  };
+}
+
+export async function shouldRespondToEvent(event, options = {}) {
+  const deps = createWorkflowDeps(options.deps);
+  const normalizedEvent = normalizeLegacyMessageEvent(event);
+  const trace = options.trace || createTraceContext('should-respond', {
+    chatType: normalizedEvent.chatType,
+    chatId: normalizedEvent.chatId,
+    userId: normalizedEvent.userId,
+    messageId: normalizedEvent.messageId,
+    queueJobId: options.queueJobId,
+  });
+
+  try {
+    const fastAnalysis = deps.analyzeTriggerFast(normalizedEvent, {
+      ...options,
+      traceContext: trace,
+    });
+
+    if (fastAnalysis) {
+      recordWorkflowMetric('yuno_trigger_fast_path_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        reason: fastAnalysis.reason,
+      });
+
+      // Private chat: load context and classify semantics concurrently, then
+      // return the context so processIncomingMessage reuses it instead of
+      // loading it a second time.
+      if (normalizedEvent.chatType === 'private') {
+        const [context, semantic] = await Promise.all([
+          buildWorkflowContext(normalizedEvent, trace, deps, {
+            lightweight: shouldUseLightweightContext(normalizedEvent, fastAnalysis),
+            runtimeConfig: options.runtimeConfig,
+          }),
+          resolvePrivateSemanticAnalysis(normalizedEvent, fastAnalysis, deps, trace, options),
+        ]);
+        const analysis = mergePrivateSemanticAnalysis(fastAnalysis, semantic);
+
+        recordWorkflowMetric('yuno_trigger_decisions_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          decision: analysis.shouldRespond ? 'allow' : 'deny',
+          reason: analysis.reason,
+        });
+
+        if (options.finalizeTrace !== false) {
+          finalizeTrace(trace, {
+            shouldRespond: analysis.shouldRespond,
+            reason: analysis.reason,
+            chatType: normalizedEvent.chatType,
+            messageId: normalizedEvent.messageId,
+            decisionReason: analysis.reason,
+            fastPath: true,
+            semanticSource: analysis.semanticSource || 'rules',
+          });
+        }
+
+        return {
+          ...context,
+          event: normalizedEvent,
+          analysis,
+          trace,
+        };
+      }
+
+      recordWorkflowMetric('yuno_trigger_decisions_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        decision: fastAnalysis.shouldRespond ? 'allow' : 'deny',
+        reason: fastAnalysis.reason,
+      });
+
+      if (options.finalizeTrace !== false) {
+        finalizeTrace(trace, {
+          shouldRespond: fastAnalysis.shouldRespond,
+          reason: fastAnalysis.reason,
+          chatType: normalizedEvent.chatType,
+          messageId: normalizedEvent.messageId,
+          decisionReason: fastAnalysis.reason,
+          fastPath: true,
+        });
+      }
+
+      return {
+        event: normalizedEvent,
+        session: {
+          platform: normalizedEvent.platform,
+          chatType: normalizedEvent.chatType,
+          chatId: normalizedEvent.chatId,
+          userId: normalizedEvent.userId,
+        },
+        analysis: fastAnalysis,
+        trace,
+      };
+    }
+
+    const context = await buildWorkflowContext(normalizedEvent, trace, deps, {
+      runtimeConfig: options.runtimeConfig,
+    });
+    const analysis = await withTraceSpan(
+      trace,
+      'analyze-trigger',
+      () => deps.analyzeTrigger(normalizedEvent, context, {
+        ...options,
+        traceContext: trace,
+      }),
+      {
+        advancedMode: context.isAdvanced,
+        chatType: normalizedEvent.chatType,
+      }
+    );
+
+    recordWorkflowMetric('yuno_trigger_decisions_total', 1, {
+      chat_type: normalizedEvent.chatType,
+      decision: analysis.shouldRespond ? 'allow' : 'deny',
+      reason: analysis.reason,
+    });
+
+    if (options.finalizeTrace !== false) {
+      finalizeTrace(trace, {
+          shouldRespond: analysis.shouldRespond,
+          reason: analysis.reason,
+          chatType: normalizedEvent.chatType,
+          messageId: normalizedEvent.messageId,
+          decisionReason: analysis.reason,
+          fastPath: false,
+        });
+    }
+
+    return { ...context, analysis, trace };
+  } catch (error) {
+    failTrace(trace, error, {
+      chatType: normalizedEvent.chatType,
+      chatId: normalizedEvent.chatId,
+      userId: normalizedEvent.userId,
+      messageId: normalizedEvent.messageId,
+    });
+    throw error;
+  }
+}
+
+async function runToolTask(task, context, trace, deps) {
+  return withTraceSpan(trace, 'execute-tool', () => deps.toolRegistry.execute(
+    task.toolName,
+    task.toolArgs,
+    {
+      relation: context.relation,
+      userState: context.userState,
+      userProfile: context.userProfile,
+      groupState: context.groupState,
+      memoryContext: context.memoryContext,
+      analysis: context.analysis,
+      event: context.event,
+      adminQq: context.runtimeConfig?.adminQq || config.adminQq,
+    },
+    trace
+  ), { toolName: task.toolName });
+}
+
+function isRecoverableMemoryExtractionError(error) {
+  const status = extractHttpStatusFromError(error);
+  if ([400, 401, 403, 404, 422].includes(status)) {
+    return true;
+  }
+
+  const code = String(error?.code || '').toUpperCase();
+  return code === 'ERR_BAD_REQUEST';
+}
+
+function extractHttpStatusFromError(error) {
+  const directStatus = Number(error?.response?.status || error?.status || 0);
+  if (Number.isFinite(directStatus) && directStatus > 0) {
+    return directStatus;
+  }
+
+  const message = String(error?.message || '');
+  const match = message.match(/(?:status code|HTTP|status)\s*[:=]?\s*(\d{3})/i);
+  if (!match?.[1]) {
+    return 0;
+  }
+
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function persistReplyState(context, payload, trace, deps, options = {}) {
+  const namedTasks = [];
+
+  namedTasks.push({
+    name: 'append-conversation-messages',
+    run: () => deps.appendConversationMessages(context.session, payload.nextMessages),
+  });
+
+  if (context.relation?._id) {
+    namedTasks.push({
+      name: 'update-relation-profile',
+      run: () => deps.updateRelationProfile(context.relation, {
+        text: payload.rawText,
+        analysis: payload.analysis,
+      }),
+    });
+  }
+
+  if (context.userState?._id) {
+    namedTasks.push({
+      name: 'update-user-state',
+      run: () => deps.updateUserState(context.userState, payload.emotionResult, payload.analysis),
+    });
+  }
+
+  if (context.userProfile?._id) {
+    namedTasks.push({
+      name: 'update-user-profile-memory',
+      run: () => deps.updateUserProfileMemory(context.userProfile, {
+        text: payload.userTurn,
+        analysis: payload.analysis,
+        userName: payload.username,
+        userId: context.event.userId,
+        specialUser: context.specialUser,
+      }),
+    });
+  }
+
+  namedTasks.push({
+    name: 'extract-user-memory-events',
+    run: async () => {
+      if (!config.memoryExtractionEnabled) {
+        return [];
+      }
+      let events = [];
+      try {
+        events = await deps.persistUserMemoryEvents({
+          event: context.event,
+          text: payload.userTurn,
+          analysis: payload.analysis,
+          userProfile: context.userProfile,
+        });
+      } catch (error) {
+        if (!isRecoverableMemoryExtractionError(error)) {
+          throw error;
+        }
+
+        recordWorkflowMetric('yuno_memory_extraction_skipped_total', 1, {
+          chat_type: context.event.chatType,
+          reason: 'provider-error',
+        });
+        deps.logger.warn('memory', 'User memory extraction skipped after provider error', {
+          traceId: trace.traceId,
+          chatType: context.event.chatType,
+          chatId: context.event.chatId,
+          userId: context.event.userId,
+          messageId: context.event.messageId,
+          status: extractHttpStatusFromError(error) || undefined,
+          code: error.code,
+          message: error.message,
+        });
+        return [];
+      }
+      if (events.length > 0) {
+        try {
+          await deps.indexUserMemoryEvents(events);
+        } catch (error) {
+          recordWorkflowMetric('yuno_memory_vector_index_failures_total', 1, {
+            chat_type: context.event.chatType,
+          });
+          deps.logger.warn('memory', 'User memory vector indexing failed after persistence', {
+            traceId: trace.traceId,
+            chatType: context.event.chatType,
+            chatId: context.event.chatId,
+            userId: context.event.userId,
+            messageId: context.event.messageId,
+            count: events.length,
+            status: error.response?.status || error.status,
+            code: error.code,
+            message: error.message,
+          });
+        }
+      }
+      return events;
+    },
+  });
+
+  const referencedMemories = Array.isArray(context.memoryContext?.eventMemories)
+    ? context.memoryContext.eventMemories
+    : [];
+  if (referencedMemories.length > 0) {
+    namedTasks.push({
+      name: 'touch-referenced-memories',
+      run: () => deps.touchReferencedMemoryEvents(referencedMemories),
+    });
+  }
+
+  if (Array.isArray(context.event?.attachments) && context.event.attachments.some((item) => item.type === 'image')) {
+    namedTasks.push({
+      name: 'analyze-meme-semantics',
+      run: async () => {
+        const optOutUsers = [
+          ...(Array.isArray(config.memeOptOutUsers) ? config.memeOptOutUsers : []),
+          ...(context.userProfile?.memeOptOut ? [context.event.userId] : []),
+        ];
+        const collected = await deps.collectMemeAssetForEvent(context.event, {
+          memeOptOutUsers: optOutUsers,
+        }, deps);
+        if (collected?.asset) {
+          await deps.indexMemeAssetSemantics(collected.asset);
+        }
+        return collected;
+      },
+    });
+  }
+
+  if (context.event.chatType === 'group') {
+    namedTasks.push({
+      name: 'append-group-dialogue-chunk',
+      run: () => deps.appendGroupDialogueChunk(context.event),
+    });
+  }
+
+  if (context.isAdvanced) {
+    namedTasks.push({
+      name: 'update-group-state',
+      run: () => deps.updateGroupStateFromAnalysis({
+        groupId: context.event.chatId,
+        analysis: payload.analysis,
+        summary: payload.summary,
+        styleText: payload.userTurn,
+      }),
+    });
+  }
+
+  const taskMode = options.taskMode || 'all';
+  const selectedTasks = namedTasks.filter((task) => {
+    const critical = task.name === 'append-conversation-messages';
+    if (taskMode === 'critical') return critical;
+    if (taskMode === 'optional') return !critical;
+    return true;
+  });
+
+  if (selectedTasks.length === 0) {
+    return;
+  }
+
+  const results = await withTraceSpan(
+    trace,
+    'persist-state',
+    () => Promise.allSettled(selectedTasks.map((item) => item.run())),
+    { taskCount: selectedTasks.length, taskMode }
+  );
+
+  const failures = results
+    .map((item, index) => ({ name: selectedTasks[index]?.name || `task-${index}`, result: item }))
+    .filter((item) => item.result.status === 'rejected');
+  recordWorkflowMetric('yuno_persist_failures_total', failures.length, {
+    chat_type: context.event.chatType,
+  });
+
+  if (failures.length > 0) {
+    const retryResults = await Promise.allSettled(
+      failures.map((item) => selectedTasks.find((task) => task.name === item.name)?.run?.())
+    );
+    const finalFailures = retryResults
+      .map((result, index) => ({ result, task: failures[index]?.name }))
+      .filter((item) => item.result.status === 'rejected');
+
+    const failureDetails = finalFailures.map((item) => ({
+      task: item.task,
+      error: item.result.reason?.message || String(item.result.reason || 'unknown-error'),
+    }));
+
+    if (failureDetails.length === 0) {
+      recordWorkflowMetric('yuno_persist_retry_recovered_total', 1, {
+        chat_type: context.event.chatType,
+      });
+      logger.info('memory', 'Post-reply state updates recovered after retry', {
+        traceId: trace.traceId,
+        chatType: context.event.chatType,
+        chatId: context.event.chatId,
+        userId: context.event.userId,
+        messageId: context.event.messageId,
+        failed: failures.length,
+        decisionReason: payload.analysis.reason,
+      });
+      return;
+    }
+
+    const firstFailureDetails = failures.map((item) => ({
+      task: item.name,
+      error: item.result.reason?.message || String(item.result.reason || 'unknown-error'),
+    }));
+
+    logger.warn('memory', 'Post-reply state updates partially failed', {
+      traceId: trace.traceId,
+      chatType: context.event.chatType,
+      chatId: context.event.chatId,
+      userId: context.event.userId,
+      messageId: context.event.messageId,
+      failed: finalFailures.length,
+      decisionReason: payload.analysis.reason,
+      failures: failureDetails,
+      firstAttemptFailures: firstFailureDetails,
+    });
+  }
+}
+
+function buildPersistContextSnapshot(context) {
+  const memoryContext = context.memoryContext || { eventMemories: [], memeMemories: [] };
+  return {
+    session: { ...context.session },
+    isAdvanced: Boolean(context.isAdvanced),
+    specialUser: context.specialUser || null,
+    contextMode: context.contextMode || 'full',
+    relation: context.relation ? {
+      _id: context.relation._id,
+      platform: context.relation.platform,
+      chatType: context.relation.chatType,
+      chatId: context.relation.chatId,
+      groupId: context.relation.groupId,
+      userId: context.relation.userId,
+      affection: context.relation.affection,
+      tags: context.relation.tags || [],
+      memorySummary: context.relation.memorySummary || '',
+      preferences: context.relation.preferences || [],
+      favoriteTopics: context.relation.favoriteTopics || [],
+      activeScore: context.relation.activeScore || 0,
+    } : null,
+    userState: context.userState ? {
+      _id: context.userState._id,
+      platform: context.userState.platform,
+      chatType: context.userState.chatType,
+      chatId: context.userState.chatId,
+      groupId: context.userState.groupId,
+      userId: context.userState.userId,
+      currentEmotion: context.userState.currentEmotion,
+      intensity: context.userState.intensity,
+      triggerReason: context.userState.triggerReason,
+    } : null,
+    userProfile: context.userProfile ? {
+      _id: context.userProfile._id,
+      platform: context.userProfile.platform,
+      userId: context.userProfile.userId,
+      profileKey: context.userProfile.profileKey,
+      displayName: context.userProfile.displayName || '',
+      preferredName: context.userProfile.preferredName || '',
+      tonePreference: context.userProfile.tonePreference || '',
+      favoriteTopics: context.userProfile.favoriteTopics || [],
+      dislikes: context.userProfile.dislikes || [],
+      roleplaySettings: context.userProfile.roleplaySettings || [],
+      relationshipPreference: context.userProfile.relationshipPreference || '',
+      personaMode: context.userProfile.personaMode || '',
+      specialBondSummary: context.userProfile.specialBondSummary || '',
+      bondMemories: context.userProfile.bondMemories || [],
+      specialNicknames: context.userProfile.specialNicknames || [],
+      speakingStyleSummary: context.userProfile.speakingStyleSummary || '',
+      frequentPhrases: context.userProfile.frequentPhrases || [],
+      emojiStyle: context.userProfile.emojiStyle || '',
+      responsePreference: context.userProfile.responsePreference || '',
+      humorStyle: context.userProfile.humorStyle || '',
+      memeOptOut: Boolean(context.userProfile.memeOptOut),
+      profileSummary: context.userProfile.profileSummary || '',
+    } : null,
+    memoryContext: {
+      eventMemories: Array.isArray(memoryContext.eventMemories)
+        ? memoryContext.eventMemories.map((item) => ({
+          memoryId: item.memoryId,
+          eventType: item.eventType,
+          summary: item.summary,
+          importanceScore: item.importanceScore,
+          expiresAt: item.expiresAt || null,
+        }))
+        : [],
+      memeMemories: Array.isArray(memoryContext.memeMemories)
+        ? memoryContext.memeMemories.map((item) => ({
+          assetId: item.assetId,
+          caption: item.caption || '',
+          usageContext: item.usageContext || '',
+          semanticTags: item.semanticTags || [],
+          expiresAt: item.expiresAt || null,
+        }))
+        : [],
+    },
+  };
+}
+
+function buildPersistJobData(context, payload) {
+  return {
+    event: context.event,
+    analysis: payload.analysis,
+    emotionResult: payload.emotionResult,
+    summary: payload.summary,
+    username: payload.username,
+    rawText: payload.rawText,
+    userTurn: payload.userTurn,
+    nextMessages: payload.nextMessages,
+    contextSnapshot: buildPersistContextSnapshot(context),
+  };
+}
+
+export async function processPersistJob(jobData, options = {}) {
+  const deps = createWorkflowDeps(options.deps);
+  const event = normalizeLegacyMessageEvent(jobData.event);
+  const trace = createTraceContext('persist-job', {
+    chatType: event.chatType,
+    chatId: event.chatId,
+    userId: event.userId,
+    messageId: event.messageId,
+    queueJobId: options.queueJobId,
+  });
+
+  try {
+    const snapshot = jobData.contextSnapshot || {};
+    const context = {
+      event,
+      session: snapshot.session || {
+        platform: event.platform,
+        chatType: event.chatType,
+        chatId: event.chatId,
+        userId: event.userId,
+      },
+      relation: snapshot.relation,
+      userState: snapshot.userState,
+      userProfile: snapshot.userProfile,
+      memoryContext: snapshot.memoryContext || { eventMemories: [], memeMemories: [] },
+      specialUser: snapshot.specialUser || getSpecialUserByUserId(event.userId),
+      isAdvanced: Boolean(snapshot.isAdvanced),
+      contextMode: snapshot.contextMode || 'persist',
+    };
+
+    await persistReplyState(context, {
+      nextMessages: jobData.nextMessages,
+      rawText: jobData.rawText,
+      userTurn: jobData.userTurn,
+      analysis: jobData.analysis,
+      emotionResult: jobData.emotionResult,
+      summary: jobData.summary,
+      username: jobData.username,
+    }, trace, deps, { taskMode: jobData.taskMode || 'all' });
+
+    recordWorkflowMetric('yuno_trigger_context_reused_total', 1, {
+      chat_type: event.chatType,
+      mode: 'persist-job',
+    });
+
+    finalizeTrace(trace, {
+      replyType: 'persist',
+      shouldRespond: true,
+      queueJobId: options.queueJobId,
+      messageId: event.messageId,
+      contextMode: context.contextMode,
+    });
+    return true;
+  } catch (error) {
+    failTrace(trace, error, {
+      queueJobId: options.queueJobId,
+      messageId: event.messageId,
+    });
+    throw error;
+  }
+}
+
+export async function processIncomingMessage(event, precomputed = null, options = {}) {
+  const deps = createWorkflowDeps(options.deps, options);
+  const normalizedEvent = normalizeLegacyMessageEvent(event);
+  const trace = precomputed?.trace || options.trace || createTraceContext('incoming-message', {
+    chatType: normalizedEvent.chatType,
+    chatId: normalizedEvent.chatId,
+    userId: normalizedEvent.userId,
+    messageId: normalizedEvent.messageId,
+    queueJobId: options.queueJobId,
+  });
+
+  try {
+    const context = await resolveContext(normalizedEvent, precomputed, trace, deps, options);
+    const workflowContext = {
+      ...context,
+      event: normalizedEvent,
+      trace,
+    };
+    const rawText = normalizedEvent.rawText || '';
+    const userTurn = resolveUserTurn(normalizedEvent);
+    const modelUserTurn = buildUserTurnContext({
+      event: normalizedEvent,
+      recentEvents: workflowContext.recentEvents,
+      userTurn,
+    });
+    const summary = summarizeIncomingMessage(normalizedEvent.userName, rawText);
+    const analysis = workflowContext.analysis;
+    const configuredReplyBudgetMs = options.replyTimeBudgetMs
+      ?? (config.replyTimeBudgetMs > 0 ? config.replyTimeBudgetMs : config.replyHardTimeoutMs);
+    const replyBudgetMs = Math.max(0, Number(configuredReplyBudgetMs || 0));
+    const configuredPrimaryTimeoutMs = options.replyPrimaryTimeoutMs
+      ?? config.replyPrimaryTimeoutMs;
+    const replyPrimaryTimeoutMs = Math.max(0, Number(configuredPrimaryTimeoutMs || 0));
+    const replyBudgetStartedAt = Date.now();
+    const getRemainingReplyBudgetMs = () => (
+      replyBudgetMs <= 0
+        ? null
+        : Math.max(0, replyBudgetMs - (Date.now() - replyBudgetStartedAt))
+    );
+
+    if (!analysis.shouldRespond) {
+      logger.info('analysis', 'Message skipped after analysis', {
+        traceId: trace.traceId,
+        chatType: normalizedEvent.chatType,
+        chatId: normalizedEvent.chatId,
+        userId: normalizedEvent.userId,
+        messageId: normalizedEvent.messageId,
+        reason: analysis.reason,
+        confidence: analysis.confidence,
+        decisionReason: analysis.reason,
+      });
+      finalizeTrace(trace, {
+        shouldRespond: false,
+        reason: analysis.reason,
+        queueJobId: options.queueJobId,
+      });
+      return null;
+    }
+
+    let task = deps.planIncomingTask({
+      event: normalizedEvent,
+      text: rawText,
+      analysis,
+      conversationState: workflowContext.conversationState,
+    });
+
+    if (task.type === 'tool') {
+      try {
+        const toolResult = await runToolTask(task, workflowContext, trace, deps);
+        const toolQuoteMessageId = resolveGroupReplyQuoteId({
+          event: normalizedEvent,
+          recentEvents: workflowContext.recentEvents,
+          runtimeConfig: options.runtimeConfig || config,
+        });
+        const target = {
+          platform: normalizedEvent.platform,
+          chatType: normalizedEvent.chatType,
+          chatId: normalizedEvent.chatId,
+          ...(toolQuoteMessageId ? { quoteMessageId: toolQuoteMessageId } : {}),
+        };
+
+        let replyText = toolResult?.text || toolResult?.summary || '已经处理好了。';
+        if (toolResult?.tool) {
+          const policy = resolveUserPersonaPolicy({
+            userId: normalizedEvent.userId,
+            scene: normalizedEvent.chatType,
+            relation: workflowContext.relation,
+            basePersona: 'yuno',
+          });
+          replyText = formatToolResultAsYuno(toolResult, policy);
+          const outputs = normalizeFormatterOutputs(toolResult, replyText);
+          await withTraceSpan(
+            trace,
+            'send-tool-response',
+            () => executeTrackedDelivery(deps, normalizedEvent, 'primary', () => (
+              deps.sendStructuredReply(target, outputs)
+            ), options.deliveryKey),
+            { toolName: task.toolName }
+          );
+          recordWorkflowMetric('yuno_tool_results_total', 1, {
+            tool: task.toolName,
+            chat_type: normalizedEvent.chatType,
+          });
+        } else {
+          await withTraceSpan(
+            trace,
+            'send-tool-response',
+            () => executeTrackedDelivery(deps, normalizedEvent, 'primary', () => (
+              deps.sendReply(target, replyText)
+            ), options.deliveryKey),
+            { toolName: task.toolName }
+          );
+        }
+
+        finalizeTrace(trace, {
+          replyType: 'tool',
+          toolName: task.toolName,
+          shouldRespond: true,
+          route: task.category,
+          queueJobId: options.queueJobId,
+          messageId: normalizedEvent.messageId,
+        });
+        return replyText;
+      } catch (error) {
+        logger.warn('tool', 'Tool execution fell back to chat response', {
+          traceId: trace.traceId,
+          toolName: task.toolName,
+          messageId: normalizedEvent.messageId,
+          message: error.message,
+        });
+        task = {
+          ...task,
+          type: 'chat',
+          category: 'knowledge_qa',
+          requiresModel: true,
+          requiresRetrieval: true,
+          allowFollowUp: normalizedEvent.chatType === 'private',
+          reason: 'tool-fallback',
+        };
+        analysis.reason = 'tool-fallback';
+      }
+    }
+
+    const retrievalMode = task.retrievalMode
+      || (isMemoryQuery(userTurn) ? 'memory' : (task.category === 'follow_up' ? 'hybrid' : (task.requiresRetrieval ? 'knowledge' : 'none')));
+    task = { ...task, retrievalMode };
+    const retrievalQuery = retrievalMode === 'none'
+      ? { query: userTurn, memoryIntent: false, rewritten: false, reason: 'fast-path' }
+      : await withTraceSpan(trace, 'rewrite-retrieval-query', () => deps.rewriteRetrievalQuery({
+          event: normalizedEvent,
+          route: task,
+          userTurn,
+          conversationState: workflowContext.conversationState,
+          recentEvents: workflowContext.recentEvents,
+        }), { route: task.category, retrievalMode });
+
+    if (retrievalMode === 'memory' || retrievalMode === 'hybrid') {
+      if (normalizedEvent.chatType === 'private') {
+        workflowContext.memoryContext = await withTraceSpan(trace, 'retrieve-memory', () => deps.retrieveMemoryContext({
+          userId: normalizedEvent.userId,
+          chatId: normalizedEvent.chatId,
+          userTurn: retrievalQuery.query || userTurn,
+        }), { route: task.category });
+      } else if (normalizedEvent.chatType === 'group') {
+        const groupDialogues = await withTraceSpan(trace, 'retrieve-group-dialogue', () => deps.retrieveGroupDialogueContext({
+          groupId: normalizedEvent.chatId,
+          query: retrievalQuery.query || userTurn,
+          limit: 2,
+        }), { route: task.category });
+        workflowContext.memoryContext = {
+          eventMemories: [],
+          memeMemories: [],
+          groupDialogues,
+        };
+      }
+    }
+
+    const knowledge = (retrievalMode === 'knowledge' || retrievalMode === 'hybrid')
+      ? await withTraceSpan(trace, 'retrieve-knowledge', () => deps.retrieveKnowledge(retrievalQuery.query || userTurn, {
+          reason: task.reason,
+          preferredTags: getSpecialUserKnowledgeTags(workflowContext.specialUser),
+        }), {
+          route: task.category,
+        })
+      : { enabled: false, documents: [], reason: 'route-does-not-require-retrieval' };
+
+    const dailyMood = deps.resolveDailyMood({
+      enabled: config.dailyMoodEnabled,
+      seed: config.dailyMoodSeed,
+      timeZone: config.dailyMoodTimezone,
+      override: config.dailyMoodOverride,
+    });
+    const emotionResult = deps.resolveEmotion({
+      relation: workflowContext.relation,
+      userState: workflowContext.userState,
+      groupState: workflowContext.groupState,
+      messageAnalysis: analysis,
+      isAdmin: workflowContext.isAdmin,
+      specialUser: workflowContext.specialUser,
+      dailyMood,
+    });
+    const replyLengthProfile = resolveReplyLengthProfile({
+      event: normalizedEvent,
+      route: task,
+      analysis,
+      emotionResult,
+      conversationState: workflowContext.conversationState,
+    });
+    const replyPlan = resolveReplyIntentPlan({
+      event: normalizedEvent,
+      route: task,
+      analysis,
+      conversationState: workflowContext.conversationState,
+    });
+    const personalityStrategy = deps.resolvePersonalityStrategy({
+      event: normalizedEvent,
+      relation: workflowContext.relation,
+      userState: workflowContext.userState,
+      userProfile: workflowContext.userProfile,
+      conversationState: workflowContext.conversationState,
+      memoryContext: workflowContext.memoryContext,
+      messageAnalysis: analysis,
+      emotionResult,
+      replyPlan,
+      specialUser: workflowContext.specialUser,
+    });
+
+    let replyStyleExamples = [];
+    try {
+      replyStyleExamples = await withTraceSpan(trace, 'retrieve-reply-style-examples', () => deps.retrieveReplyStyleExamples({
+        event: normalizedEvent,
+        route: task,
+        analysis,
+        emotionResult,
+        replyPlan,
+        userTurn,
+        replyLengthProfile,
+      }), {
+        route: task.category,
+        promptProfile: replyLengthProfile.promptProfile,
+      });
+    } catch (error) {
+      recordWorkflowMetric('yuno_reply_style_retrieval_failures_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        route: task.category,
+      });
+      deps.logger.warn('model', 'Reply style example retrieval failed', {
+        traceId: trace.traceId,
+        chatType: normalizedEvent.chatType,
+        chatId: normalizedEvent.chatId,
+        userId: normalizedEvent.userId,
+        messageId: normalizedEvent.messageId,
+        message: error.message,
+      });
+      replyStyleExamples = [];
+    }
+
+    const voiceReplyPolicy = {
+      allowed: shouldAllowVoiceReplyForEvent(normalizedEvent),
+      suggestedByEmotion: deps.shouldSendVoiceForEmotion(emotionResult),
+    };
+    const systemPrompt = await withTraceSpan(trace, 'build-prompt', () => Promise.resolve(deps.buildReplyContext({
+      event: normalizedEvent,
+      route: task,
+      relation: workflowContext.relation,
+      userState: workflowContext.userState,
+      userProfile: workflowContext.userProfile,
+      conversationState: workflowContext.conversationState,
+      groupState: workflowContext.groupState,
+      recentEvents: workflowContext.recentEvents,
+      memoryContext: workflowContext.memoryContext,
+      messageAnalysis: analysis,
+      emotionResult,
+      knowledge,
+      isAdmin: workflowContext.isAdmin,
+      specialUser: workflowContext.specialUser,
+      replyLengthProfile,
+      replyPlan,
+      personalityStrategy,
+      voiceReplyPolicy,
+      replyStyleExamples,
+    })), {
+      route: task.category,
+      promptProfile: replyLengthProfile.promptProfile,
+      performanceProfile: replyLengthProfile.performanceProfile,
+      replyPlanType: replyPlan.type,
+      personalityStance: personalityStrategy.stance,
+      relationshipStage: personalityStrategy.relationshipStage,
+      replyStyleExampleCount: replyStyleExamples.length,
+    });
+
+    let visibleReplyText = '';
+    let replyDecision = null;
+    let replyProviderKind = null;
+    let replyProviderModel = '';
+    const replyMessages = (workflowContext.conversationState.messages || []).map((item) => ({
+      role: item.role,
+      content: item.content,
+    }));
+    const primaryReplyModel = String(
+      options.replyLlmChatModel || config.replyLlmChatModel || ''
+    ).trim();
+    const primaryReplyOptions = {
+      traceContext: trace,
+      promptVersion: 'reply-context/v7',
+      operation: 'reply',
+      providerKind: 'reply',
+      expectStructuredReply: true,
+      reasoningEffort: replyLengthProfile.reasoningEffort,
+      maxTokens: replyLengthProfile.maxTokens,
+      historyLimit: replyLengthProfile.historyLimit,
+      temperature: replyLengthProfile.temperature,
+      ...(options.replyLlmChatModel ? { model: primaryReplyModel } : {}),
+    };
+    try {
+      const remainingReplyBudgetMs = getRemainingReplyBudgetMs();
+      if (
+        remainingReplyBudgetMs !== null
+        && remainingReplyBudgetMs <= REPLY_BUDGET_MIN_GENERATION_MS
+      ) {
+        throw createReplyBudgetExceededError(remainingReplyBudgetMs);
+      }
+
+      const modelTimeoutMs = remainingReplyBudgetMs === null
+        ? (replyPrimaryTimeoutMs > 0
+          ? Math.max(REPLY_BUDGET_MIN_GENERATION_MS, replyPrimaryTimeoutMs)
+          : null)
+        : Math.max(
+            REPLY_BUDGET_MIN_GENERATION_MS,
+            Math.min(
+              remainingReplyBudgetMs,
+              replyPrimaryTimeoutMs > 0 ? replyPrimaryTimeoutMs : remainingReplyBudgetMs
+            )
+          );
+      const rawReplyText = await withTraceSpan(trace, 'generate-reply', () => runReplyWithBudget(() => deps.chat(
+        replyMessages,
+        systemPrompt,
+        modelUserTurn,
+        {
+          ...primaryReplyOptions,
+          timeoutMs: modelTimeoutMs || undefined,
+        }
+      ), remainingReplyBudgetMs), {
+        historySize: workflowContext.conversationState.messages.length,
+        route: task.category,
+        advancedMode: workflowContext.isAdvanced,
+        replyLengthTier: replyLengthProfile.tier,
+        replyPerformanceProfile: replyLengthProfile.performanceProfile,
+        replyMaxTokens: replyLengthProfile.maxTokens,
+        replyHistoryLimit: replyLengthProfile.historyLimit,
+        replyTemperature: replyLengthProfile.temperature,
+        promptProfile: replyLengthProfile.promptProfile,
+      });
+
+      replyDecision = parseChatReplyDecision(rawReplyText, {
+        defaultSendVoice: voiceReplyPolicy.suggestedByEmotion,
+      });
+      if (replyDecision.unusable) {
+        throw createInvalidModelReplyError(rawReplyText);
+      }
+      visibleReplyText = replyDecision.text;
+      replyProviderKind = 'reply';
+      replyProviderModel = primaryReplyModel;
+      const strippedReplyText = stripHiddenReasoning(rawReplyText);
+      if (!replyDecision.structured && visibleReplyText !== String(strippedReplyText || '').trim()) {
+        recordWorkflowMetric('yuno_hidden_reasoning_stripped_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          route: task.category,
+        });
+        logger.info('model', 'Hidden reasoning was stripped from reply output', {
+          traceId: trace.traceId,
+          chatType: normalizedEvent.chatType,
+          chatId: normalizedEvent.chatId,
+          userId: normalizedEvent.userId,
+          messageId: normalizedEvent.messageId,
+          route: task.category,
+        });
+      }
+    } catch (error) {
+      if (String(error?.code || '').toUpperCase() === 'REPLY_BUDGET_EXCEEDED') {
+        recordWorkflowMetric('yuno_reply_latency_budget_exceeded_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          route: task.category,
+        });
+        logger.warn('model', 'Reply generation exceeded time budget and used short fallback', {
+          traceId: trace.traceId,
+          chatType: normalizedEvent.chatType,
+          chatId: normalizedEvent.chatId,
+          userId: normalizedEvent.userId,
+          messageId: normalizedEvent.messageId,
+          route: task.category,
+          budgetMs: replyBudgetMs,
+        });
+        visibleReplyText = buildReplyBudgetFallbackReply(normalizedEvent, task);
+      } else if (isModelUnavailableError(error)) {
+        const primaryError = error;
+        const fallbackModel = String(options.replyLlmFallbackChatModel
+          || options.modelFallbackChatModel
+          || config.replyLlmFallbackChatModel
+          || '').trim();
+        if (hasDistinctReplyFallback(fallbackModel, options)) {
+          try {
+            const fallbackRemainingBudgetMs = getRemainingReplyBudgetMs();
+            if (
+              fallbackRemainingBudgetMs !== null
+              && fallbackRemainingBudgetMs <= REPLY_BUDGET_MIN_GENERATION_MS
+            ) {
+              throw createReplyBudgetExceededError(fallbackRemainingBudgetMs);
+            }
+
+            const fallbackTimeoutMs = fallbackRemainingBudgetMs === null
+              ? null
+              : Math.max(
+                  REPLY_BUDGET_MIN_GENERATION_MS,
+                  fallbackRemainingBudgetMs - 100
+                );
+            const fallbackReply = await withTraceSpan(trace, 'generate-reply-fallback-model', () => runReplyWithBudget(
+              () => deps.chat(
+                replyMessages,
+                systemPrompt,
+                modelUserTurn,
+                {
+                  ...primaryReplyOptions,
+                  operation: 'reply-fallback-model',
+                  providerKind: 'reply-fallback',
+                  model: fallbackModel,
+                  reasoningEffort: 'minimal',
+                  maxTokens: Math.max(primaryReplyOptions.maxTokens, FALLBACK_REPLY_MIN_MAX_TOKENS),
+                  timeoutMs: fallbackTimeoutMs || undefined,
+                }
+              ),
+              fallbackRemainingBudgetMs
+            ), {
+              historySize: workflowContext.conversationState.messages.length,
+              route: task.category,
+              fallbackModel,
+            });
+
+            replyDecision = parseChatReplyDecision(fallbackReply, {
+              defaultSendVoice: voiceReplyPolicy.suggestedByEmotion,
+            });
+            if (replyDecision.unusable) {
+              throw createInvalidModelReplyError(fallbackReply);
+            }
+            visibleReplyText = replyDecision.text || buildReplyBudgetFallbackReply(normalizedEvent, task);
+            replyProviderKind = 'reply-fallback';
+            replyProviderModel = fallbackModel;
+          } catch (fallbackError) {
+            if (String(fallbackError?.code || '').toUpperCase() === 'REPLY_BUDGET_EXCEEDED') {
+              recordWorkflowMetric('yuno_reply_latency_budget_exceeded_total', 1, {
+                chat_type: normalizedEvent.chatType,
+                route: task.category,
+              });
+              visibleReplyText = buildReplyBudgetFallbackReply(normalizedEvent, task);
+            } else {
+              recordWorkflowMetric('yuno_model_fallback_provider_failure_total', 1, {
+                chat_type: normalizedEvent.chatType,
+                route: task.category,
+                reason: String(fallbackError?.code || fallbackError?.status || 'unknown').toLowerCase(),
+              });
+              logger.warn('model', 'Fallback reply model failed; using primary failure fallback', {
+                traceId: trace.traceId,
+                chatType: normalizedEvent.chatType,
+                chatId: normalizedEvent.chatId,
+                userId: normalizedEvent.userId,
+                messageId: normalizedEvent.messageId,
+                route: task.category,
+                fallbackModel,
+                code: fallbackError?.code,
+                status: fallbackError?.status || fallbackError?.response?.status,
+                errorMessage: fallbackError?.message,
+              });
+              error = primaryError;
+            }
+          }
+        }
+      }
+
+      if (!visibleReplyText) {
+        if (!isModelUnavailableError(error)) {
+          throw error;
+        }
+
+        recordWorkflowMetric('yuno_model_fallback_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          route: task.category,
+          reason: String(error.code || error.status || 'model-unavailable').toLowerCase(),
+        });
+        logger.warn('model', 'Reply generation fell back to canned response', {
+          traceId: trace.traceId,
+          chatType: normalizedEvent.chatType,
+          chatId: normalizedEvent.chatId,
+          userId: normalizedEvent.userId,
+          messageId: normalizedEvent.messageId,
+          route: task.category,
+          code: error.code,
+          status: error.status || error.response?.status,
+          errorMessage: error.message,
+        });
+        visibleReplyText = buildModelFallbackReply(normalizedEvent, task, error);
+      }
+    }
+
+    if (!replyDecision) {
+      replyDecision = parseChatReplyDecision(visibleReplyText, {
+        defaultSendVoice: voiceReplyPolicy.suggestedByEmotion,
+      });
+    }
+
+    const replyPresentationStyle = {
+      ...emotionResult,
+      emojiBudget: personalityStrategy.emojiBudget,
+      emojiStyle: personalityStrategy.emojiStyle,
+    };
+    const naturalnessOptions = {
+      event: normalizedEvent,
+      route: task,
+      replyLengthProfile,
+      replyPlan,
+      personalityStrategy,
+      messageAnalysis: analysis,
+      conversationState: workflowContext.conversationState,
+    };
+    const originalVoiceMaxChars = Number(deps.resolveVoiceRuntimeConfig()?.maxChars || config.voiceReplyMaxChars || 0);
+    const originalVoiceText = normalizeVoiceTtsTextBase(replyDecision.voiceText || replyDecision.text || visibleReplyText);
+    const originalVoiceExceededLimit = originalVoiceMaxChars > 0
+      && originalVoiceText.length > originalVoiceMaxChars;
+    const replyShapeOptions = { chatType: normalizedEvent.chatType };
+    let shapedReplyText = shapeChatReplyText(replyDecision.text || visibleReplyText, replyPresentationStyle, replyShapeOptions);
+    let shapedVoiceText = shapeChatReplyText(replyDecision.voiceText || shapedReplyText, replyPresentationStyle);
+    let naturalness = deps.inspectReplyNaturalness(shapedReplyText, naturalnessOptions);
+    let voiceNaturalness = deps.inspectReplyNaturalness(shapedVoiceText, naturalnessOptions);
+    const initialEdgeScore = Math.max(
+      Number(naturalness.edgeScore || 0),
+      Number(voiceNaturalness.edgeScore || 0)
+    );
+    const initialQualityFlags = [...new Set([
+      ...naturalness.flags,
+      ...voiceNaturalness.flags,
+    ])];
+    for (const flag of initialQualityFlags) {
+      recordWorkflowMetric('yuno_reply_naturalness_flags_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        route: task.category,
+        flag,
+      });
+    }
+
+    let replyStyleRewriteOutcome = 'not-needed';
+    if (naturalness.rewriteRecommended || voiceNaturalness.rewriteRecommended) {
+      if (replyProviderKind) {
+        try {
+          const rewriteResult = await rewriteReplyStyle({
+            event: normalizedEvent,
+            decision: replyDecision,
+            naturalness,
+            voiceNaturalness,
+            personalityStrategy,
+            emotionResult,
+            relation: workflowContext.relation,
+            conversationState: workflowContext.conversationState,
+            replyPlan,
+            replyProviderKind,
+            replyProviderModel,
+            getRemainingReplyBudgetMs,
+            trace,
+            deps,
+          });
+          replyStyleRewriteOutcome = rewriteResult.outcome;
+          if (rewriteResult.decision) {
+            replyDecision = rewriteResult.decision;
+            shapedReplyText = shapeChatReplyText(replyDecision.text, replyPresentationStyle, replyShapeOptions);
+            shapedVoiceText = shapeChatReplyText(replyDecision.voiceText || shapedReplyText, replyPresentationStyle);
+            naturalness = deps.inspectReplyNaturalness(shapedReplyText, naturalnessOptions);
+            voiceNaturalness = deps.inspectReplyNaturalness(shapedVoiceText, naturalnessOptions);
+          }
+        } catch (error) {
+          replyStyleRewriteOutcome = 'failed';
+          deps.logger.warn('model', 'Reply style rewrite failed; using deterministic de-escalation', {
+            traceId: trace.traceId,
+            chatType: normalizedEvent.chatType,
+            chatId: normalizedEvent.chatId,
+            userId: normalizedEvent.userId,
+            messageId: normalizedEvent.messageId,
+            providerKind: replyProviderKind,
+            flags: initialQualityFlags,
+            message: error.message,
+          });
+        }
+      } else {
+        replyStyleRewriteOutcome = 'no-model-provider';
+      }
+    }
+
+    let replyText = deps.polishReplyNaturalness(shapedReplyText, naturalnessOptions);
+    let voiceText = deps.polishReplyNaturalness(shapedVoiceText || replyText, naturalnessOptions);
+    let finalNaturalness = deps.inspectReplyNaturalness(replyText, naturalnessOptions);
+    let finalVoiceNaturalness = deps.inspectReplyNaturalness(voiceText, naturalnessOptions);
+    if (finalNaturalness.rewriteRecommended || finalVoiceNaturalness.rewriteRecommended) {
+      replyText = deps.deescalateReplyNaturalness(replyText, naturalnessOptions);
+      voiceText = deps.deescalateReplyNaturalness(voiceText || replyText, naturalnessOptions);
+      replyStyleRewriteOutcome = replyStyleRewriteOutcome === 'success'
+        ? 'rejected-deescalated'
+        : `${replyStyleRewriteOutcome}-deescalated`;
+      finalNaturalness = deps.inspectReplyNaturalness(replyText, naturalnessOptions);
+      finalVoiceNaturalness = deps.inspectReplyNaturalness(voiceText, naturalnessOptions);
+    }
+    if (finalNaturalness.rewriteRecommended) {
+      replyText = deps.deescalateReplyNaturalness('', naturalnessOptions);
+      finalNaturalness = deps.inspectReplyNaturalness(replyText, naturalnessOptions);
+      replyStyleRewriteOutcome = `${replyStyleRewriteOutcome}-safe-fallback`;
+    }
+    if (finalVoiceNaturalness.rewriteRecommended) {
+      voiceText = replyText;
+      finalVoiceNaturalness = finalNaturalness;
+    }
+    replyDecision = {
+      ...replyDecision,
+      text: replyText,
+      voiceText,
+      sendVoice: originalVoiceExceededLimit ? false : Boolean(replyDecision.sendVoice),
+    };
+
+    if (replyStyleRewriteOutcome !== 'not-needed') {
+      recordWorkflowMetric('yuno_reply_style_rewrite_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        route: task.category,
+        outcome: replyStyleRewriteOutcome,
+      });
+    }
+    deps.logger.info('model', 'Reply style quality gate completed', {
+      traceId: trace.traceId,
+      chatType: normalizedEvent.chatType,
+      route: task.category,
+      signatureMove: personalityStrategy.signatureMove?.key || 'unknown',
+      initialFlags: initialQualityFlags,
+      initialEdgeScore,
+      finalFlags: [...new Set([...finalNaturalness.flags, ...finalVoiceNaturalness.flags])],
+      finalEdgeScore: Math.max(Number(finalNaturalness.edgeScore || 0), Number(finalVoiceNaturalness.edgeScore || 0)),
+      rewriteOutcome: replyStyleRewriteOutcome,
+      providerKind: replyProviderKind,
+    });
+    const replyQuoteMessageId = resolveGroupReplyQuoteId({
+      event: normalizedEvent,
+      route: task,
+      recentEvents: workflowContext.recentEvents,
+      runtimeConfig: options.runtimeConfig || config,
+    });
+    const replyTarget = {
+      platform: normalizedEvent.platform,
+      chatType: normalizedEvent.chatType,
+      chatId: normalizedEvent.chatId,
+      ...(replyQuoteMessageId ? { quoteMessageId: replyQuoteMessageId } : {}),
+    };
+    const memeCandidates = await loadMemeCandidatesForReply({
+      event: normalizedEvent,
+      trace,
+      memoryContext: workflowContext.memoryContext,
+    }, deps);
+    const memeDecision = deps.planContextualMemeReply({
+      event: normalizedEvent,
+      route: task,
+      analysis,
+      emotionResult,
+      replyText,
+      memeCandidates,
+      userProfile: workflowContext.userProfile,
+      settings: config,
+    });
+    deps.logger.info('meme', 'Contextual meme decision', {
+      traceId: trace.traceId,
+      chatType: normalizedEvent.chatType,
+      route: task.category,
+      candidateCount: memeCandidates.length,
+      mode: memeDecision.mode || 'unknown',
+      suggested: Boolean(memeDecision.suggested),
+      shouldSend: Boolean(memeDecision.shouldSend),
+      reason: memeDecision.reason || 'unknown',
+      score: Number.isFinite(Number(memeDecision.score)) ? Number(memeDecision.score) : null,
+      minScore: config.memeAutoSendMinScore,
+      probability: config.memeAutoSendProbability,
+      cooldownMs: config.memeAutoSendCooldownMs,
+      maxPerHour: config.memeAutoSendMaxPerHour,
+    });
+    if (memeDecision.suggested) {
+      recordWorkflowMetric('yuno_meme_auto_suggested_total', 1, {
+        chat_type: normalizedEvent.chatType,
+        mode: memeDecision.mode || 'unknown',
+        reason: memeDecision.reason || 'unknown',
+      });
+    }
+    const nextMessages = [
+      { role: 'user', content: userTurn },
+      {
+        role: 'assistant',
+        content: replyText,
+        styleMove: personalityStrategy.signatureMove?.key || '',
+        edgeScore: Number(finalNaturalness.edgeScore || 0),
+      },
+    ];
+
+    let cadencePreDelayMs = 0;
+    await withTraceSpan(trace, 'send-text', async () => {
+      const segmentationConfig = options.runtimeConfig || config;
+      const segments = shouldSegmentReply({
+        event: normalizedEvent,
+        route: task,
+        text: replyText,
+        runtimeConfig: segmentationConfig,
+      })
+        ? splitReplyIntoSegments(replyText, {
+            maxCount: segmentationConfig.replySegmentMaxCount,
+            replySegmentTrimTrailingPeriod: segmentationConfig.replySegmentTrimTrailingPeriod,
+          })
+        : [replyText];
+      const cadence = deps.resolveReplyCadence({
+        event: normalizedEvent,
+        route: task,
+        replyPlan,
+        emotionResult,
+        dailyMood,
+        segments,
+        remainingBudgetMs: getRemainingReplyBudgetMs(),
+        elapsedMs: Date.now() - replyBudgetStartedAt,
+        runtimeConfig: segmentationConfig,
+      }) || { preDelayMs: 0, segmentDelays: [], reason: 'unavailable' };
+      cadencePreDelayMs = Math.max(0, Number(cadence.preDelayMs || 0));
+      // Cadence owns the segment pauses unless it is off or unavailable, in
+      // which case the legacy length-based delay keeps segmentation readable.
+      const useCadenceSegmentDelays = cadence.reason !== 'disabled' && cadence.reason !== 'unavailable';
+      const resolveSegmentPauseMs = (segment, index) => {
+        const planned = Number(cadence.segmentDelays?.[index]);
+        if (useCadenceSegmentDelays && Number.isFinite(planned)) {
+          return Math.max(0, planned);
+        }
+        return resolveSegmentDelayMs(segment, {
+          minDelayMs: segmentationConfig.replySegmentMinDelayMs,
+          maxDelayMs: segmentationConfig.replySegmentMaxDelayMs,
+        });
+      };
+      const candidatePlan = memeDecision.shouldSend && memeDecision.asset
+        ? {
+            type: 'structured-meme',
+            text: replyText,
+            asset: {
+              assetId: memeDecision.asset.assetId || '',
+              storagePath: memeDecision.asset.storagePath || '',
+              imageUrl: memeDecision.asset.imageUrl || '',
+            },
+          }
+        : {
+            type: segments.length > 1 ? 'segmented-text' : 'text',
+            text: replyText,
+            segments,
+          };
+
+      const delivery = await executeTrackedDelivery(deps, normalizedEvent, 'primary', async (deliveryContext) => {
+        const prepared = await deliveryContext.preparePlan(candidatePlan);
+        let plan = prepared?.plan || candidatePlan;
+        const completedParts = Math.max(0, Number(prepared?.completedParts || 0));
+        const cadenceActive = completedParts === 0;
+        const typingEnabled = cadenceActive
+          && normalizedEvent.chatType === 'private'
+          && (segmentationConfig.typingIndicatorEnabled ?? config.typingIndicatorEnabled ?? true);
+        let typingOpened = false;
+        const closeTyping = async () => {
+          if (!typingOpened) return;
+          typingOpened = false;
+          await deps.setTyping(replyTarget, false).catch(() => false);
+        };
+        if (cadenceActive && cadencePreDelayMs > 0) {
+          if (typingEnabled) {
+            typingOpened = Boolean(await deps.setTyping(replyTarget, true).catch(() => false));
+          }
+          recordWorkflowMetric('yuno_reply_cadence_delay_ms', cadencePreDelayMs, {
+            chat_type: normalizedEvent.chatType,
+            phase: 'pre-delay',
+          }, 'histogram');
+          await deps.sleep(cadencePreDelayMs);
+        }
+        const plannedReplyText = String(
+          plan.text
+          || (Array.isArray(plan.segments) ? plan.segments.join('') : '')
+          || replyText
+        );
+        if (plannedReplyText !== replyText) {
+          replyText = plannedReplyText;
+          voiceText = plannedReplyText;
+          replyDecision = {
+            ...replyDecision,
+            text: plannedReplyText,
+            voiceText: plannedReplyText,
+            sendVoice: false,
+          };
+        }
+        nextMessages[1].content = replyText;
+
+        if (plan.type === 'structured-meme' && plan.asset) {
+          if (completedParts >= 1) return { plan };
+          await closeTyping();
+          let memeError = null;
+          try {
+            const imageOutput = await deps.buildMemeImageOutput(plan.asset);
+            const sent = await deps.sendStructuredReply(replyTarget, [
+              { type: 'text', text: plannedReplyText },
+              imageOutput,
+            ]);
+            if (sent === false) throw new Error('structured-meme-message-empty');
+          } catch (error) {
+            memeError = error;
+            if (plan.asset.storagePath) {
+              try {
+                const imageOutput = await deps.buildMemeImageOutput(plan.asset, { preferBase64: true });
+                if (!imageOutput?.image?.base64) throw error;
+                const sent = await deps.sendStructuredReply(replyTarget, [
+                  { type: 'text', text: plannedReplyText },
+                  imageOutput,
+                ]);
+                if (sent === false) throw new Error('structured-meme-message-empty');
+                memeError = null;
+              } catch (fallbackError) {
+                memeError = fallbackError;
+              }
+            }
+          }
+          if (!memeError) {
+            await deliveryContext.markPartCompleted(1);
+            return { plan };
+          }
+
+          recordWorkflowMetric('yuno_meme_auto_skipped_total', 1, {
+            chat_type: normalizedEvent.chatType,
+            reason: 'send-failed',
+          });
+          deps.logger.warn('meme', 'Contextual meme send failed; using immutable text fallback', {
+            traceId: trace.traceId,
+            assetId: plan.asset.assetId || '',
+            message: memeError.message,
+          });
+          const fallbackSegments = shouldSegmentReply({
+            event: normalizedEvent,
+            route: task,
+            text: plannedReplyText,
+            runtimeConfig: segmentationConfig,
+          })
+            ? splitReplyIntoSegments(plannedReplyText, {
+                maxCount: segmentationConfig.replySegmentMaxCount,
+                replySegmentTrimTrailingPeriod: segmentationConfig.replySegmentTrimTrailingPeriod,
+              })
+            : [plannedReplyText];
+          const replacement = await deliveryContext.replacePlanBeforeDelivery({
+            type: fallbackSegments.length > 1 ? 'segmented-text' : 'text',
+            text: plannedReplyText,
+            segments: fallbackSegments,
+          });
+          plan = replacement.plan;
+        }
+
+        const plannedSegments = Array.isArray(plan.segments) && plan.segments.length > 0
+          ? plan.segments
+          : [plannedReplyText];
+        if (plannedSegments.length > 1) {
+          recordWorkflowMetric('yuno_reply_segmented_total', 1, {
+            chat_type: normalizedEvent.chatType,
+            segments: String(plannedSegments.length),
+          });
+        }
+        for (let index = Math.min(completedParts, plannedSegments.length); index < plannedSegments.length; index += 1) {
+          const segment = plannedSegments[index];
+          if (index > 0 && cadenceActive) {
+            const segmentDelayMs = resolveSegmentPauseMs(segment, index);
+            if (segmentDelayMs > 0) {
+              recordWorkflowMetric('yuno_reply_cadence_delay_ms', segmentDelayMs, {
+                chat_type: normalizedEvent.chatType,
+                phase: 'segment',
+              }, 'histogram');
+              await deps.sleep(segmentDelayMs);
+            }
+          }
+          if (index === 0) {
+            await closeTyping();
+          }
+          const segmentTarget = index === 0
+            ? replyTarget
+            : { ...replyTarget, quoteMessageId: undefined };
+          const sent = await deps.sendReply(segmentTarget, segment);
+          if (sent === false) throw new Error('segment-delivery-not-sent');
+          await deliveryContext.markPartCompleted(index + 1);
+        }
+        await closeTyping();
+        return { plan };
+      }, options.deliveryKey);
+
+      const deliveredPlan = delivery.value?.plan || candidatePlan;
+      if (delivery.sent) {
+        await deps.recordOutboundMessageLog(normalizedEvent, replyText, {
+          deliveryKey: delivery.deliveryKey,
+        }).catch((error) => {
+          deps.logger.warn('memory', 'Outbound message log write failed', {
+            chatId: normalizedEvent.chatId,
+            messageId: normalizedEvent.messageId,
+            message: error.message,
+          });
+        });
+      }
+
+      if (delivery.sent && deliveredPlan.type === 'structured-meme') {
+        memeDecision.recordSent?.();
+        recordWorkflowMetric('yuno_meme_auto_sent_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          reason: memeDecision.reason || 'restored-plan',
+        });
+        if (deliveredPlan.asset?.assetId) {
+          await deps.markMemeUsed(deliveredPlan.asset.assetId).catch((error) => {
+            logger.warn('meme', 'Failed to record meme usage', {
+              traceId: trace.traceId,
+              assetId: deliveredPlan.asset.assetId,
+              message: error.message,
+            });
+          });
+        }
+      } else if (memeDecision.reason && !['mode-off', 'disabled', 'no-candidate'].includes(memeDecision.reason)) {
+        recordWorkflowMetric('yuno_meme_auto_skipped_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          reason: memeDecision.reason,
+        });
+      }
+    });
+
+    const persistJobData = buildPersistJobData(workflowContext, {
+      nextMessages,
+      rawText,
+      userTurn,
+      analysis,
+      emotionResult,
+      summary,
+      username: normalizedEvent.userName,
+    });
+
+    const persistPayload = {
+      nextMessages,
+      rawText,
+      userTurn,
+      analysis,
+      emotionResult,
+      summary,
+      username: normalizedEvent.userName,
+    };
+    const persistJobId = `persist:${normalizedEvent.platform}:${normalizedEvent.chatId}:${normalizedEvent.messageId || Date.now()}`;
+
+    if (options.deferPostReplyEffects) {
+      await persistReplyState(workflowContext, persistPayload, trace, deps, {
+        taskMode: 'critical',
+      });
+      const optionalJobData = {
+        ...persistJobData,
+        taskMode: 'optional',
+      };
+      if (deps.enqueuePersistJob) {
+        await deps.enqueuePersistJob(optionalJobData, {
+          jobId: persistJobId,
+          waitForCompletion: false,
+        });
+      } else {
+        setImmediate(() => {
+          processPersistJob(optionalJobData, { deps }).catch((error) => {
+            deps.logger.warn('memory', 'Detached post-reply effects failed', {
+              message: error.message,
+              chatId: normalizedEvent.chatId,
+              userId: normalizedEvent.userId,
+              messageId: normalizedEvent.messageId,
+            });
+          });
+        });
+      }
+    } else if (!options.persistInline && deps.enqueuePersistJob) {
+      await deps.enqueuePersistJob(persistJobData, {
+        jobId: persistJobId,
+      });
+    } else {
+      await persistReplyState(workflowContext, persistPayload, trace, deps);
+    }
+
+    const voiceReadiness = getRuntimeServices().readiness?.voice;
+    const voiceConfig = deps.resolveVoiceRuntimeConfig();
+    const voiceAvailable = !(voiceReadiness?.enabled && !voiceReadiness.ready);
+    const finalVoiceDecision = resolveVoiceReplyDecision({
+      event: normalizedEvent,
+      route: task,
+      replyDecision,
+      replyText,
+      voiceText,
+      emotionResult,
+      runtimeConfig: voiceConfig,
+    });
+    recordWorkflowMetric('yuno_voice_reply_decisions_total', 1, {
+      chat_type: normalizedEvent.chatType,
+      route: task.category,
+      decision: finalVoiceDecision.shouldSend ? 'send' : 'skip',
+      reason: voiceAvailable ? finalVoiceDecision.reason : 'voice-readiness-degraded',
+      model_suggested: finalVoiceDecision.modelSuggested ? 'true' : 'false',
+    });
+
+    if (finalVoiceDecision.shouldSend && !voiceAvailable) {
+      logger.warn('model', 'Voice generation skipped', {
+        traceId: trace.traceId,
+        chatId: normalizedEvent.chatId,
+        messageId: normalizedEvent.messageId,
+        reason: 'voice-readiness-degraded',
+        readinessReason: voiceReadiness?.reason,
+      });
+    }
+
+    if (
+      voiceAvailable
+      && finalVoiceDecision.shouldSend
+    ) {
+      try {
+        const audio = await withTraceSpan(trace, 'tts', () => deps.tts(finalVoiceDecision.voiceText, {
+          traceContext: trace,
+          operation: 'tts',
+        }));
+        const voiceDelivery = await withTraceSpan(trace, 'send-voice', () => (
+          executeTrackedDelivery(deps, normalizedEvent, 'voice', () => deps.sendVoice({
+            platform: normalizedEvent.platform,
+            chatType: normalizedEvent.chatType,
+            chatId: normalizedEvent.chatId,
+          }, audio), options.voiceDeliveryKey)
+        ));
+        const sent = Boolean(voiceDelivery.sent || voiceDelivery.status === 'sent');
+        recordWorkflowMetric('yuno_voice_replies_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          route: task.category,
+          result: sent ? 'sent' : 'not_sent',
+          reason: finalVoiceDecision.reason,
+        });
+        if (sent && finalVoiceDecision.cooldownKey) {
+          lastVoiceSentAtByChat.set(finalVoiceDecision.cooldownKey, Date.now());
+        }
+      } catch (error) {
+        recordWorkflowMetric('yuno_voice_replies_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          route: task.category,
+          result: 'failed',
+          reason: String(error.code || error.status || 'error').toLowerCase(),
+        });
+        logger.warn('model', 'Voice generation skipped', {
+          traceId: trace.traceId,
+          chatId: normalizedEvent.chatId,
+          messageId: normalizedEvent.messageId,
+          message: error.message,
+        });
+      }
+    }
+
+    recordWorkflowMetric('yuno_replies_sent_total', 1, {
+      chat_type: normalizedEvent.chatType,
+      route: task.category,
+    });
+
+    finalizeTrace(trace, {
+      replyType: 'chat',
+      shouldRespond: true,
+      route: task.category,
+      knowledgeHits: knowledge.documents?.length || 0,
+      queueJobId: options.queueJobId,
+      messageId: normalizedEvent.messageId,
+      decisionReason: analysis.reason,
+      contextMode: workflowContext.contextMode || 'full',
+      replyLengthTier: replyLengthProfile.tier,
+      replyPerformanceProfile: replyLengthProfile.performanceProfile,
+      replyMaxTokens: replyLengthProfile.maxTokens,
+      replyPlanType: replyPlan.type,
+      replyPlanDepth: replyPlan.depth,
+      replyPlanQuestionNeeded: replyPlan.questionNeeded,
+      dailyMoodKey: dailyMood?.key || null,
+      dailyMoodDate: dailyMood?.dateKey || null,
+      emotion: emotionResult.emotion,
+      emotionReason: emotionResult.reason,
+      signatureMove: personalityStrategy.signatureMove?.key || null,
+      replyEdgeScore: Number(finalNaturalness.edgeScore || 0),
+      replyStyleRewriteOutcome,
+      cadencePreDelayMs,
+      participationMode: 'reply',
+      microStyle: personalityStrategy.microStyle || null,
+    });
+    return replyText;
+  } catch (error) {
+    failTrace(trace, error, {
+      chatType: normalizedEvent.chatType,
+      chatId: normalizedEvent.chatId,
+      userId: normalizedEvent.userId,
+      messageId: normalizedEvent.messageId,
+      queueJobId: options.queueJobId,
+    });
+    throw error;
+  }
+}
+
+export async function processReplyJob(jobData, options = {}) {
+  const event = normalizeLegacyMessageEvent(jobData.event);
+  return withConversationExecution(event, () => processIncomingMessage(event, {
+    analysis: jobData.analysis,
+  }, {
+    ...options,
+    queueJobId: options.queueJobId,
+    persistInline: false,
+  }));
+}
+
+export async function processGroupMessage(event, precomputed = null, options = {}) {
+  return processIncomingMessage(event, precomputed, options);
+}

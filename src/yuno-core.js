@@ -319,7 +319,11 @@ export async function runYunoConversation(input, options = {}) {
 
   let lifecycleResult;
   if (shouldUseInboundLifecycle(options)) {
-    const inboundHandler = options.engine?.handleInboundEvent || handleInboundEvent;
+    const runtimeApplication = getRuntimeServices().application;
+    const inboundHandler = options.engine?.handleInboundEvent
+      || options.application?.handleInboundEvent
+      || runtimeApplication?.handleInboundEvent
+      || handleInboundEvent;
     lifecycleResult = await inboundHandler(event, {
       decisionOptions: {
         ...options,

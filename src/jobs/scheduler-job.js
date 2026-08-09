@@ -1,8 +1,6 @@
 import cron from 'node-cron';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { chat } from '../minimax.js';
-import { sendText } from '../sender.js';
 import {
   cleanupGroupEventsRetention,
   ensureGroupState,
@@ -23,6 +21,8 @@ import { isWithinQuietHours, listGroupRules } from '../group-automation.js';
 import { runYunoConversation } from '../yuno-core.js';
 import { cleanupExpiredMemoryVectors } from '../memory-retrieval.js';
 import { recordWorkflowMetric } from '../metrics.js';
+import { getRuntimeServices } from '../runtime-services.js';
+import { handleScheduledInteraction as runProactiveInteraction } from '../application/use-cases/handle-scheduled-interaction.js';
 
 const SCHEDULER_INSTANCE_ID = process.env.YUNO_SCHEDULER_INSTANCE_ID
   || process.env.HOSTNAME || `scheduler-${process.pid}`;
@@ -143,68 +143,34 @@ async function runWithConcurrency(tasks, concurrency, worker) {
 
 export async function runScheduledInteraction(groupId, options = {}) {
   const runtimeConfig = options.runtimeConfig || config;
-  const trace = createTraceContext('scheduled-interaction', { groupId: String(groupId) });
+  const runtimeServices = getRuntimeServices();
+  const application = options.application || runtimeServices.application;
+  const generateReply = options.generateReply || runtimeServices.ports?.model?.generateReply;
+  const deliverReply = options.deliverReply || application?.deliverReply;
 
-  if (runtimeConfig.proactiveMessagesEnabled === false) {
-    logSchedulerSkip('proactive-disabled');
-    finalizeTrace(trace, { shouldSend: false, reason: 'proactive-disabled' });
-    return;
-  }
-
-  try {
-    const [groupState, recentEvents] = await withTraceSpan(trace, 'load-group-state', () => Promise.all([
-      ensureGroupState(groupId),
-      getRecentEvents(groupId, 3),
-    ]));
-    const plan = planScheduledInteraction({
-      groupState,
-      recentEvents,
-      dateContext: new Date(),
-      timeZone: runtimeConfig.dailyMoodTimezone,
-      runtimeConfig,
-    });
-
-    if (!plan.shouldSend) {
-      logSchedulerSkip(plan.reason);
-      finalizeTrace(trace, {
-        shouldSend: false,
-        reason: plan.reason,
-      });
-      return;
-    }
-
-    const text = await withTraceSpan(trace, 'generate-message', () => chat(
-      [],
-      buildScheduledPrompt({ groupState, recentEvents, plan }),
-      'Send one proactive message that matches the current group atmosphere.',
-      {
-        traceContext: trace,
-        promptVersion: 'scheduled-message/v1',
-        operation: 'scheduled-reply',
-      }
-    ));
-
-    await withTraceSpan(trace, 'send-message', () => sendText(groupId, text));
-    await withTraceSpan(trace, 'mark-proactive', () => markProactiveSent(groupId));
-
-    logger.info('scheduler', 'Proactive group message sent', {
-      groupId,
-      topic: plan.topic,
-      tone: plan.tone,
-      traceId: trace.traceId,
-    });
-    finalizeTrace(trace, {
-      shouldSend: true,
-      topic: plan.topic,
-      tone: plan.tone,
-    });
-  } catch (error) {
-    failTrace(trace, error);
-    logger.error('scheduler', 'Scheduled interaction failed', {
-      message: error.message,
-      traceId: trace.traceId,
-    });
-  }
+  return runProactiveInteraction({
+    groupId,
+    runtimeConfig,
+    now: options.now || new Date(),
+  }, {
+    ensureGroupState: options.ensureGroupState || ensureGroupState,
+    getRecentEvents: options.getRecentEvents || getRecentEvents,
+    planScheduledInteraction: options.planScheduledInteraction || planScheduledInteraction,
+    buildScheduledPrompt: options.buildScheduledPrompt || buildScheduledPrompt,
+    generateReply: generateReply || (async () => {
+      throw new Error('SCHEDULED_MODEL_UNAVAILABLE');
+    }),
+    deliverReply: deliverReply || (async () => {
+      throw new Error('SCHEDULED_DELIVERY_UNAVAILABLE');
+    }),
+    markProactiveSent: options.markProactiveSent || markProactiveSent,
+    logSchedulerSkip: options.logSchedulerSkip || logSchedulerSkip,
+    createTraceContext,
+    failTrace,
+    finalizeTrace,
+    withTraceSpan,
+    logger: options.logger || logger,
+  });
 }
 
 async function deliverSchedulerToolResult(taskLike, toolResult, options = {}) {
