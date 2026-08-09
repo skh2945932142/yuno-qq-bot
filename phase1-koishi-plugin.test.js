@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createGameMiniSessionController } from './src/koishi-game-mini.js';
 import { createYunoKoishiPlugin } from './src/koishi-yuno-plugin.js';
 
 function createContext() {
@@ -78,6 +79,101 @@ test('active Koishi plugin initializes runtime and sends each eligible event to 
   assert.equal(calls[0].options.responseMode, 'send');
   await ctx.handlers.dispose[0]();
   assert.equal(calls.at(-1), 'shutdown');
+});
+
+test('direct game commands never enter Yuno after Koishi handles them', async () => {
+  const ctx = createContext();
+  let conversations = 0;
+  createYunoKoishiPlugin({
+    mode: 'active',
+    config: { selfQq: '10000', adminQq: '90000', yunoPluginMode: 'active' },
+    deliveryAdapter: {
+      sendReply: async () => true,
+      sendStructuredReply: async () => true,
+      sendVoice: async () => true,
+    },
+    protocolAdapter: { callAction: async () => [] },
+    initializeYunoRuntime: async () => ({ started: true }),
+    shutdownYunoRuntime: async () => {},
+    isYunoRuntimeAcceptingMessages: () => true,
+    runYunoConversation: async () => { conversations += 1; },
+  })(ctx);
+
+  await ctx.handlers.ready[0]();
+  const session = groupSession('/猜数字 开始');
+  session.argv = { command: { name: '猜数字' } };
+  const result = await ctx.middlewares[0](session, async () => undefined);
+  const disabledSession = groupSession('/海龟汤 开始');
+  disabledSession.argv = { command: { name: '海龟汤' }, args: ['开始'] };
+  const disabledResult = await ctx.middlewares[0](disabledSession, async () => undefined);
+
+  assert.equal(result, '');
+  assert.equal(disabledResult, '');
+  assert.equal(conversations, 0);
+});
+
+
+test('bare game text remains a normal Yuno message under the strict slash prefix', async () => {
+  const ctx = createContext();
+  let conversations = 0;
+  createYunoKoishiPlugin({
+    mode: 'active',
+    config: { selfQq: '10000', adminQq: '90000', yunoPluginMode: 'active' },
+    deliveryAdapter: {
+      sendReply: async () => true,
+      sendStructuredReply: async () => true,
+      sendVoice: async () => true,
+    },
+    protocolAdapter: { callAction: async () => [] },
+    initializeYunoRuntime: async () => ({ started: true }),
+    shutdownYunoRuntime: async () => {},
+    isYunoRuntimeAcceptingMessages: () => true,
+    runYunoConversation: async () => { conversations += 1; },
+  })(ctx);
+
+  await ctx.handlers.ready[0]();
+  await ctx.middlewares[0](groupSession('猜数字 开始'), async () => undefined);
+
+  assert.equal(conversations, 1);
+  await ctx.handlers.dispose[0]();
+});
+
+test('an active group mini game keeps ordinary group messages out of Yuno until it ends', async () => {
+  const ctx = createContext();
+  const gameMiniSessions = createGameMiniSessionController({ inactivityMs: 1000 });
+  let conversations = 0;
+  createYunoKoishiPlugin({
+    mode: 'active',
+    config: { selfQq: '10000', adminQq: '90000', yunoPluginMode: 'active' },
+    gameMiniSessions,
+    deliveryAdapter: {
+      sendReply: async () => true,
+      sendStructuredReply: async () => true,
+      sendVoice: async () => true,
+    },
+    protocolAdapter: { callAction: async () => [] },
+    initializeYunoRuntime: async () => ({ started: true }),
+    shutdownYunoRuntime: async () => {},
+    isYunoRuntimeAcceptingMessages: () => true,
+    runYunoConversation: async () => { conversations += 1; },
+  })(ctx);
+
+  await ctx.handlers.ready[0]();
+
+  const start = groupSession('/猜数字 开始');
+  start.argv = { command: { name: '猜数字' }, args: ['开始'] };
+  gameMiniSessions.observe(start);
+
+  await ctx.middlewares[0](groupSession('普通聊天'), async () => undefined);
+  assert.equal(conversations, 0);
+
+  const end = groupSession('/猜数字 结束');
+  end.argv = { command: { name: '猜数字' }, args: ['结束'] };
+  gameMiniSessions.observe(end);
+
+  await ctx.middlewares[0](groupSession('恢复聊天'), async () => undefined);
+  assert.equal(conversations, 1);
+  await ctx.handlers.dispose[0]();
 });
 
 test('active Koishi plugin aggregates rapid private messages in arrival order', async () => {

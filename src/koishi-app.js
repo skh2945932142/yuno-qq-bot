@@ -4,6 +4,13 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import { metrics } from './metrics.js';
 import { createYunoKoishiPlugin } from './koishi-yuno-plugin.js';
+import {
+  assertGameMiniPrerequisites,
+  createGameMiniConfig,
+  createGameMiniSessionController,
+  installGameMiniSessionBoundary,
+  shouldInstallGameMini,
+} from './koishi-game-mini.js';
 import { getYunoRuntimeStatus } from './yuno-runtime.js';
 
 const require = createRequire(import.meta.url);
@@ -23,7 +30,7 @@ function constantTimeEquals(actual, expected) {
   return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
-function requireKoishiConfig(runtimeConfig = config) {
+function requireKoishiConfig(runtimeConfig = config, mode = runtimeConfig.yunoPluginMode) {
   const required = [
     ['SELF_QQ', runtimeConfig.selfQq],
     ['ONEBOT_ENDPOINT', runtimeConfig.onebotEndpoint],
@@ -41,6 +48,7 @@ function requireKoishiConfig(runtimeConfig = config) {
   if (missing.length) {
     throw new Error(`Missing required Koishi environment variables: ${missing.join(', ')}`);
   }
+  assertGameMiniPrerequisites(runtimeConfig, mode);
 }
 
 function buildKoishiMongoConfig(uri) {
@@ -111,9 +119,10 @@ function installOperationalRoutes(ctx, runtimeConfig = config) {
 
 export function createKoishiApplication(options = {}) {
   const runtimeConfig = { ...config, ...(options.config || {}) };
-  requireKoishiConfig(runtimeConfig);
+  const mode = options.mode || runtimeConfig.yunoPluginMode;
+  requireKoishiConfig(runtimeConfig, mode);
 
-  const ctx = new Context();
+  const ctx = new Context({ prefix: '/', prefixMode: 'strict' });
   ctx.plugin(Server, {
     host: options.host || '0.0.0.0',
     port: runtimeConfig.koishiPort,
@@ -134,9 +143,18 @@ export function createKoishiApplication(options = {}) {
 
   ctx.plugin(OneBot, buildOneBotConfig(runtimeConfig));
   installOperationalRoutes(ctx, runtimeConfig);
+  const gameMiniSessions = shouldInstallGameMini(runtimeConfig, mode)
+    ? (options.gameMiniSessions || createGameMiniSessionController())
+    : null;
+  if (gameMiniSessions) {
+    installGameMiniSessionBoundary(ctx, gameMiniSessions);
+    const gameMiniPlugin = options.gameMiniPlugin || require('koishi-plugin-game-mini');
+    ctx.plugin(gameMiniPlugin, createGameMiniConfig());
+  }
   ctx.plugin(createYunoKoishiPlugin({
     config: runtimeConfig,
-    mode: options.mode || runtimeConfig.yunoPluginMode,
+    gameMiniSessions,
+    mode,
   }));
   return ctx;
 }

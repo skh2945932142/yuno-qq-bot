@@ -114,6 +114,7 @@ export const config = Object.freeze({
   koishiConsoleEnabled: readBoolean('KOISHI_CONSOLE_ENABLED', true),
   koishiConsoleAdmin: readTrimmed('KOISHI_CONSOLE_ADMIN'),
   koishiConsolePassword: readTrimmed('KOISHI_CONSOLE_PASSWORD'),
+  gameMiniEnabled: readBoolean('GAME_MINI_ENABLED', false),
   botExperienceMode: readTrimmed('BOT_EXPERIENCE_MODE', 'companion'),
   dailyMoodEnabled: readBoolean('BOT_DAILY_MOOD_ENABLED', true),
   dailyMoodSeed: readTrimmed('BOT_DAILY_MOOD_SEED', 'yuno-daily-mood-v1'),

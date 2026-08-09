@@ -52,6 +52,7 @@ await import('./phase1-koishi-adapters.test.js');
 await import('./phase1-yuno-runtime.test.js');
 await import('./phase1-koishi-plugin.test.js');
 await import('./phase1-koishi-app.test.js');
+await import('./phase1-koishi-game-mini.test.js');
 await import('./phase1-yuno-formatter.test.js');
 await import('./phase1-meme-agent.test.js');
 await import('./phase1-automation-model.test.js');

@@ -35,6 +35,14 @@ Configure SELF_QQ, ADMIN_QQ, ONEBOT_TRANSPORT=ws, ONEBOT_ENDPOINT, ONEBOT_TOKEN,
 
 Start with YUNO_PLUGIN_MODE=shadow. Shadow mode only validates Session mapping; it starts no Yuno workers or scheduler, calls no LLM, sends no QQ messages, and writes no memory. After validation set YUNO_PLUGIN_MODE=active.
 
+## Group mini games
+
+Set `GAME_MINI_ENABLED=true` only after enabling the private Koishi Console and configuring its credentials. The controlled `koishi-plugin-game-mini@0.4.0` integration is loaded only in active mode and is available in all QQ groups.
+
+- Start or stop games with `/猜数字 开始`, `/猜数字 结束`, `/算24点 开始`, and `/算24点 结束`.
+- Only the offline number-guessing and 24-point games are enabled. API-backed, AI-backed, private-chat, leaderboard, and data-clearing features remain disabled.
+- A running game exclusively owns its group's ordinary messages until it ends or times out; then ordinary chat returns to Yuno. Restarting the process clears active games, but player statistics remain in Koishi MongoDB.
+
 ## Operations
 
 - GET /health: liveness.

@@ -480,3 +480,11 @@ test('config rejects invalid group reply quote mode and clamps cadence probabili
   assert.equal(config.replyCadenceJitterRatio, 1);
   assert.equal(config.participationSkipProbability, 0);
 });
+
+test('config keeps group mini games opt-in', async () => {
+  const disabled = await loadConfigModule({ GAME_MINI_ENABLED: '' });
+  const enabled = await loadConfigModule({ GAME_MINI_ENABLED: 'true' });
+
+  assert.equal(disabled.config.gameMiniEnabled, false);
+  assert.equal(enabled.config.gameMiniEnabled, true);
+});

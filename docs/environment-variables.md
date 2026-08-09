@@ -12,7 +12,14 @@
 | KOISHI_PORT | Server port, default 5140. |
 | KOISHI_MONGODB_URI | Koishi database URI, normally /koishi. |
 | KOISHI_CONSOLE_ENABLED, KOISHI_CONSOLE_ADMIN, KOISHI_CONSOLE_PASSWORD | Private Console configuration. |
+| GAME_MINI_ENABLED | Opt-in group mini games. Requires KOISHI_CONSOLE_ENABLED=true in active mode; disabled by default and never loaded in shadow mode. |
 | YUNO_PLUGIN_MODE | shadow for mapping validation; active for production. |
+
+## Group mini games
+
+When `GAME_MINI_ENABLED=true` in active mode, every QQ group can use `/猜数字 开始` and `/算24点 开始`. Only these offline games are enabled; public API games, AI games, the game-wide leaderboard, and data-clearing commands remain disabled. Private chats cannot start games.
+
+A running game owns all ordinary group messages until it ends or times out. During that interval, Yuno does not reply in that group; after the game ends, ordinary messages immediately return to Yuno. Active game state is in memory and resets on process restart, while the plugin's player statistics remain in the Koishi MongoDB database.
 
 ## Yuno runtime
 

@@ -10,6 +10,7 @@ import {
 } from './yuno-runtime.js';
 import { runYunoConversation } from './yuno-core.js';
 import { createMessageAggregator } from './message-aggregator.js';
+import { isGameMiniDirectCommand } from './koishi-game-mini.js';
 
 function isKoishiAdminCommand(session = {}) {
   return /^\s*\/koishi(?:\s|$)/i.test(String(session.content || ''));
@@ -45,6 +46,7 @@ export function createYunoKoishiPlugin(options = {}) {
   const runConversation = options.runYunoConversation || runYunoConversation;
   const isRuntimeAccepting = options.isYunoRuntimeAcceptingMessages || isYunoRuntimeAcceptingMessages;
   const runtimeLogger = options.logger || logger;
+  const gameMiniSessions = options.gameMiniSessions;
 
   return (ctx) => {
     const deliveryAdapter = options.deliveryAdapter || createKoishiDeliveryAdapter(ctx, {
@@ -92,6 +94,9 @@ export function createYunoKoishiPlugin(options = {}) {
     });
 
     ctx.middleware(async (session, next) => {
+      if (isGameMiniDirectCommand(session) || gameMiniSessions?.isActive(session)) {
+        return '';
+      }
       const event = adaptKoishiSession(session);
       const reservation = event.userId && event.chatId
         && (event.chatType === 'private' || event.chatType === 'group')
