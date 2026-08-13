@@ -151,6 +151,67 @@ test('processIncomingMessage retries once with fallback model on model unavailab
   assert.equal(sentReplies.length, 1);
 });
 
+// A primary model that always times out used to leave no warning at all: the only
+// trace was status='error' on the generate-reply span, because the existing warn only
+// fires when the fallback ALSO fails. Production ran with a primary that burned its
+// full 14s timeout on every message and the logs looked healthy.
+test('processIncomingMessage warns when the primary reply model fails but the fallback saves it', async () => {
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (line) => {
+    try {
+      warnings.push(JSON.parse(line));
+    } catch {
+      warnings.push({ raw: line });
+    }
+  };
+
+  try {
+    await processIncomingMessage(createEvent(), createPrecomputed(createEvent()), {
+      modelFallbackChatModel: 'mock-fast-model',
+      replyTimeBudgetMs: 1200,
+      replyPrimaryTimeoutMs: 400,
+      deps: {
+        sendReply: async () => {},
+        sendVoice: async () => false,
+        retrieveKnowledge: async () => ({ enabled: false, documents: [], reason: 'disabled' }),
+        chat: async (_messages, _systemPrompt, _userTurn, options = {}) => {
+          if (!options.model) {
+            const error = new Error('Model reply timed out after 400ms');
+            error.code = 'MODEL_TIMEOUT';
+            error.timeoutMs = 400;
+            throw error;
+          }
+          return 'fallback model reply';
+        },
+        appendConversationMessages: async () => null,
+        updateRelationProfile: async () => null,
+        updateUserState: async () => null,
+        updateUserProfileMemory: async () => null,
+        shouldSendVoiceForEmotion: () => false,
+      },
+    });
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  const primaryFailure = warnings.find(
+    (item) => item.message === 'Primary reply model failed; trying the fallback model'
+  );
+  assert.ok(primaryFailure, 'expected a warn log for the primary reply model failure');
+  assert.equal(primaryFailure.level, 'warn');
+  assert.equal(primaryFailure.category, 'model');
+  assert.equal(primaryFailure.code, 'MODEL_TIMEOUT');
+  assert.equal(primaryFailure.timeoutMs, 400);
+  assert.equal(typeof primaryFailure.elapsedMs, 'number');
+
+  // The canned-response warn must NOT fire: the fallback answered.
+  assert.equal(
+    warnings.some((item) => item.message === 'Reply generation fell back to canned response'),
+    false
+  );
+});
+
 test('retrieveKnowledge uses short-lived in-memory query cache', async () => {
   let embeddingCalls = 0;
   let searchCalls = 0;

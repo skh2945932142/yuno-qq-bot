@@ -1975,6 +1975,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
       temperature: replyLengthProfile.temperature,
       ...(options.replyLlmChatModel ? { model: primaryReplyModel } : {}),
     };
+    const replyGenerationStartedAt = Date.now();
     try {
       const remainingReplyBudgetMs = getRemainingReplyBudgetMs();
       if (
@@ -2057,6 +2058,30 @@ export async function processIncomingMessage(event, precomputed = null, options 
         visibleReplyText = buildReplyBudgetFallbackReply(normalizedEvent, task);
       } else if (isModelUnavailableError(error)) {
         const primaryError = error;
+        // A primary model that always fails used to be invisible: the only trace of it
+        // was status='error' on the generate-reply span, and the warn below at
+        // "fell back to canned response" only fires when the fallback ALSO fails. So a
+        // primary burning its whole REPLY_PRIMARY_TIMEOUT_MS on every single message
+        // looked healthy in the logs while adding that timeout to every reply.
+        recordWorkflowMetric('yuno_reply_primary_failure_total', 1, {
+          chat_type: normalizedEvent.chatType,
+          route: task.category,
+          reason: String(primaryError?.code || primaryError?.status || 'model-unavailable').toLowerCase(),
+        });
+        logger.warn('model', 'Primary reply model failed; trying the fallback model', {
+          traceId: trace.traceId,
+          chatType: normalizedEvent.chatType,
+          chatId: normalizedEvent.chatId,
+          userId: normalizedEvent.userId,
+          messageId: normalizedEvent.messageId,
+          route: task.category,
+          primaryModel: primaryReplyModel,
+          code: primaryError?.code,
+          status: primaryError?.status || primaryError?.response?.status,
+          timeoutMs: primaryError?.timeoutMs,
+          elapsedMs: Date.now() - replyGenerationStartedAt,
+          errorMessage: primaryError?.message,
+        });
         const fallbackModel = String(options.replyLlmFallbackChatModel
           || options.modelFallbackChatModel
           || config.replyLlmFallbackChatModel
