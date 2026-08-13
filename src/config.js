@@ -270,6 +270,12 @@ export const config = Object.freeze({
   memoryFactConfidenceThreshold: readNumber('MEMORY_FACT_CONFIDENCE_THRESHOLD', 0.75),
   messageLogRetentionDays: readNumber('MESSAGE_LOG_RETENTION_DAYS', 30),
   groupDialogueWindowMs: readNumber('GROUP_DIALOGUE_WINDOW_MS', 3 * 60 * 1000),
+  // The group summary asks the analysis model for a narrative over the window. It is
+  // an enrichment: turning it off (or a timeout) leaves the deterministic keyword
+  // topics and the activity histogram in place.
+  groupSummaryModelEnabled: readBoolean('GROUP_SUMMARY_MODEL_ENABLED', true),
+  groupSummaryTimeoutMs: readNumber('GROUP_SUMMARY_TIMEOUT_MS', 6000),
+  groupSummaryMaxTranscriptLines: readNumber('GROUP_SUMMARY_MAX_TRANSCRIPT_LINES', 60),
   // Private chat always answers, so it used to skip the classifier entirely and
   // take sentiment/intent from regex rules. This runs a semantic pass in parallel
   // with context loading so the persona layer gets accurate signals; on timeout
@@ -284,7 +290,7 @@ export const config = Object.freeze({
   memeAutoSendCooldownMs: readNumber('MEME_AUTO_SEND_COOLDOWN_MS', 300000),
   memeAutoSendMinScore: readNumber('MEME_AUTO_SEND_MIN_SCORE', 0.72),
   memeAutoSendMaxPerHour: readNumber('MEME_AUTO_SEND_MAX_PER_HOUR', 3),
-  memeAutoSendProbability: readProbability('MEME_AUTO_SEND_PROBABILITY', 0.25),
+  memeAutoSendProbability: readProbability('MEME_AUTO_SEND_PROBABILITY', 0.35),
   memeProvider: readTrimmed('MEME_PROVIDER', 'local-cache').toLowerCase(),
   memeImportDir: readTrimmed('MEME_IMPORT_DIR', 'data/qq-favorite-memes'),
   memeFavoritesCount: readNumber('MEME_FAVORITES_COUNT', 48),

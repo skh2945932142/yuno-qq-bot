@@ -65,7 +65,7 @@ test('retrieveReplyStyleExamples keeps fast prompts small and strips CQ codes', 
     examples: exampleCorpus,
   });
 
-  assert.equal(selected.length, 1);
+  assert.equal(selected.length, 2);
   assert.equal(selected[0].id, 'group-meme');
   assert.doesNotMatch(selected[0].userText, /\[CQ:/);
 });
@@ -125,7 +125,7 @@ test('production reply style corpus retrieves observant technical samples withou
     replyLengthProfile: { promptProfile: 'standard' },
   });
 
-  assert.equal(selected.length, 3);
+  assert.equal(selected.length, 5);
   assert.equal(selected[0].tags.includes('toxic-banter'), false);
   assert.equal(selected[0].tags.includes('technical'), true);
   for (const example of selected) {
@@ -167,4 +167,126 @@ test('reply style retrieval filters deprecated toxic examples before ranking', a
   });
 
   assert.deepEqual(selected.map((item) => item.id), ['observant-presence']);
+});
+
+test('the selected signature move steers retrieval toward matching style samples', async () => {
+  const corpus = [
+    {
+      id: 'observant-neutral',
+      scene: 'group',
+      intent: 'chat',
+      emotion: 'CALM',
+      userText: '这事你怎么看',
+      humanReply: '这个细节比结论更值得看。',
+      tags: ['group', 'observant'],
+      quality: 0.9,
+    },
+    {
+      id: 'playful-echo',
+      scene: 'group',
+      intent: 'chat',
+      emotion: 'CALM',
+      userText: '这事你怎么看',
+      humanReply: '行，这个我接住了草。',
+      tags: ['group', 'meme', 'internet', 'teasing'],
+      quality: 0.9,
+    },
+  ];
+  const query = {
+    event: { chatType: 'group' },
+    route: { category: 'group_chat' },
+    analysis: { intent: 'chat', sentiment: 'neutral', ruleSignals: ['direct-mention'] },
+    emotionResult: { emotion: 'CALM' },
+    replyPlan: { interpretation: { subIntent: '接话' } },
+    userTurn: '这事你怎么看',
+    replyLengthProfile: { promptProfile: 'standard' },
+  };
+
+  const playful = await retrieveReplyStyleExamples({
+    ...query,
+    personalityStrategy: { signatureMove: { key: 'playful_echo' } },
+  }, { examples: corpus });
+  const observant = await retrieveReplyStyleExamples({
+    ...query,
+    personalityStrategy: { signatureMove: { key: 'observation' } },
+  }, { examples: corpus });
+
+  assert.equal(playful[0].id, 'playful-echo');
+  assert.equal(observant[0].id, 'observant-neutral');
+});
+
+test('a lively daily mood pulls internet-flavoured samples forward', async () => {
+  const corpus = [
+    {
+      id: 'plain',
+      scene: 'private',
+      intent: 'chat',
+      userText: '在吗',
+      humanReply: '在。说吧。',
+      tags: ['private', 'short'],
+      quality: 0.9,
+    },
+    {
+      id: 'internet',
+      scene: 'private',
+      intent: 'chat',
+      userText: '在吗',
+      humanReply: '在啊在啊，怎么突然这么正式。',
+      tags: ['private', 'internet'],
+      quality: 0.9,
+    },
+  ];
+  const selected = await retrieveReplyStyleExamples({
+    event: { chatType: 'private' },
+    route: { category: 'private_chat' },
+    analysis: { intent: 'chat', sentiment: 'neutral', ruleSignals: [] },
+    emotionResult: { emotion: 'CURIOUS', dailyMood: { key: 'PLAYFUL' } },
+    replyPlan: { interpretation: { subIntent: '接话' } },
+    userTurn: '在吗',
+    replyLengthProfile: { promptProfile: 'standard' },
+  }, { examples: corpus });
+
+  assert.equal(selected[0].id, 'internet');
+});
+
+test('hybrid retrieval maps payload fields without throwing on the sample input text', async () => {
+  const selected = await retrieveReplyStyleExamples({
+    event: { chatType: 'private' },
+    route: { category: 'private_chat' },
+    analysis: { intent: 'chat', sentiment: 'neutral', ruleSignals: [] },
+    emotionResult: { emotion: 'CALM' },
+    userTurn: '在吗',
+    replyLengthProfile: { promptProfile: 'standard' },
+  }, {
+    examples: [{
+      id: 'lexical-only',
+      scene: 'private',
+      intent: 'chat',
+      userText: '在吗',
+      humanReply: '在。',
+      tags: ['private'],
+      quality: 0.9,
+    }],
+    forceEnabled: true,
+    retrieveHybridContext: async () => ({
+      hits: [{
+        id: 'hybrid-1',
+        payload: {
+          sourceId: 'hybrid-style-1',
+          scene: 'private',
+          intent: 'chat',
+          emotion: 'CALM',
+          userText: '在吗[CQ:at,qq=bot]',
+          humanReply: '在，刚看到。',
+          tags: ['private', 'internet'],
+          quality: 0.92,
+        },
+      }],
+    }),
+  });
+
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].id, 'hybrid-style-1');
+  assert.equal(selected[0].humanReply, '在，刚看到。');
+  assert.equal(selected[0].userText, '在吗');
 });

@@ -48,16 +48,22 @@ export const TOOL_DEFINITIONS = Object.freeze([
     commandType: 'group_report',
     family: 'groupreport',
     commandAliases: ['groupreport', 'report', '群日报', '群报告'],
-    description: 'Read a recent activity report for the current group.',
+    description: 'Summarize what the current group has been talking about, with activity stats.',
     permissions: ['member', 'admin'],
-    triggerKeywords: ['群日报', '群报告'],
+    triggerKeywords: ['群日报', '群报告', '群聊总结', '总结一下'],
     allowIn: ['group'],
     rateLimitMs: 0,
     fallbackMessage: '群报告我暂时还没整理出来。',
     inputSchema: {
       type: 'object',
       properties: {
-        windowHours: { type: 'number' },
+        windowHours: {
+          type: 'number',
+          minimum: 0.25,
+          maximum: 168,
+          default: 24,
+          description: 'Look-back window in hours, clamped to 15 minutes .. 7 days.',
+        },
       },
       required: [],
     },
@@ -76,8 +82,20 @@ export const TOOL_DEFINITIONS = Object.freeze([
     inputSchema: {
       type: 'object',
       properties: {
-        windowHours: { type: 'number' },
-        limit: { type: 'number' },
+        windowHours: {
+          type: 'number',
+          minimum: 0.25,
+          maximum: 168,
+          default: 24,
+          description: 'Look-back window in hours, clamped to 15 minutes .. 7 days.',
+        },
+        limit: {
+          type: 'number',
+          minimum: 1,
+          maximum: 20,
+          default: 5,
+          description: 'How many members to rank.',
+        },
       },
       required: [],
     },

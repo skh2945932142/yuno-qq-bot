@@ -218,19 +218,21 @@ function repeatToLength(length) {
   return '今天的进度我盯着呢'.repeat(40).slice(0, length);
 }
 
-test('private length thresholds allow 96 chars for normal replies and 140 for help intent', () => {
+test('private length thresholds allow 130 chars for normal replies and 180 for help intent', () => {
   const base = { event: { chatType: 'private' }, route: { category: 'private_chat' } };
   const helpBase = { ...base, messageAnalysis: { intent: 'help' } };
 
-  assert.equal(inspectReplyNaturalness(repeatToLength(96), base).flags.includes('private-too-long'), false);
-  assert.equal(inspectReplyNaturalness(repeatToLength(97), base).flags.includes('private-too-long'), true);
-  assert.equal(inspectReplyNaturalness(repeatToLength(139), helpBase).flags.includes('private-too-long'), false);
-  assert.equal(inspectReplyNaturalness(repeatToLength(141), helpBase).flags.includes('private-too-long'), true);
+  assert.equal(inspectReplyNaturalness(repeatToLength(130), base).flags.includes('private-too-long'), false);
+  assert.equal(inspectReplyNaturalness(repeatToLength(131), base).flags.includes('private-too-long'), true);
+  assert.equal(inspectReplyNaturalness(repeatToLength(179), helpBase).flags.includes('private-too-long'), false);
+  assert.equal(inspectReplyNaturalness(repeatToLength(181), helpBase).flags.includes('private-too-long'), true);
 });
 
 test('over-long private replies collapse on a sentence boundary instead of mid-sentence truncation', () => {
   const first = '第一句先把结论说清楚。';
-  const second = '接着这句非常长非常长地补充所有细节把私聊长度上限直接顶穿方便验证句界收束只保留第一句完整内容而不是在中途硬截断再补一个句号的行为是否已经被正确实现出来并且能够稳定复现每一次结果。';
+  const second = '接着这句非常长非常长地补充所有细节把私聊长度上限直接顶穿方便验证句界收束只保留第一句完整内容而不是在中途硬截断再补一个句号的行为是否已经被正确实现出来并且能够稳定复现每一次结果也顺便把总长度堆到远超一百三十个汉字的新私聊上限之上，并且让断言真的落在句界收束这条路径上。';
+  assert.ok(first.length + second.length > 130);
+
   const output = deescalateReplyNaturalness(first + second, {
     event: { chatType: 'private' },
     route: { category: 'private_chat' },
@@ -242,8 +244,8 @@ test('over-long private replies collapse on a sentence boundary instead of mid-s
 });
 
 test('private replies without any sentence boundary are kept whole rather than hard-truncated', () => {
-  const value = '这段话一口气说到底中间没有任何标点符号所以句界收束没有任何位置可以使用整段内容会被原样保留下来给你看清楚我到底想表达什么东西顺便把长度堆到远超九十六个字的私聊上限方便断言验证具体行为是否真的符合预期结果';
-  assert.ok(value.length > 96);
+  const value = '这段话一口气说到底中间没有任何标点符号所以句界收束没有任何位置可以使用整段内容会被原样保留下来给你看清楚我到底想表达什么东西顺便把长度堆到远超一百三十个汉字的私聊上限方便断言验证具体行为是否真的符合预期结果并且继续再写一点凑够足够的长度并且额外再补上一整段完全没有标点符号的尾巴内容';
+  assert.ok(value.length > 130);
 
   const output = deescalateReplyNaturalness(value, {
     event: { chatType: 'private' },
@@ -311,4 +313,52 @@ test('single light jab is only allowed for a selected mild-edge move', () => {
   assert.match(trimmed, /先把日志发我/);
   assert.equal(inspectReplyNaturalness(trimmed, allowedOptions).flags.includes('stacked-belittling'), false);
   assert.equal(trimmed.includes('菜狗'), false);
+});
+
+test('playful uses of 傻 蠢 智商 are not treated as belittling and survive polish intact', () => {
+  const options = {
+    event: { chatType: 'private' },
+    route: { category: 'private_chat' },
+    messageAnalysis: { intent: 'chat', sentiment: 'neutral' },
+    replyPlan: { questionNeeded: false },
+    personalityStrategy: { signatureMove: { key: 'playful_echo' } },
+    conversationState: { messages: [] },
+  };
+
+  for (const reply of ['笑死，这也太傻了', '我傻了', '你这傻笑什么', '这操作智商掉线', '绷不住了草']) {
+    const result = inspectReplyNaturalness(reply, options);
+    assert.equal(result.flags.includes('unprompted-belittling'), false, reply);
+    assert.equal(polishReplyNaturalness(reply, options), reply, reply);
+  }
+
+  // Person-directed forms still count so the mild-edge budget keeps its meaning.
+  for (const reply of ['你太蠢了。', '你真傻子。']) {
+    assert.equal(inspectReplyNaturalness(reply, options).flags.includes('unprompted-belittling'), true, reply);
+  }
+});
+
+test('polishReplyNaturalness trims emoji down to the budget instead of deleting every one', () => {
+  const base = {
+    event: { chatType: 'private' },
+    route: { category: 'private_chat' },
+    messageAnalysis: { intent: 'chat', sentiment: 'neutral' },
+    replyPlan: { questionNeeded: false },
+    conversationState: { messages: [] },
+  };
+  const text = '好吧✨那就听你的😂真的🎉';
+  const withPolicy = (emojiPolicy) => polishReplyNaturalness(text, { ...base, personalityStrategy: { emojiPolicy } });
+
+  assert.equal(withPolicy({ allowed: true, budget: 2 }), '好吧✨那就听你的😂真的');
+  assert.equal(withPolicy({ allowed: true, budget: 1 }), '好吧✨那就听你的真的');
+  assert.equal(withPolicy({ allowed: false }), '好吧那就听你的真的');
+  // No emoji policy at all must leave the reply untouched.
+  assert.equal(polishReplyNaturalness(text, base), text);
+  // A kaomoji counts as a single unit rather than being split into pieces.
+  assert.equal(
+    withPolicy({ allowed: true, budget: 1 }) && polishReplyNaturalness('行吧(´･ω･`)那就这样😂', {
+      ...base,
+      personalityStrategy: { emojiPolicy: { allowed: true, budget: 1 } },
+    }),
+    '行吧(´･ω･`)那就这样'
+  );
 });

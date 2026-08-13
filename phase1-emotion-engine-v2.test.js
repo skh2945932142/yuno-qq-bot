@@ -64,25 +64,54 @@ test('daily mood changes intensity and presentation without overriding contextua
   assert.match(result.promptStyle, /接得住亲近/);
 });
 
-test('daily mood weights match the quiet-cold distribution and total one hundred', () => {
+test('daily mood weights favour the lively profiles and total one hundred', () => {
   const profiles = listDailyMoodProfiles();
+  const weights = Object.fromEntries(profiles.map((profile) => [profile.key, profile.weight]));
   assert.equal(profiles.reduce((sum, profile) => sum + profile.weight, 0), 100);
-  assert.deepEqual(Object.fromEntries(profiles.map((profile) => [profile.key, profile.weight])), {
-    STEADY: 22,
-    DISTANT: 16,
-    GLOOMY: 12,
-    CURIOUS: 12,
-    SHY: 11,
-    PROTECTIVE: 10,
-    BRIGHT: 8,
-    PLAYFUL: 5,
+  assert.deepEqual(weights, {
+    STEADY: 16,
+    DISTANT: 8,
+    GLOOMY: 5,
+    CURIOUS: 14,
+    SHY: 10,
+    PROTECTIVE: 9,
+    BRIGHT: 16,
+    PLAYFUL: 18,
     IRRITABLE: 3,
     JEALOUS: 1,
   });
+  // The lively half must outweigh the cold half, otherwise the persona reads flat.
+  assert.ok(weights.PLAYFUL + weights.BRIGHT > weights.DISTANT + weights.GLOOMY);
+});
+
+test('baseline emotion never starts a stranger at WARN', () => {
+  const forAffection = (affection) => resolveEmotion({
+    relation: { affection },
+    userState: { intensity: 0.3 },
+    groupState: { mood: 'CALM', activityLevel: 40 },
+    messageAnalysis: { intent: 'chat', sentiment: 'neutral', confidence: 0.6, ruleSignals: [] },
+  });
+
+  // 30 is the default affection for a brand-new relation.
+  assert.equal(forAffection(30).emotion, 'CURIOUS');
+  assert.equal(forAffection(5).emotion, 'CALM');
+  for (const affection of [0, 5, 10, 20, 24, 30, 44]) {
+    assert.notEqual(forAffection(affection).emotion, 'WARN', `affection ${affection}`);
+  }
+
+  // WARN is still reachable, just not as a baseline.
+  const challenged = resolveEmotion({
+    relation: { affection: 40 },
+    userState: { intensity: 0.3 },
+    groupState: { mood: 'CALM', activityLevel: 40 },
+    messageAnalysis: { intent: 'challenge', sentiment: 'neutral', confidence: 0.8, ruleSignals: [] },
+  });
+  assert.equal(challenged.emotion, 'WARN');
 });
 test('soft emotions keep a one-emoji budget while sharp emotions stay text-only', () => {
   const soft = [
-    { emotion: 'CALM', input: { relation: { affection: 30 }, messageAnalysis: { intent: 'chat', sentiment: 'neutral', confidence: 0.6, ruleSignals: [] } } },
+    { emotion: 'CALM', input: { relation: { affection: 10 }, messageAnalysis: { intent: 'chat', sentiment: 'neutral', confidence: 0.6, ruleSignals: [] } } },
+    { emotion: 'CURIOUS', input: { relation: { affection: 30 }, messageAnalysis: { intent: 'chat', sentiment: 'neutral', confidence: 0.6, ruleSignals: [] } } },
     { emotion: 'PROTECTIVE', input: { relation: { affection: 72 }, messageAnalysis: { intent: 'help', sentiment: 'neutral', confidence: 0.8, relevance: 0.8, ruleSignals: [] } } },
     { emotion: 'JEALOUS', input: { relation: { affection: 90 }, specialUser: { affectionFloor: 88 }, messageAnalysis: { intent: 'chat', sentiment: 'neutral', confidence: 0.82, ruleSignals: ['special-user', 'jealousy-topic'] } } },
     { emotion: 'SAD', input: { relation: { affection: 50 }, messageAnalysis: { intent: 'chat', sentiment: 'negative', confidence: 0.7, ruleSignals: ['cold-shoulder'] } } },

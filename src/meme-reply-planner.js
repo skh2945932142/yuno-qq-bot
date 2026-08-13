@@ -1,28 +1,14 @@
 import { selectScoredMemeByWeight } from './meme-selector.js';
+import { hasPlayfulSignal } from './meme-trigger.js';
 import { config } from './config.js';
 
 const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_MIN_SCORE = 0.72;
 const DEFAULT_MAX_PER_HOUR = 3;
-const DEFAULT_AUTO_SEND_PROBABILITY = 0.25;
+const DEFAULT_AUTO_SEND_PROBABILITY = 0.35;
 const HOUR_MS = 60 * 60 * 1000;
 
 const cooldownState = new Map();
-
-const playfulTriggers = [
-  '破防',
-  '笑死',
-  '绷不住',
-  '典',
-  '急了',
-  '草',
-  '离谱',
-  '乐',
-  '哈哈',
-  '乐子',
-  '嘴硬',
-  '地铁老人',
-];
 
 const seriousSignals = [
   '救命',
@@ -91,7 +77,7 @@ function scoreCandidate(asset, contextText, replyText, analysis = {}) {
   ].map((item) => String(item || '').trim().toLowerCase()).filter(Boolean);
 
   let score = 0.55;
-  if (hasAny(contextText, playfulTriggers)) score += 0.25;
+  if (hasPlayfulSignal(contextText)) score += 0.25;
   if (String(analysis.sentiment || '').toLowerCase() === 'positive') score += 0.08;
   if (String(analysis.intent || '').toLowerCase() === 'chat') score += 0.05;
 
@@ -199,10 +185,11 @@ export function planContextualMemeReply({
 
   const contextText = String(event.rawText || event.text || '').trim();
   const normalizedText = contextText.toLowerCase();
-  if (hasAny(normalizedText, seriousSignals) && !hasAny(normalizedText, playfulTriggers)) {
+  const playful = hasPlayfulSignal(normalizedText);
+  if (hasAny(normalizedText, seriousSignals) && !playful) {
     return { shouldSend: false, suggested: false, reason: 'serious-context', mode };
   }
-  if (event.chatType === 'group' && !event.mentionsBot && !hasAny(normalizedText, playfulTriggers)) {
+  if (event.chatType === 'group' && !event.mentionsBot && !playful) {
     return { shouldSend: false, suggested: false, reason: 'group-not-explicit', mode };
   }
 

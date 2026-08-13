@@ -79,9 +79,12 @@ function chooseWeightedMove(candidates, seed) {
   return normalized[0].key;
 }
 
+// terse 让回复短，但配合单气泡投递会读成"没话说"。punchy 是第三条道：一样短，
+// 但明确允许一个梗、一个重复字或一个表情把语气顶出来。
 const MICRO_STYLES = Object.freeze([
-  { key: 'terse', weight: 34 },
-  { key: 'normal', weight: 66 },
+  { key: 'terse', weight: 22 },
+  { key: 'normal', weight: 58 },
+  { key: 'punchy', weight: 20 },
 ]);
 
 const EXPLICIT_TEASE_NEGATION_REGEX = /(?:别|不要|不许|别再|不想|不用|停止)[^。！？!?，,]{0,8}(?:吐槽|损|怼|骂|毒舌)/;
@@ -396,29 +399,26 @@ function buildPromptHints({
   memoryUse,
   followupStyle,
   emotion,
-  phraseStyle,
   dailyMood,
   addressing,
-  emojiPolicy,
 }) {
   const hints = [];
 
+  // 提示只讲"这轮怎么做"。所有"不能做"集中在 forbiddenMoves，"网感怎么用"由 prompt-builder
+  // 的网感段负责；此前同一条禁令会在人格段、提示、边界、输出要求里各写一遍。
   if (scene === 'group') {
-    hints.push('群聊通常一句解决：接话快、判断清楚、保留群内节奏，不展开私人记忆或暧昧长文，也不要把人当笑点。');
+    hints.push('群聊通常一句解决：接话快、判断清楚、保留群内节奏。');
   } else {
-    hints.push('私聊通常一到两句，可以直接表达偏爱、开心、想念、吃味和不爽，但观察和判断一样利落。');
+    hints.push('私聊通常一到三句，可以直接表达偏爱、开心、想念、吃味和不爽，观察和判断一样利落。');
   }
 
-  hints.push('顺序不固定：接话、观察、判断、答案哪个先都行；不要靠固定口头禅或同一种反差撑人设。');
-  hints.push('默认不使用轻蔑称呼或贬损外号；只有本轮明确允许时，最多一句针对当前内容的轻刺，随后马上回到态度或答案。');
-  hints.push('QQ 网感可以来自梗、重复字、emoji 和不完整句；按语境使用，不固定复读。');
-  hints.push('观察只基于当前说法和已知事实，不把猜测写成“你每次、你就是、你只是想”。');
-  hints.push('只有确实能推进时才追问一个具体问题；不使用确认回执、心理咨询流程或服务式收尾。');
+  hints.push('顺序不固定：接话、观察、判断、答案哪个先都行。');
+  hints.push('观察只基于当前说法和已知事实。');
 
   if (stance === 'supportive_protective') {
-    hints.push('先接住当前状态，再给具体建议、行动或直接帮助；不要固定写成“先损后暖”。');
+    hints.push('先接住当前状态，再给具体建议、行动或直接帮助。');
   } else if (stance === 'firm_boundary') {
-    hints.push('这轮直接说哪里不认同，必要时补一个理由；只针对当前说法，不脏骂、不威胁、不连续追问。');
+    hints.push('这轮直接说哪里不认同，必要时补一个理由；只针对当前说法。');
   } else if (stance === 'guarded_jealous') {
     hints.push('直接说不爽或吃味，保持一两句，不攻击第三方，也不限制社交。');
   } else if (stance === 'playful_observant') {
@@ -442,9 +442,9 @@ function buildPromptHints({
   }
 
   if (emotion === 'ANGRY' || stance === 'irritated_independent') {
-    hints.push('真正生气时变短、变冷，直接说不喜欢或不同意；只否定当前说法，不升级成人格攻击、脏骂或威胁。');
+    hints.push('真正生气时变短、变冷，直接说不喜欢或不同意，只否定当前说法。');
   } else if (emotion === 'SAD') {
-    hints.push('低落时先给明确关心、建议或行动，不把关心写成打趣后的补偿。');
+    hints.push('低落时先给明确关心、建议或行动。');
   }
 
   if (dailyMood?.promptStyle) {
@@ -454,15 +454,7 @@ function buildPromptHints({
   if (addressing?.allowed && addressing.value) {
     hints.push(`只有情绪需要强调时才可称呼对方“${addressing.value}”，本轮最多一次。`);
   } else {
-    hints.push('不用甜腻昵称或损友外号；称呼只在确实需要强调关系时才出现。');
-  }
-
-  hints.push(emojiPolicy?.allowed
-    ? '本轮可以使用一个明显的 emoji、颜文字或重复字来增加网感。'
-    : '最近已用过表情，本轮不要再放 emoji 或颜文字。');
-
-  if (phraseStyle.repeatGuard) {
-    hints.push('避免连续复用同一句开场、口癖或收尾。');
+    hints.push('称呼只在确实需要强调关系时才出现。');
   }
 
   return hints;
@@ -485,15 +477,19 @@ function resolveAddressingPolicy(userProfile, conversationState) {
   };
 }
 
-function resolveEmojiPolicy(scene, conversationState, event) {
-  const recent = recentAssistantMessages(conversationState, 1);
-  const recentlyUsed = recent.some((item) => hasVisibleEmoji(item.content));
-  const allowed = !recentlyUsed;
+// 预算此前只看上一条助手消息，用过表情就整条禁用，实际上限是"隔条一个"，对 QQ 网感来说
+// 太紧。现在看最近两条的计数：只有连着两条都带表情才停一轮；玩梗轮可以一次用两个。
+function resolveEmojiPolicy(scene, conversationState, event, extras = {}) {
+  const recent = recentAssistantMessages(conversationState, 2);
+  const recentEmojiTurns = recent.filter((item) => hasVisibleEmoji(item.content)).length;
+  const allowed = recentEmojiTurns < 2;
+  const playful = Boolean(extras.playful);
   return {
     allowed,
-    budget: allowed ? 1 : 0,
+    budget: allowed ? (playful && recentEmojiTurns === 0 ? 2 : 1) : 0,
     style: 'internet',
-    recentlyUsed,
+    recentlyUsed: recentEmojiTurns > 0,
+    recentEmojiTurns,
     scene,
   };
 }
@@ -575,14 +571,18 @@ export function resolvePersonalityStrategy({
     memoryUse,
   });
   const addressing = resolveAddressingPolicy(userProfile, conversationState);
-  const emojiPolicy = resolveEmojiPolicy(scene, conversationState, event);
+  const emojiPolicy = resolveEmojiPolicy(scene, conversationState, event, {
+    playful: humor === 'meme' || ['PLAYFUL', 'BRIGHT'].includes(String(dailyMood?.key || '')),
+  });
 
+  // 这里是唯一的边界清单。人格段、网感段和输出要求只讲怎么做，不再各自复述一遍禁令：
+  // 之前"轻蔑称呼""心理咨询流程""追问最多一个"分别在四处、四处、三处重复出现，
+  // 一次 prompt 渲染出四十多条否定，把表达空间挤没了。
   const forbiddenMoves = [
-    '不要输出系统说明、规则说明、角色标签或 <think>/<thinking>。',
     '不要现实威胁、跟踪、控制对方或暗示线下伤害。',
     '默认不使用轻蔑称呼或贬损性外号；只有明确玩梗、轻挑战或用户直接邀请时，才允许一句针对当前内容的轻刺。',
     '不要揣测动机或使用“你每次、你就是、你只是想、被我说中了、找借口、蒙混过关”。',
-    '每条优先传递一个观察、判断、答案或具体关心；不把找攻击点当作固定步骤，不连续反问或围着同一弱点反复羞辱。',
+    '不连续反问，也不围着同一个弱点反复羞辱。',
     '若本轮允许轻刺，也只针对这件事或这句话，不否定对方整个人的能力和价值。',
     '低落时先给明确关心、建议或行动，不套心理咨询模板，也不拿打趣当关心的前置条件。',
     scene === 'group'
@@ -617,10 +617,8 @@ export function resolvePersonalityStrategy({
       memoryUse,
       followupStyle,
       emotion,
-      phraseStyle,
       dailyMood,
       addressing,
-      emojiPolicy,
     }),
   };
 }

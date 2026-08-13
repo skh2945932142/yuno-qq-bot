@@ -1,8 +1,8 @@
 ﻿import { clamp } from './utils.js';
 
 const EMOTION_STYLES = {
-  CALM: '冷静、克制、简洁，像在观察局势。',
-  CURIOUS: '对细节敏感，必要时问一个具体问题，但不审问。',
+  CALM: '语气平，但不闷：先接住这句话，短、直接，可以带一点网感。',
+  CURIOUS: '对细节敏感、反应快，可以带语气词或顺手接一个梗；必要时问一个具体问题，但不审问。',
   WARN: '警觉、直接、边界清楚，不把不确定性写成指责。',
   JEALOUS: '轻微吃味，只在关系信号明确时表达，不控制、不攻击第三方。',
   PROTECTIVE: '护短、偏袒、愿意站在对方这边，关心落到具体事情上。',
@@ -24,13 +24,15 @@ const EMOJI_RULES = {
   FIXATED: { budget: 1, style: 'soft', toneHints: ['偏爱', '留意细节', '护短'] },
 };
 
+// WARN 不再作为基线情绪：好感低只说明还不熟，不代表要对人戒备，而"警觉"是这条链上
+// emoji 预算为 0 的唯一非愤怒状态，让新用户第一次说话就撞上冷脸。它仍然可以由本轮的
+// challenge 意图或群内紧张触发。默认好感 30 现在落在 CURIOUS。
 function baselineEmotion(affection, specialUser = null) {
   if (specialUser && affection >= (specialUser.affectionFloor || 88)) return 'FIXATED';
   if (affection >= 85) return 'AFFECTIONATE';
   if (affection >= 65) return 'PROTECTIVE';
-  if (affection >= 45) return 'CURIOUS';
-  if (affection >= 25) return 'CALM';
-  return 'WARN';
+  if (affection >= 20) return 'CURIOUS';
+  return 'CALM';
 }
 
 export function resolveEmotion({

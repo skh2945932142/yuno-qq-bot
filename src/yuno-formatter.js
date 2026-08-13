@@ -126,24 +126,92 @@ function renderStatusReply(toolResult, policy) {
   }
 }
 
+function formatSummaryWindowText(payload) {
+  return payload.windowLabel || `${payload.windowHours || 24} 小时`;
+}
+
+// Topic lines come from the model when it answered, and degrade to the deterministic
+// keyword list otherwise, so the report never falls back to bare counts.
+function renderGroupTopicLines(payload) {
+  const conversation = payload.conversation || {};
+  const topics = Array.isArray(conversation.topics) ? conversation.topics : [];
+  const lines = [];
+
+  for (const topic of topics.slice(0, 3)) {
+    const title = String(topic?.title || '').trim();
+    if (!title) continue;
+    const detail = String(topic?.detail || '').trim();
+    const who = (Array.isArray(topic?.participants) ? topic.participants : [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .slice(0, 3)
+      .join('、');
+    if (detail) {
+      lines.push(`${title}：${detail}${who ? `（${who}）` : ''}`);
+    } else if (who) {
+      lines.push(`${title}：主要是 ${who} 在说。`);
+    } else {
+      lines.push(`${title}。`);
+    }
+  }
+
+  if (lines.length > 0) return lines;
+
+  const keywords = (Array.isArray(conversation.keywords) && conversation.keywords.length > 0
+    ? conversation.keywords
+    : payload.topTopics || [])
+    .map((item) => String(item?.name || '').trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  return keywords.length > 0 ? [`提得最多的是 ${keywords.join('、')}。`] : [];
+}
+
+function renderGroupPeakLine(payload) {
+  const peak = payload.peakPeriod;
+  if (!peak?.label || !Number(peak.count)) return '';
+  const share = Number(peak.share || 0);
+  return share >= 0.3
+    ? `${peak.label} 最热闹，占了这段时间 ${Math.round(share * 100)}% 的消息。`
+    : `${peak.label} 稍微密一点。`;
+}
+
+// Chinese typography wants a space around Latin text but not around Chinese, so the
+// separator depends on how the preceding name ends.
+function joinNamePhrase(name, phrase) {
+  const normalized = String(name || '').trim();
+  return /[A-Za-z0-9)\]]$/.test(normalized) ? `${normalized} ${phrase}` : `${normalized}${phrase}`;
+}
+
+function renderGroupStatsLine(payload) {
+  const parts = [`一共 ${Number(payload.totalMessages) || 0} 条消息，活跃的有 ${Number(payload.activeUsers) || 0} 个人`];
+  const topUser = (payload.topUsers || [])[0];
+  if (topUser?.name) {
+    parts.push(joinNamePhrase(topUser.name, `说得最多（${topUser.count} 条）`));
+  }
+  return `${parts.join('，')}。`;
+}
+
 function renderReportReply(toolResult, policy) {
   const payload = toolResult.payload || {};
 
   if (toolResult.tool === 'group_report') {
-    const topUser = payload.topUsers?.[0];
-    const topTopic = payload.topTopics?.[0];
-    const prefix = policy.specialUser ? '我替你把群里的动静理了一遍。' : '我把群里的动静理了一遍。';
-    let text = `${prefix}最近 ${payload.windowHours || 24} 小时里，一共出现了 ${payload.totalMessages || 0} 条消息，活跃了 ${payload.activeUsers || 0} 个人。`;
-    if (topUser) {
-      text += ` 最活跃的是 ${topUser.name}，一共冒头 ${topUser.count} 次。`;
+    const windowText = formatSummaryWindowText(payload);
+    const opening = policy.specialUser ? '我替你把群里' : '我把群里';
+    if (!Number(payload.totalMessages)) {
+      return `${opening}这 ${windowText}翻了一遍，基本没什么动静，没什么好理的。`;
     }
-    if (topTopic) {
-      text += ` 聊得最热的是 ${topTopic.name}。`;
-    }
+
+    const headline = String(payload.conversation?.headline || '').trim();
+    const lines = [
+      `${opening}这 ${windowText}理了一遍。${headline}`.trim(),
+      ...renderGroupTopicLines(payload),
+      renderGroupStatsLine(payload),
+      renderGroupPeakLine(payload),
+    ];
     if (payload.anomalies?.length) {
-      text += ` 我还记到了 ${payload.anomalies.length} 个异常波动。`;
+      lines.push(`另外记到了 ${payload.anomalies.length} 处异常波动。`);
     }
-    return text;
+    return lines.filter(Boolean).join('\n');
   }
 
   if (toolResult.tool === 'activity_leaderboard') {
@@ -154,9 +222,18 @@ function renderReportReply(toolResult, policy) {
   }
 
   if (toolResult.tool === 'group_daily_digest') {
-    const leaders = (payload.topUsers || []).map((entry) => `${entry.name}(${entry.count})`).join('、');
-    const topics = (payload.topTopics || []).map((entry) => entry.name).join('、');
-    return `今天的群摘要我收好了：一共 ${payload.totalMessages || 0} 条消息，活跃了 ${payload.activeUsers || 0} 个人。最常冒头的是 ${leaders || '暂无'}，最热的话题是 ${topics || '暂无'}。`;
+    if (!Number(payload.totalMessages)) {
+      return '今天群里基本没人说话，我就不硬凑一份摘要了。';
+    }
+
+    const headline = String(payload.conversation?.headline || '').trim();
+    const lines = [
+      `今天的群摘要我收好了。${headline}`.trim(),
+      ...renderGroupTopicLines(payload),
+      renderGroupStatsLine(payload),
+      renderGroupPeakLine(payload),
+    ];
+    return lines.filter(Boolean).join('\n');
   }
 
   return toolResult.summary || '报告我已经替你理好了。';
