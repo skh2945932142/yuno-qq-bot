@@ -21,6 +21,8 @@
 | MONGODB_URI | Yuno database URI, normally /yuno. |
 | LLM_API_KEY and LLM_CHAT_MODEL | Analysis/chat model. |
 | REPLY_LLM_API_KEY and REPLY_LLM_CHAT_MODEL | Final reply model. |
+| REPLY_LLM_REASONING_EFFORT, REPLY_LLM_KNOWLEDGE_REASONING_EFFORT | Gemini `reasoning_effort` for the reply path (`minimal`/`low`/`medium`/`high`, default `low`). Ignored by non-Gemini providers. |
+| ANALYSIS_LLM_REASONING_EFFORT | Same cap for the classifiers (trigger, private semantic analysis, group summary). Default `minimal`: they only emit compact JSON and sit on the user-visible path, so thinking is pure latency. Raise it only if classification quality actually suffers. |
 | ENABLE_QUEUE and REDIS_URL | Optional BullMQ backend; workers remain in process. |
 | QDRANT_URL and QDRANT_COLLECTION | Optional retrieval. |
 | ENABLE_VOICE and TTS variables | Optional voice delivery. |

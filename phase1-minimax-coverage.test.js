@@ -70,6 +70,32 @@ test('minimax builds provider-specific client and payload configuration', () => 
   assert.deepEqual(payload.response_format, { type: 'json_object' });
 });
 
+// reasoning_effort used to additionally require the reply provider, which silently left
+// every classifier (analysis, trigger, group summary) on Gemini's default dynamic
+// thinking: a 300-token JSON classification cost 2.4s while the reply path did 2600
+// tokens in 1.0s. The provider check alone is the correct precondition.
+test('reasoning effort reaches any Gemini call, not just the reply provider', async () => {
+  const classifier = buildChatCompletionPayload([{ role: 'user', content: 'hi' }], {
+    model: 'gemini-3.6-flash',
+    reasoningEffort: 'minimal',
+  });
+  assert.equal(classifier.reasoning_effort, 'minimal');
+
+  // Callers that ask for nothing keep the provider default: this must stay opt-in.
+  const untouched = buildChatCompletionPayload([{ role: 'user', content: 'hi' }], {
+    model: 'gemini-3.6-flash',
+  });
+  assert.equal('reasoning_effort' in untouched, false);
+
+  // Non-Gemini providers still never see the parameter, even when asked.
+  const nonGemini = buildChatCompletionPayload([{ role: 'user', content: 'hi' }], {
+    model: 'MiniMax-M2.7',
+    baseUrl: 'https://api.minimaxi.com/v1',
+    reasoningEffort: 'minimal',
+  });
+  assert.equal('reasoning_effort' in nonGemini, false);
+});
+
 test('chat builds bounded conversations and records model usage', async () => {
   const fake = createChatClient(' final answer ');
   const traceContext = { traceId: 'trace-1' };
@@ -185,6 +211,33 @@ test('analyzeMessage handles empty, structured, malformed, and provider failure 
     client: failed.client,
     model: 'test-model',
   })).reason, 'fallback-heuristic');
+});
+
+// The classifiers sit on the user-visible path and only ever emit compact JSON, so they
+// cap thinking by default. Without this, private-semantic-analysis kept blowing its 3s
+// budget on Gemini and the reply fell back to rule signals for nothing.
+test('classifiers cap Gemini thinking by default and honour an explicit override', async () => {
+  const analysis = createChatClient(JSON.stringify({ intent: 'chat', sentiment: 'neutral' }));
+  await analyzeMessage('在干嘛', {}, {
+    client: analysis.client,
+    model: 'gemini-3.6-flash',
+  });
+  assert.equal(analysis.calls[0].reasoning_effort, 'minimal');
+
+  const trigger = createChatClient(JSON.stringify({ shouldRespond: false, confidence: 0.2 }));
+  await classifyReplyTrigger('随便说说', {}, {
+    client: trigger.client,
+    model: 'gemini-3.6-flash',
+  });
+  assert.equal(trigger.calls[0].reasoning_effort, 'minimal');
+
+  const override = createChatClient(JSON.stringify({ intent: 'help', sentiment: 'neutral' }));
+  await analyzeMessage('帮我看下这段报错', {}, {
+    client: override.client,
+    model: 'gemini-3.6-flash',
+    reasoningEffort: 'medium',
+  });
+  assert.equal(override.calls[0].reasoning_effort, 'medium');
 });
 
 test('classifyReplyTrigger handles empty, structured, malformed, and provider failure paths', async () => {
