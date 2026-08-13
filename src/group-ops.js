@@ -1,7 +1,14 @@
-﻿import { logger } from './logger.js';
+import { logger } from './logger.js';
 import { recordWorkflowMetric } from './metrics.js';
 import { GroupEvent } from './models.js';
-import { extractTopics, inferSentiment, stripCqCodes, uniqueCompact } from './utils.js';
+import { extractTopics, inferSentiment, stripCqCodes } from './utils.js';
+import {
+  aggregateGroupTopics,
+  buildActivityHistogram,
+  buildGroupConversationSummary,
+  isConversationEvent,
+} from './group-summary.js';
+import { formatWindowLabel, resolveWindowHours } from './time-utils.js';
 import {
   getRecentEvents,
   recordGroupEvent,
@@ -92,18 +99,8 @@ function detectAnomaly(summary, recentEvents = []) {
   return '';
 }
 
-function rankEntries(map, limit = 5) {
-  return [...map.entries()]
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, limit)
-    .map(([name, count]) => ({ name, count }));
-}
-
-function filterEventsByWindow(events, windowHours = 24, now = new Date()) {
-  const threshold = asDate(now).getTime() - (windowHours * 60 * 60 * 1000);
-  return events.filter((event) => asDate(event.createdAt).getTime() >= threshold);
-}
-
+// Keyed by userId, not by display name: two members who share a nickname used to be
+// merged into one leaderboard row because the counter used the label as its key.
 function buildLeaderboardFromEvents(events, limit = 5) {
   const counts = new Map();
   for (const event of events) {
@@ -111,24 +108,21 @@ function buildLeaderboardFromEvents(events, limit = 5) {
     if (!key) {
       continue;
     }
-    const label = String(event.username || event.userId || '').trim();
-    counts.set(label, (counts.get(label) || 0) + 1);
+    const label = String(event.username || event.userId || '').trim() || key;
+    const current = counts.get(key);
+    counts.set(key, {
+      name: current?.name || label,
+      count: (current?.count || 0) + 1,
+    });
   }
-  return rankEntries(counts, limit);
+  return [...counts.values()]
+    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+    .slice(0, limit);
 }
 
-function buildTopicRanking(events, limit = 5) {
-  const counts = new Map();
-  for (const event of events) {
-    for (const topic of event.topics || []) {
-      const normalized = String(topic || '').trim();
-      if (!normalized) {
-        continue;
-      }
-      counts.set(normalized, (counts.get(normalized) || 0) + 1);
-    }
-  }
-  return rankEntries(counts, limit);
+function filterEventsByWindow(events, windowHours = 24, now = new Date()) {
+  const threshold = asDate(now).getTime() - (windowHours * 60 * 60 * 1000);
+  return events.filter((event) => asDate(event.createdAt).getTime() >= threshold);
 }
 
 export async function recordInboundGroupObservation(event, deps = {}) {
@@ -141,7 +135,9 @@ export async function recordInboundGroupObservation(event, deps = {}) {
   const summary = event.source?.noticeType === 'group_increase' || rawText === '[poke]'
     ? buildFallbackSummary(event)
     : normalizeSummary(rawText, buildFallbackSummary(event));
-  const topics = uniqueCompact(extractTopics(summary), 5);
+  // 8 rather than 5: the window aggregation needs enough per-message candidates for
+  // document-frequency ranking to have something to agree on.
+  const topics = extractTopics(summary, 8);
   const keywordHits = findKeywordHits(summary, deps.keywords || DEFAULT_KEYWORD_TOPICS);
   const sentiment = inferSentiment(summary);
   const anomalyType = detectAnomaly(summary, recentEvents);
@@ -216,46 +212,69 @@ export async function getGroupEventsForWindow(groupId, options = {}, deps = {}) 
 }
 
 export async function buildGroupActivityReport(groupId, options = {}, deps = {}) {
-  const windowHours = Number(options.windowHours || 24);
+  const windowHours = resolveWindowHours(options.windowHours);
   const now = asDate(options.now);
   const events = await getGroupEventsForWindow(groupId, { windowHours, now, limit: options.limit || 500 }, deps);
-  const leaderboard = buildLeaderboardFromEvents(events, Number(options.topUsers || 5));
-  const topTopics = buildTopicRanking(events, Number(options.topTopics || 5));
+  // Joins and pokes are group events but not conversation, so they no longer inflate
+  // "一共 N 条消息" or the topic and histogram inputs.
+  const conversationEvents = events.filter(isConversationEvent);
+  const leaderboard = buildLeaderboardFromEvents(conversationEvents, Number(options.topUsers || 5));
+  const topTopics = aggregateGroupTopics(conversationEvents, { limit: Number(options.topTopics || 5) });
+  const histogram = buildActivityHistogram(conversationEvents, {
+    windowHours,
+    now,
+    timeZone: options.timeZone,
+  });
   const anomalyEvents = events.filter((event) => event.anomalyType);
-  const activeUsers = new Set(events.map((event) => String(event.userId || '').trim()).filter(Boolean)).size;
+  const activeUsers = new Set(conversationEvents.map((event) => String(event.userId || '').trim()).filter(Boolean)).size;
 
   const report = {
     groupId: String(groupId),
     windowHours,
-    totalMessages: events.length,
+    windowLabel: formatWindowLabel(windowHours),
+    totalMessages: conversationEvents.length,
+    totalEvents: events.length,
     activeUsers,
     topUsers: leaderboard,
     topTopics,
+    peakPeriod: histogram.peak,
     anomalies: anomalyEvents.slice(0, 5).map((event) => ({
       type: event.anomalyType,
       summary: event.summary,
       createdAt: event.createdAt,
     })),
     lastEventAt: events[0]?.createdAt || null,
+    conversation: { headline: '', topics: [], source: 'skipped', reason: 'not-requested' },
   };
+
+  if (options.includeSummary) {
+    report.conversation = await buildGroupConversationSummary({
+      groupId: report.groupId,
+      events: conversationEvents,
+      windowHours,
+      topicLimit: Number(options.topTopics || 5),
+    }, deps);
+  }
 
   recordWorkflowMetric('yuno_group_reports_generated_total', 1, {
     group_id: String(groupId),
     window_hours: String(windowHours),
+    summary_source: report.conversation.source,
   });
 
   return report;
 }
 
 export async function buildActivityLeaderboard(groupId, options = {}, deps = {}) {
-  const windowHours = Number(options.windowHours || 24);
+  const windowHours = resolveWindowHours(options.windowHours);
   const limit = Number(options.limit || 5);
   const now = asDate(options.now);
   const events = await getGroupEventsForWindow(groupId, { windowHours, now, limit: options.fetchLimit || 500 }, deps);
   return {
     groupId: String(groupId),
     windowHours,
-    leaders: buildLeaderboardFromEvents(events, limit),
+    windowLabel: formatWindowLabel(windowHours),
+    leaders: buildLeaderboardFromEvents(events.filter(isConversationEvent), limit),
   };
 }
 
@@ -265,16 +284,22 @@ export async function buildDailyDigest(groupId, options = {}, deps = {}) {
     now: options.now,
     topUsers: 3,
     topTopics: 3,
+    timeZone: options.timeZone,
+    includeSummary: options.includeSummary ?? true,
   }, deps);
 
   return {
     groupId: report.groupId,
+    windowHours: report.windowHours,
+    windowLabel: report.windowLabel,
     totalMessages: report.totalMessages,
     activeUsers: report.activeUsers,
     topUsers: report.topUsers,
     topTopics: report.topTopics,
+    peakPeriod: report.peakPeriod,
     anomalies: report.anomalies,
-    summary: `最近 ${report.windowHours} 小时里一共 ${report.totalMessages} 条消息，活跃了 ${report.activeUsers} 个人。`,
+    conversation: report.conversation,
+    summary: `最近 ${report.windowLabel} 里一共 ${report.totalMessages} 条消息，活跃了 ${report.activeUsers} 个人。`,
   };
 }
 

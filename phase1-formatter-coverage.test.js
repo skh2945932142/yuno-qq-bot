@@ -18,7 +18,9 @@ test('formatter covers status, report, watch, reminder, and subscription rendere
   assert.match(render('group_report', { windowHours: 1, totalMessages: 2, activeUsers: 1 }), /2/);
   assert.match(render('activity_leaderboard', { leaders: [] }), /没有/);
   assert.match(render('activity_leaderboard', { leaders: [{ name: 'A', count: 2 }] }), /A/);
-  assert.match(render('group_daily_digest', { totalMessages: 3, activeUsers: 2, topUsers: [], topTopics: [] }), /暂无/);
+  // An empty topic list now drops the topic line instead of printing "暂无" placeholders.
+  assert.match(render('group_daily_digest', { totalMessages: 3, activeUsers: 2, topUsers: [], topTopics: [] }), /3.*2|2.*3/);
+  assert.match(render('group_daily_digest', { totalMessages: 0, activeUsers: 0 }), /没人说话/);
   assert.match(render('keyword_watch_added', { pattern: 'deploy' }), /deploy/);
   assert.match(render('keyword_watch_removed', { keyword: 'deploy', removed: true }), /不再/);
   assert.match(render('keyword_watch_removed', { keyword: 'deploy', removed: false }), /没找到/);

@@ -38,16 +38,86 @@ export function extractAtTargets(value) {
   return targets;
 }
 
-export function extractTopics(text) {
-  const normalized = stripCqCodes(text);
-  const asciiTopics = normalized
-    .toLowerCase()
-    .match(/[a-z]{3,}/g) || [];
-  // Keep the CJK range as an escape sequence so this file stays pure ASCII in
-  // its regex ranges; literal ranges were lost once to an encoding conversion.
-  const chineseTopics = normalized.match(/[一-龥]{2,6}/g) || [];
+// Topic extraction has no segmenter dependency, so it splits a CJK run on function
+// words instead. The previous implementation sliced every run into greedy 2-6 char
+// pieces, which produced fragments cut mid-word: "顺便说一下线上那个支付接口今天又超时了"
+// became ["顺便说一下线", "上那个支付接", "口今天又超时"]. Those fragments then became
+// GroupEvent.topics, GroupState.recentTopics and the "聊得最热的是 X" line in群报告.
+//
+// Multi-character delimiters must come first so "什么" is not split by "么" first.
+// Single characters are limited to particles and pronouns that do not sit inside
+// ordinary content words: "上", "下", "里", "来", "看" are deliberately absent so
+// "线上", "群里", "需求" survive.
+const TOPIC_DELIMITERS = [
+  '为什么', '什么时候', '怎么样', '怎么办', '是不是', '有没有', '要不要', '可不可以',
+  '但是', '而且', '所以', '因为', '如果', '虽然', '然后', '其实', '反正', '顺便', '另外',
+  '这个', '那个', '这些', '那些', '这样', '那样', '这边', '那边', '这里', '那里', '哪个',
+  '这么', '那么', '我们', '你们', '他们', '她们', '咱们', '大家', '有人', '别人', '自己',
+  '什么', '怎么', '多少', '一下', '一点', '一直', '一起', '已经', '刚刚', '刚才',
+  '现在', '今天', '明天', '昨天', '最近', '以后', '之前', '之后', '时候',
+  '觉得', '感觉', '应该', '可以', '不用', '不要', '没有', '还是', '或者', '就是',
+  '不是', '真的', '确实', '打算', '准备', '知道', '话说', '估计', '可能', '大概', '好像',
+  '的', '了', '是', '在', '和', '跟', '与', '把', '被', '给', '让', '并', '或',
+  '我', '你', '他', '她', '它', '谁', '都', '也', '还', '就', '很', '太', '更', '最',
+  '又', '再', '才', '不', '没', '这', '那', '吗', '呢', '吧', '啊', '呀', '哦', '嗯',
+  '啦', '嘛', '咯',
+];
+// Applied only to chunks of 4 characters or more. These characters do sit inside
+// ordinary words ("线上", "群里", "过去"), so cutting on them everywhere would destroy
+// short topics; a chunk that long is a run-on and needs the more aggressive pass.
+const TOPIC_SECONDARY_DELIMITERS = ['先', '个', '到', '上', '下', '去', '来', '一', '要', '会', '能', '想', '写', '得', '说', '看', '做', '有', '用', '过', '而'];
+const TOPIC_DELIMITER_REGEX = new RegExp(
+  TOPIC_DELIMITERS.slice().sort((left, right) => right.length - left.length).join('|'),
+  'g'
+);
+const TOPIC_SECONDARY_REGEX = new RegExp(TOPIC_SECONDARY_DELIMITERS.join('|'), 'g');
+// Reaction words are how people react, not what they are talking about.
+const TOPIC_FILLER_WORDS = new Set([
+  '笑死', '哈哈', '破防', '绷不住', '离谱', '逆天', '抽象', '好家伙', '泪目', '芜湖',
+  '谢谢', '不好意思', '麻烦', '你好', '在吗', '晚安', '早上', '晚上',
+]);
+// "三次" / "一个" are quantities, not subjects. Longer forms such as "万圣节" survive.
+const TOPIC_QUANTIFIER_REGEX = /^[一二三四五六七八九十百千万几多半两]/;
+const ASCII_STOP_WORDS = new Set([
+  'the', 'and', 'for', 'you', 'are', 'not', 'but', 'this', 'that', 'with', 'have',
+  'was', 'can', 'all', 'get', 'got', 'its', 'has', 'why', 'how', 'yes', 'now',
+]);
+const CJK_RUN_REGEX = /[一-龥]+/g;
+const ASCII_WORD_REGEX = /[a-z][a-z0-9+#._-]{2,}/g;
+const TOPIC_MIN_LENGTH = 2;
+const TOPIC_MAX_LENGTH = 8;
+const TOPIC_SECONDARY_THRESHOLD = 4;
 
-  return uniqueCompact([...chineseTopics, ...asciiTopics], 5);
+function isUsefulTopicCandidate(value) {
+  const normalized = String(value || '').trim();
+  if (normalized.length < TOPIC_MIN_LENGTH || normalized.length > TOPIC_MAX_LENGTH) return false;
+  if (TOPIC_FILLER_WORDS.has(normalized)) return false;
+  return !(normalized.length === 2 && TOPIC_QUANTIFIER_REGEX.test(normalized));
+}
+
+function splitTopicChunk(chunk) {
+  const normalized = String(chunk || '').trim();
+  if (normalized.length < TOPIC_SECONDARY_THRESHOLD) {
+    return isUsefulTopicCandidate(normalized) ? [normalized] : [];
+  }
+  return normalized.split(TOPIC_SECONDARY_REGEX).filter(isUsefulTopicCandidate);
+}
+
+export function extractTopics(text, limit = 5) {
+  const normalized = stripCqCodes(text);
+  const candidates = [];
+
+  for (const run of normalized.match(CJK_RUN_REGEX) || []) {
+    for (const piece of run.split(TOPIC_DELIMITER_REGEX)) {
+      candidates.push(...splitTopicChunk(piece));
+    }
+  }
+
+  for (const word of normalized.toLowerCase().match(ASCII_WORD_REGEX) || []) {
+    if (!ASCII_STOP_WORDS.has(word)) candidates.push(word);
+  }
+
+  return uniqueCompact(candidates, limit);
 }
 
 // NOTE: this file was once corrupted by a GBK -> UTF-8 conversion that replaced

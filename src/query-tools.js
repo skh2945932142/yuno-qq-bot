@@ -1,9 +1,10 @@
-﻿import { config } from './config.js';
+import { config } from './config.js';
 import {
   buildActivityLeaderboard,
   buildDailyDigest,
   buildGroupActivityReport,
 } from './group-ops.js';
+import { resolveWindowHours } from './time-utils.js';
 import {
   createGroupRule,
   listGroupRules,
@@ -475,14 +476,28 @@ function buildHelpToolResult() {
 
 async function buildGroupReportToolResult(args, context) {
   ensureGroupContext(context, 'get_group_report');
+  // args.windowHours arrives from user input and used to go straight into the query,
+  // so "/groupreport 100000" scanned an unbounded range.
+  const windowHours = resolveWindowHours(args.windowHours);
   const report = await buildGroupActivityReport(context.event.chatId, {
-    windowHours: args.windowHours || 24,
+    windowHours,
+    includeSummary: true,
+  }, {
+    // Per-request overrides must win over the frozen module config, which is how the
+    // summary can be turned off for one chat without mutating config.
+    config: context.runtimeConfig || config,
   });
+  const topicNames = (report.conversation?.topics || []).map((topic) => topic.title)
+    .concat((report.topTopics || []).map((topic) => topic.name))
+    .filter(Boolean)
+    .slice(0, 3);
 
   return buildStructuredToolResult({
     tool: 'group_report',
     payload: report,
-    summary: `最近 ${report.windowHours} 小时里一共 ${report.totalMessages} 条消息，活跃了 ${report.activeUsers} 个人。`,
+    summary: report.totalMessages > 0
+      ? `最近 ${report.windowLabel} 里一共 ${report.totalMessages} 条消息，活跃了 ${report.activeUsers} 个人${topicNames.length > 0 ? `，主要在聊${topicNames.join('、')}` : ''}。`
+      : `最近 ${report.windowLabel} 群里没什么动静。`,
     visibility: 'group',
     priority: 'normal',
     followUpHint: '想看谁最活跃，可以继续用 /leaderboard。',
@@ -493,14 +508,14 @@ async function buildGroupReportToolResult(args, context) {
 async function buildLeaderboardToolResult(args, context) {
   ensureGroupContext(context, 'get_activity_leaderboard');
   const leaderboard = await buildActivityLeaderboard(context.event.chatId, {
-    windowHours: args.windowHours || 24,
-    limit: args.limit || 5,
+    windowHours: resolveWindowHours(args.windowHours),
+    limit: Math.min(20, Math.max(1, Math.round(Number(args.limit) || 5))),
   });
 
   return buildStructuredToolResult({
     tool: 'activity_leaderboard',
     payload: leaderboard,
-    summary: `最近 ${leaderboard.windowHours} 小时的活跃榜已经排好了，共 ${leaderboard.leaders.length} 位。`,
+    summary: `最近 ${leaderboard.windowLabel} 的活跃榜已经排好了，共 ${leaderboard.leaders.length} 位。`,
     visibility: 'group',
     priority: 'normal',
     followUpHint: '想看整体群活跃情况，可以继续用 /groupreport。',

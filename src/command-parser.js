@@ -1,4 +1,5 @@
 ﻿import { findToolDefinitionByCommandType, getToolDefinitions } from './tool-config.js';
+import { parseWindowArgument } from './time-utils.js';
 
 function formatList(items, fallback = '暂无') {
   return items?.length ? items.join(' / ') : fallback;
@@ -193,10 +194,12 @@ export function parseCommand(text) {
 
   const toolArgs = {};
   if (definition.commandType === 'group_report') {
-    toolArgs.windowHours = parsePositiveNumber(tokens[1], 24);
+    // Accepts "2h", "30m", "3d" or a bare hour count; anything else falls back to 24
+    // instead of reaching the query as NaN or an unbounded number.
+    toolArgs.windowHours = parseWindowArgument(tokens[1], 24);
   }
   if (definition.commandType === 'activity_leaderboard') {
-    toolArgs.windowHours = parsePositiveNumber(tokens[1], 24);
+    toolArgs.windowHours = parseWindowArgument(tokens[1], 24);
     toolArgs.limit = parsePositiveNumber(tokens[2], 5);
   }
 

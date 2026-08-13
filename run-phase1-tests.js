@@ -58,6 +58,7 @@ await import('./phase1-group-automation-coverage.test.js');
 await import('./phase1-meme-provider.test.js');
 await import('./phase1-meme-import.test.js');
 await import('./phase1-group-ops.test.js');
+await import('./phase1-group-summary.test.js');
 await import('./phase1-automation-rules.test.js');
 await import('./phase1-automation-tasks.test.js');
 await import('./phase1-scheduler-job.test.js');

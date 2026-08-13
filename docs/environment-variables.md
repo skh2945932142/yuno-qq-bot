@@ -67,6 +67,16 @@ With AMBIENT_JOIN_ENABLED=false and PROACTIVE_MESSAGES_ENABLED=false the bot nev
 
 Retention is enforced by MongoDB TTL indexes: `UserMemoryEvent.expiresAt` (expires at the stored time, renewed whenever a memory is actually recalled) and `DeliveryRecord.createdAt` (seven days). A nightly job reconciles Qdrant against MongoDB and deletes vectors whose backing document is gone, expired or disabled.
 
+## Group summary
+
+| Variable | Purpose |
+|---|---|
+| GROUP_SUMMARY_MODEL_ENABLED | Ask the analysis model for a narrative summary of the window in `/groupreport` and the daily digest. Enabled by default. |
+| GROUP_SUMMARY_TIMEOUT_MS | Hard ceiling for that call, default 6000. |
+| GROUP_SUMMARY_MAX_TRANSCRIPT_LINES | How many messages are sampled into the transcript, default 60. Messages are sampled evenly across the window, not taken from the tail. |
+
+The narrative is an enrichment. With the model disabled, timing out or returning nothing usable, the report still carries the deterministic topic keywords (ranked by how many messages mentioned each one), the leaderboard and the busiest period, and `payload.conversation.reason` records why the narrative is missing. `/groupreport` accepts a window argument as `2h`, `30m`, `3d` or a bare hour count, clamped to 15 minutes .. 7 days.
+
 ## Meme cache
 
 Use MEME_PROVIDER=local-cache to keep existing stored assets and collect safe incoming images. LLBot migration does not use fetch_custom_face.

@@ -66,10 +66,14 @@ test('buildActivityLeaderboard ranks users by message count', async () => {
 test('buildDailyDigest returns compact digest payload', async () => {
   const digest = await buildDailyDigest('g1', { now }, {
     events: createEvents(),
+    // The digest asks the model for a narrative by default; stub it so this test
+    // covers the deterministic half without reaching the network.
+    summarizeGroupConversation: async () => null,
   });
 
   assert.match(digest.summary, /3 条消息/);
   assert.equal(digest.topUsers.length, 2);
+  assert.equal(digest.conversation.source, 'keywords');
 });
 
 test('recordInboundGroupObservation extracts keyword hits and repeat anomaly', async () => {
