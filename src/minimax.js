@@ -228,7 +228,13 @@ export function buildChatCompletionPayload(messages, options = {}) {
     payload.response_format = options.responseFormat;
   }
 
-  if (runtime.useReplyProvider && isGeminiProvider(runtime.model, runtime.baseUrl) && options.reasoningEffort) {
+  // Gemini honours reasoning_effort on any chat completion, so the only real
+  // preconditions are "provider is Gemini" and "the caller asked for a cap". This used
+  // to additionally require the reply provider, which silently left every classifier
+  // call (analysis, trigger, group summary) running with Gemini's default dynamic
+  // thinking: private-semantic-analysis spent 2.4s on a 300-token JSON classification
+  // while the reply path did 2600 tokens in 1.0s with reasoning_effort=minimal.
+  if (isGeminiProvider(runtime.model, runtime.baseUrl) && options.reasoningEffort) {
     payload.reasoning_effort = options.reasoningEffort;
   }
 
@@ -456,6 +462,7 @@ export async function analyzeMessage(text, context = {}, options = {}) {
       model: options.model,
       promptVersion: options.promptVersion || 'message-analysis/v1',
       operation: options.operation || 'analysis',
+      reasoningEffort: options.reasoningEffort || config.analysisLlmReasoningEffort,
       // Callers that treat analysis as best-effort can bound it and skip retries,
       // so an abandoned classification does not keep a request open in the
       // background after the caller has already moved on.
@@ -551,6 +558,7 @@ export async function classifyReplyTrigger(text, context = {}, options = {}) {
       model: options.model,
       promptVersion: options.promptVersion || 'trigger-classifier/v1',
       operation: options.operation || 'trigger-classifier',
+      reasoningEffort: options.reasoningEffort || config.analysisLlmReasoningEffort,
     });
 
     const raw = readFirstChoiceContent(response, '{}');
@@ -645,6 +653,7 @@ export async function summarizeGroupConversation(transcript, context = {}, optio
       model: options.model,
       promptVersion: options.promptVersion || 'group-summary/v1',
       operation: options.operation || 'group-summary',
+      reasoningEffort: options.reasoningEffort || config.analysisLlmReasoningEffort,
       timeoutMs: options.timeoutMs,
       retries: options.retries,
     });

@@ -133,6 +133,10 @@ export const config = Object.freeze({
     || (hasDedicatedReplyLlm ? '' : (process.env.MODEL_FALLBACK_CHAT_MODEL || '')),
   replyLlmReasoningEffort: readEnum('REPLY_LLM_REASONING_EFFORT', ['minimal', 'low', 'medium', 'high'], 'low'),
   replyLlmKnowledgeReasoningEffort: readEnum('REPLY_LLM_KNOWLEDGE_REASONING_EFFORT', ['minimal', 'low', 'medium', 'high'], 'low'),
+  // Classifiers (trigger, semantic analysis, group summary) emit compact JSON and are
+  // on the user-visible path, so extended thinking only costs latency. Defaults to
+  // minimal rather than the reply path's 'low'.
+  analysisLlmReasoningEffort: readEnum('ANALYSIS_LLM_REASONING_EFFORT', ['minimal', 'low', 'medium', 'high'], 'minimal'),
   replyLlmStructuredOutput: readBoolean('REPLY_LLM_STRUCTURED_OUTPUT', true),
   embeddingApiKey: process.env.EMBEDDING_API_KEY || process.env.OPENAI_API_KEY || resolvedLlmApiKey,
   embeddingBaseUrl: normalizeBaseUrl(process.env.EMBEDDING_BASE_URL || process.env.OPENAI_BASE_URL || resolvedLlmBaseUrl),
