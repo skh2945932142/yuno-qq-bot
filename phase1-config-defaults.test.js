@@ -385,7 +385,7 @@ test('config clamps meme auto-send probability to a safe range', async () => {
 
   assert.equal(high.config.memeAutoSendProbability, 1);
   assert.equal(low.config.memeAutoSendProbability, 0);
-  assert.equal(fallback.config.memeAutoSendProbability, 0.25);
+  assert.equal(fallback.config.memeAutoSendProbability, 0.35);
 });
 
 test('config exposes Koishi OneBot and metrics security defaults', async () => {

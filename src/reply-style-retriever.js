@@ -10,6 +10,26 @@ const DEFAULT_EXAMPLES_PATH = path.resolve(__dirname, '..', 'data', 'reply-style
 const exampleCache = new Map();
 const DEPRECATED_STYLE_TAGS = new Set(['toxic-banter', 'roast-then-care']);
 
+// 本轮选中的辨识度动作决定这条回复该是什么形状，所以它应该参与样例检索。此前 query 里
+// 完全没有它，玩梗轮也照样召回"观察 / 技术回答"类样例。
+const SIGNATURE_MOVE_TAGS = Object.freeze({
+  playful_echo: ['meme', 'internet', 'teasing'],
+  wry_observation: ['wry-observation', 'observant', 'teasing'],
+  mild_edge: ['teasing', 'wry-observation'],
+  observation: ['observant'],
+  clear_answer: ['clear-answer', 'clear-stance'],
+  concrete_curiosity: ['topic-hook'],
+  quiet_care: ['concrete-care', 'comfort'],
+  quiet_anchor: ['comfort', 'concrete-care'],
+  pleased_restraint: ['restrained-warmth'],
+  shy_deflection: ['restrained-warmth'],
+  reciprocal_warmth: ['direct-affection', 'warm'],
+  firm_pushback: ['disagree', 'clear-stance', 'boundary'],
+  direct_attention: ['direct-attention', 'warm'],
+});
+
+const LIVELY_DAILY_MOODS = new Set(['PLAYFUL', 'BRIGHT']);
+
 function normalizeScene(event = {}) {
   return event.chatType === 'private' ? 'private' : 'group';
 }
@@ -95,7 +115,7 @@ function tokenize(text) {
   );
 }
 
-function buildQueryTags({ analysis, replyPlan, userTurn } = {}) {
+function buildQueryTags({ analysis, replyPlan, userTurn, personalityStrategy, dailyMood } = {}) {
   const tags = [
     ...(analysis?.ruleSignals || []),
     ...(analysis?.topics || []),
@@ -106,6 +126,14 @@ function buildQueryTags({ analysis, replyPlan, userTurn } = {}) {
   if (/梗|抽象|笑死|离谱/.test(`${subIntent} ${userTurn}`)) tags.push('meme');
   if (analysis?.intent === 'help') tags.push('help');
   if (analysis?.sentiment) tags.push(analysis.sentiment);
+
+  const moveKey = String(personalityStrategy?.signatureMove?.key || '').trim();
+  if (SIGNATURE_MOVE_TAGS[moveKey]) tags.push(...SIGNATURE_MOVE_TAGS[moveKey]);
+  if (personalityStrategy?.humor === 'meme') tags.push('meme', 'internet');
+
+  const moodKey = String(dailyMood?.key || '').trim().toUpperCase();
+  if (LIVELY_DAILY_MOODS.has(moodKey)) tags.push('internet');
+
   return normalizeTags(tags);
 }
 
@@ -116,13 +144,20 @@ export function buildReplyStyleQuery({
   emotionResult = {},
   replyPlan = null,
   userTurn = '',
+  personalityStrategy = null,
 } = {}) {
   return {
     scene: normalizeScene(event),
     intent: normalizeIntent({ route, analysis, replyPlan }),
     emotion: String(emotionResult?.emotion || '').trim().toUpperCase(),
     sentiment: String(analysis?.sentiment || '').trim(),
-    tags: buildQueryTags({ analysis, replyPlan, userTurn }),
+    tags: buildQueryTags({
+      analysis,
+      replyPlan,
+      userTurn,
+      personalityStrategy,
+      dailyMood: emotionResult?.dailyMood || null,
+    }),
     tokens: tokenize(userTurn),
   };
 }
@@ -145,8 +180,11 @@ export function scoreReplyStyleExample(example, query) {
   if (example.emotion && example.emotion === query.emotion) score += 1.5;
   if (query.sentiment === 'negative' && example.tags.includes('comfort')) score += 1.25;
   if (query.tags.length > 0) {
+    // Scene and intent are worth 4 each, so the old 0.75/tag with a cap of 3 could
+    // never outrank a same-scene same-intent sample. A 玩梗 turn therefore kept
+    // pulling observant/technical examples. 1.2 with a cap of 4.5 lets the tags win.
     const overlap = example.tags.filter((tag) => query.tags.includes(tag)).length;
-    score += Math.min(3, overlap * 0.75);
+    score += Math.min(4.5, overlap * 1.2);
   }
 
   if (query.tokens.length > 0) {
@@ -162,7 +200,9 @@ function resolveLimit(replyLengthProfile = {}, explicitLimit = null) {
   if (Number.isFinite(Number(explicitLimit)) && Number(explicitLimit) > 0) {
     return Math.round(Number(explicitLimit));
   }
-  return replyLengthProfile?.promptProfile === 'fast' ? 1 : 3;
+  // These are the strongest voice signal in the prompt, so they get more room than
+  // the three lines they used to be capped at.
+  return replyLengthProfile?.promptProfile === 'fast' ? 2 : 5;
 }
 
 export async function retrieveReplyStyleExamples({
@@ -173,6 +213,7 @@ export async function retrieveReplyStyleExamples({
   replyPlan = null,
   userTurn = '',
   replyLengthProfile = {},
+  personalityStrategy = null,
   limit = null,
 } = {}, deps = {}) {
   const sourceExamples = Array.isArray(deps.examples)
@@ -188,6 +229,7 @@ export async function retrieveReplyStyleExamples({
     emotionResult,
     replyPlan,
     userTurn,
+    personalityStrategy,
   });
   const resolvedLimit = resolveLimit(replyLengthProfile, limit);
 
@@ -209,7 +251,7 @@ export async function retrieveReplyStyleExamples({
         scene: hit.payload?.scene || 'any',
         intent: hit.payload?.intent || 'chat',
         emotion: hit.payload?.emotion || '',
-        userText,
+        userText: hit.payload?.userText || '',
         humanReply: hit.payload?.humanReply || '',
         tags: hit.payload?.tags || [],
         quality: hit.payload?.quality || 0.75,

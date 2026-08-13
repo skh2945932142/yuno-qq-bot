@@ -1897,6 +1897,7 @@ export async function processIncomingMessage(event, precomputed = null, options 
         replyPlan,
         userTurn,
         replyLengthProfile,
+        personalityStrategy,
       }), {
         route: task.category,
         promptProfile: replyLengthProfile.promptProfile,

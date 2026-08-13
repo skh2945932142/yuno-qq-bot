@@ -4,6 +4,41 @@ import { decideMemeAction } from './src/meme-agent.js';
 import { generateQuoteMeme } from './src/meme-generator.js';
 import { assessMemeSafety } from './src/meme-safety.js';
 import { planContextualMemeReply, resetMemeReplyPlannerState } from './src/meme-reply-planner.js';
+import { hasPlayfulSignal, parseMemeTrigger } from './src/meme-trigger.js';
+import { resolveReplyIntentPlan } from './src/reply-intent-plan.js';
+
+test('the playful vocabulary is shared by every consumer instead of drifting per module', () => {
+  // 抽象/逆天 used to reach only the sub-intent, and 典/急了/离谱/嘴硬 only the meme path.
+  for (const text of ['这也太抽象了', '逆天', '典中典', '急了急了', '这操作真离谱', '你就嘴硬吧']) {
+    const plan = resolveReplyIntentPlan({
+      event: { chatType: 'group', rawText: text },
+      route: { category: 'group_chat' },
+      analysis: { intent: 'chat', sentiment: 'neutral', relevance: 0.8 },
+      conversationState: { messages: [] },
+    });
+    assert.equal(hasPlayfulSignal(text), true, text);
+    assert.equal(plan.interpretation.subIntent, '玩梗接话', text);
+    assert.equal(parseMemeTrigger(text).semiAuto, true, text);
+  }
+});
+
+test('single-character playful signals do not fire on ordinary words', () => {
+  for (const text of [
+    '笑死', '绷不住了', '蚌埠住了', '好家伙', '我麻了', '芜湖起飞', '整乐了',
+    '这也太典了', '草', '这个梗我懂', '泪目', '顶不住了',
+  ]) {
+    assert.equal(hasPlayfulSignal(text), true, text);
+  }
+
+  for (const text of [
+    '经典款式推荐一下', '字典里查一下', '这个典型案例', '典藏版多少钱', '古典音乐',
+    '我在听音乐', '很快乐', '娱乐圈', '可乐好喝吗', '乐器怎么选', '乐意帮忙', '乐趣在哪',
+    '草稿放哪了', '草莓蛋糕', '除草工具', '梗概写完了', '心梗是什么症状',
+    '帮我看下报错日志', '今天有点难受', '数据库配置怎么改',
+  ]) {
+    assert.equal(hasPlayfulSignal(text), false, text);
+  }
+});
 
 test('meme agent generates quote meme for explicit quote command', () => {
   const result = decideMemeAction({

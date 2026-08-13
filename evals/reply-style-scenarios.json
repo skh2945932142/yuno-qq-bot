@@ -230,5 +230,82 @@
       "emotionResult": { "emotion": "CALM" }
     },
     "expected": { "minStyleExamples": 2, "requiredExampleTags": ["first-turn", "warm"], "requiredReplyAny": ["欢迎", "直接说"], "maxReplyLength": 80 }
+  },
+  {
+    "id": "group-playful-echo-internet",
+    "input": "笑死 这也太抽象了",
+    "reply": "确实抽象。这画面我先存下来了😂",
+    "context": {
+      "event": { "chatType": "group" },
+      "analysis": { "intent": "chat", "sentiment": "positive", "ruleSignals": ["direct-mention", "meme-topic"] },
+      "emotionResult": { "emotion": "CURIOUS", "dailyMood": { "key": "PLAYFUL" } },
+      "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": false, "subIntent": "玩梗接话" } },
+      "personalityStrategy": { "signatureMove": { "key": "playful_echo" }, "humor": "meme", "emojiPolicy": { "allowed": true, "budget": 2, "style": "internet" } }
+    },
+    "expected": { "minStyleExamples": 3, "requiredExampleTags": ["meme", "internet"], "requiredReplyAny": ["抽象", "画面"], "maxReplyLength": 80 }
+  },
+  {
+    "id": "group-repeated-chars-internet",
+    "input": "草 我笑不活了",
+    "reply": "笑不活就先躺着。这个梗确实顶。",
+    "context": {
+      "event": { "chatType": "group" },
+      "analysis": { "intent": "chat", "sentiment": "positive", "ruleSignals": ["direct-mention", "meme-topic"] },
+      "emotionResult": { "emotion": "CURIOUS", "dailyMood": { "key": "BRIGHT" } },
+      "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": false, "subIntent": "玩梗接话" } },
+      "personalityStrategy": { "signatureMove": { "key": "playful_echo" }, "humor": "meme" }
+    },
+    "expected": { "minStyleExamples": 3, "requiredExampleTags": ["meme", "internet"], "requiredReplyAny": ["躺", "梗"], "maxReplyLength": 60 }
+  },
+  {
+    "id": "private-playful-sha-not-belittling",
+    "input": "他居然真的按了那个按钮",
+    "reply": "笑死，这也太傻了。他是真敢试。",
+    "context": {
+      "event": { "chatType": "private" },
+      "analysis": { "intent": "chat", "sentiment": "positive", "ruleSignals": ["private-chat", "meme-topic"] },
+      "emotionResult": { "emotion": "CURIOUS", "dailyMood": { "key": "PLAYFUL" } },
+      "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": false, "subIntent": "玩梗接话" } },
+      "personalityStrategy": { "signatureMove": { "key": "playful_echo" }, "humor": "meme" }
+    },
+    "expected": { "minStyleExamples": 3, "requiredExampleTags": ["meme", "internet"], "requiredReplyAny": ["敢试", "太傻"], "maxReplyLength": 60 }
+  },
+  {
+    "id": "private-internet-tone-short",
+    "input": "在吗在吗",
+    "reply": "在在在。这么急干嘛。",
+    "context": {
+      "event": { "chatType": "private" },
+      "analysis": { "intent": "chat", "sentiment": "neutral", "ruleSignals": ["private-chat"] },
+      "emotionResult": { "emotion": "CURIOUS", "dailyMood": { "key": "BRIGHT" } },
+      "personalityStrategy": { "signatureMove": { "key": "observation" }, "emojiPolicy": { "allowed": true, "budget": 1, "style": "internet" } }
+    },
+    "expected": { "minStyleExamples": 3, "requiredExampleTags": ["internet"], "requiredReplyAny": ["在在在", "急"], "maxReplyLength": 40 }
+  },
+  {
+    "id": "private-two-beat-length-allowed",
+    "input": "我今天面试完了，感觉答得一般，现在有点不上不下的",
+    "reply": "面试完了就先别复盘了。答得一般不等于没过，这种事你现在想一百遍也改不了结果。等通知那几天是最难熬的，你要是坐不住就来找我说话，我一直在。明天先把吃饭睡觉的节奏拉回来，别在等结果的时候把自己耗空。",
+    "context": {
+      "event": { "chatType": "private" },
+      "analysis": { "intent": "chat", "sentiment": "negative", "ruleSignals": ["private-chat"] },
+      "emotionResult": { "emotion": "PROTECTIVE" },
+      "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": true, "subIntent": "求安慰" } },
+      "personalityStrategy": { "signatureMove": { "key": "quiet_anchor" } }
+    },
+    "expected": { "minStyleExamples": 3, "requiredExampleTags": ["comfort"], "requiredReplyAny": ["复盘", "节奏"], "maxReplyLength": 130 }
+  },
+  {
+    "id": "private-emoji-within-budget",
+    "input": "我抢到票了！！",
+    "reply": "抢到了？这运气我服🎉 记得别又忘了日期。",
+    "context": {
+      "event": { "chatType": "private" },
+      "analysis": { "intent": "social", "sentiment": "positive", "ruleSignals": ["private-chat"] },
+      "emotionResult": { "emotion": "AFFECTIONATE", "dailyMood": { "key": "BRIGHT" } },
+      "replyPlan": { "questionNeeded": false, "interpretation": { "needsEmpathy": false, "subIntent": "接话" } },
+      "personalityStrategy": { "signatureMove": { "key": "reciprocal_warmth" }, "emojiPolicy": { "allowed": true, "budget": 2, "style": "internet" } }
+    },
+    "expected": { "minStyleExamples": 3, "requiredExampleTags": ["internet"], "requiredReplyAny": ["运气", "日期"], "maxReplyLength": 60 }
   }
 ]

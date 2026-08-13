@@ -15,15 +15,42 @@ const ADVERSARIAL_CONTRAST_REGEX = /(?:倒是[^。！？!?]{0,24}(?:就|还|一�
 const POSSESSIVE_CONTROL_REGEX = /(不许|不准|只能|你只能|别(?:走|离开|消失|不理我)|不可以[^。！？!?]{0,12}(?:跟|和)[^。！？!?]{0,12}(?:别人|他人))/;
 const PERSONAL_ATTACK_REGEX = /(?:你(?:很|太)?(?:自私|虚伪|恶心|可笑|烦人|麻烦|没救)|废物|蠢货|闭嘴)/;
 // 轻蔑词只可在策略明确选择 mild_edge 的当前轮出现，且一条回复最多一次。
-const MILD_BELITTLING_REGEX = /(懒狗|菜狗|笨蛋|怂货|蠢|傻|废物|没救|智商|脑子(?:有问题|进水|是真会)|丢人|无药可救)/g;
+// 只匹配指向人的贬损词。裸的 蠢/傻/智商 会误伤“这也太傻了”“我傻了”“傻笑”“智商掉线”
+// 这类正常玩梗用语，而 removeMildBelittlingClauses 是就地抹字，会把文本改坏
+// （“这也太傻了” -> “这也太了”），所以这两个字只在明确指向对方时才算命中。
+const MILD_BELITTLING_REGEX = /(懒狗|菜狗|笨蛋|怂货|废物|没救|无药可救|丢人|蠢货|傻子|傻逼|智障|智商(?:低|不够|堪忧|为负)|脑子(?:有问题|进水|是真会)|(?:你|真是)(?:很|真|太|够|挺|好)?(?:蠢|傻)(?![笑乐眼白气子逼]))/g;
 const MILD_BELITTLING_TEST_REGEX = new RegExp(MILD_BELITTLING_REGEX.source);
 const ROBOTIC_ACKNOWLEDGEMENT_REGEX = /(?:我(?:(?:已经|会|先|都|也|替你)\s*)*(?:记下|记住|记着|收下|接住)(?:了|啦|这句|这件事|你(?:这句|说的(?:话|内容)))?|这(?:句|句话|件事|条(?:偏好|订阅|提醒)?|个(?:要求|约定)?)(?:我)?(?:(?:已经|会|先|都|也|替你)\s*)*(?:记下|记住|记着|收下|接住)(?:了|啦)?|我(?:听见|听到|知道|明白|了解)(?:了|啦)|(?:(?:已经|都|这就)\s*)?(?:记下|记住|收下|接住)(?:了|啦)|(?:已经|已)?收到(?:了|啦)?)/;
 const EMOJI_DETECT_REGEX = /\p{Extended_Pictographic}/u;
-const EMOJI_REPLACE_REGEX = /\p{Extended_Pictographic}/gu;
 const KAOMOJI_REGEX = /(?:\((?=[^)\r\n]{2,16}\))(?=[^)\r\n]*[｡・ωへ｀´▽ﾉ￣^><≧≦つっヾ；;])[^)\r\n]+\)|[=;:][\-^']?[)(DP]|[｡・ωへ｀´▽ﾉ￣]{3,})/gu;
+// Kaomoji alternative comes first so a parenthesised face is consumed whole
+// instead of being split apart when the budget trim walks the text.
+const EMOJI_OR_KAOMOJI_REGEX = new RegExp(`(?:${KAOMOJI_REGEX.source})|\\p{Extended_Pictographic}`, 'gu');
 
 function resolvePrivateLengthLimit(options = {}) {
-  return options.messageAnalysis?.intent === 'help' ? 140 : 96;
+  return options.messageAnalysis?.intent === 'help' ? 180 : 130;
+}
+
+// null means "no emoji policy in play, leave the text alone". A policy that
+// explicitly disallows emoji resolves to 0 so the trim strips every one.
+function resolveEmojiTrimBudget(options = {}) {
+  const policy = options.personalityStrategy?.emojiPolicy;
+  if (!policy) return null;
+  if (policy.allowed === false) return 0;
+  const budget = Number(policy.budget);
+  return Number.isFinite(budget) && budget >= 0 ? budget : null;
+}
+
+// Trimming to the budget rather than deleting every emoji is what lets a livelier
+// emoji allowance actually reach the user: the old all-or-nothing strip meant any
+// budget above zero was indistinguishable from one.
+function trimEmojiToBudget(text, budget) {
+  if (!Number.isFinite(budget)) return String(text || '');
+  let seen = 0;
+  return String(text || '').replace(EMOJI_OR_KAOMOJI_REGEX, (match) => {
+    seen += 1;
+    return seen <= budget ? match : '';
+  });
 }
 
 function isGroupChat(options = {}) {
@@ -421,7 +448,13 @@ export function polishReplyNaturalness(text, options = {}) {
 
   const inspection = inspectReplyNaturalness(original, options);
   const directAttentionOutput = polishDirectAttentionHook(original, options);
-  if (inspection.ok && directAttentionOutput === original) return original;
+  // An over-budget emoji count is itself a reason to run the polish path. Without
+  // this the emoji policy only ever applied when some unrelated flag had already
+  // fired, so any budget above zero behaved exactly like an unlimited one.
+  const emojiTrimmedOutput = trimEmojiToBudget(original, resolveEmojiTrimBudget(options));
+  if (inspection.ok && directAttentionOutput === original && emojiTrimmedOutput === original) {
+    return original;
+  }
 
   let output = original
     .replace(AI_DISCLAIMER_SENTENCE_REGEX, '')
@@ -443,11 +476,7 @@ export function polishReplyNaturalness(text, options = {}) {
   if (inspection.flags.includes('unprompted-belittling')) {
     output = removeMildBelittlingClauses(output);
   }
-  if (options.personalityStrategy?.emojiPolicy?.allowed === false) {
-    output = output
-      .replace(EMOJI_REPLACE_REGEX, '')
-      .replace(KAOMOJI_REGEX, '');
-  }
+  output = trimEmojiToBudget(output, resolveEmojiTrimBudget(options));
 
   const normalized = normalizeWhitespace(output)
     .replace(/\s*([，。！？!?、；;：:])\s*/g, '$1')

@@ -63,10 +63,14 @@ export function buildStyleEvalContext(scenario = {}) {
       performanceProfile: 'standard_chat',
       temperature: 0.72,
       reasoningEffort: 'low',
-      guidance: isGroup ? '群聊短接话。' : '私聊一到两句。',
+      guidance: isGroup ? '群聊短接话。' : '私聊一到三句。',
       ...(context.replyLengthProfile || {}),
     },
     knowledge: context.knowledge || { documents: [] },
+    // Scenarios can pin the signature move and emoji policy so the eval exercises
+    // the same retrieval and gate inputs the workflow uses.
+    personalityStrategy: context.personalityStrategy || null,
+    conversationState: context.conversationState || null,
   };
 }
 
@@ -128,6 +132,10 @@ export async function evaluateStyleScenario(scenario, deps = {}) {
     event: context.event,
     route: context.route,
     replyLengthProfile: context.replyLengthProfile,
+    messageAnalysis: context.analysis,
+    replyPlan: context.replyPlan,
+    personalityStrategy: context.personalityStrategy,
+    conversationState: context.conversationState,
   });
   const styleExamples = await retrieveReplyStyleExamples({
     event: context.event,
@@ -137,6 +145,7 @@ export async function evaluateStyleScenario(scenario, deps = {}) {
     replyPlan: context.replyPlan,
     userTurn: scenario.input || '',
     replyLengthProfile: context.replyLengthProfile,
+    personalityStrategy: context.personalityStrategy,
   }, deps);
   const notes = buildNotes({ reply, naturalness, styleExamples, expected });
   const passed = notes.length === 0;

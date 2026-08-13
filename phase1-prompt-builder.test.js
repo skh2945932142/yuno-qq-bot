@@ -1,6 +1,73 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildReplyContext } from './src/prompt-builder.js';
+import { resolvePersonalityStrategy } from './src/personality-strategy.js';
+
+// Renders the prompt the way message-workflow does, with a real strategy object,
+// so assertions about rule duplication cover the production shape.
+function buildProductionPrompt(overrides = {}) {
+  const event = {
+    platform: 'qq',
+    chatType: 'private',
+    chatId: 'c1',
+    userId: 'u1',
+    userName: 'Alice',
+    messageId: 'm1',
+    ...(overrides.event || {}),
+  };
+  const messageAnalysis = {
+    intent: 'chat', sentiment: 'neutral', relevance: 0.8, ruleSignals: [],
+    ...(overrides.messageAnalysis || {}),
+  };
+  const replyPlan = {
+    type: 'direct',
+    depth: 'short',
+    questionNeeded: false,
+    interpretation: { subIntent: '接话', tone: '自然', expectsDepth: 'short', needsEmpathy: false },
+    ...(overrides.replyPlan || {}),
+  };
+  const emotionResult = {
+    emotion: 'CURIOUS', intensity: 0.4, toneHints: ['观察'],
+    ...(overrides.emotionResult || {}),
+  };
+  const isPrivate = event.chatType === 'private';
+  const strategy = resolvePersonalityStrategy({
+    event,
+    relation: { affection: 40 },
+    conversationState: { messages: [] },
+    messageAnalysis,
+    emotionResult,
+    replyPlan,
+  });
+
+  return buildReplyContext({
+    event,
+    route: { category: isPrivate ? 'private_chat' : 'group_chat' },
+    relation: { affection: 40, memorySummary: '' },
+    userState: { currentEmotion: 'CURIOUS' },
+    userProfile: { profileSummary: '', favoriteTopics: [], dislikes: [] },
+    conversationState: { rollingSummary: '', messages: [] },
+    groupState: isPrivate ? null : { mood: 'CALM', activityLevel: 30, recentTopics: [] },
+    recentEvents: [],
+    messageAnalysis,
+    emotionResult,
+    knowledge: { documents: [] },
+    isAdmin: false,
+    specialUser: null,
+    replyLengthProfile: {
+      tier: 'balanced',
+      maxTokens: 240,
+      historyLimit: 3,
+      promptProfile: 'standard',
+      performanceProfile: 'standard_chat',
+      guidance: '自然回答。',
+      ...(overrides.replyLengthProfile || {}),
+    },
+    replyPlan,
+    personalityStrategy: { ...strategy, ...(overrides.personalityStrategy || {}) },
+    replyStyleExamples: overrides.replyStyleExamples || [],
+  });
+}
 
 test('buildReplyContext injects special-user persona and diary memory cues', () => {
   const prompt = buildReplyContext({
@@ -93,7 +160,7 @@ test('buildReplyContext injects special-user persona and diary memory cues', () 
   assert.match(prompt, /服务式收尾/);
   assert.match(prompt, /未来日记/);
   assert.match(prompt, /敏锐观察者和有主见/);
-  assert.match(prompt, /默认不使用“懒狗、菜狗、笨蛋、怂”/);
+  assert.match(prompt, /严重边界/);
   assert.match(prompt, /本轮辨识度动作/);
   assert.match(prompt, /接话规划/);
   assert.match(prompt, /当前理解/);
@@ -137,7 +204,7 @@ test('buildReplyContext keeps private and group replies concise without counseli
     groupState: { mood: 'CALM', activityLevel: 35, recentTopics: [] },
   });
 
-  assert.match(privatePrompt, /私聊通常 1-2 句/);
+  assert.match(privatePrompt, /私聊通常 1-3 句/);
   assert.match(privatePrompt, /直接表达偏爱、开心、想念、吃味和不爽/);
   assert.match(groupPrompt, /群聊通常 1 句/);
   assert.match(groupPrompt, /不展开私人记忆或暧昧内容/);
@@ -562,9 +629,89 @@ test('persona keeps a distinct observant stance without default toxic banter', (
   assert.match(prompt, /敏锐观察/);
   assert.match(prompt, /有主见/);
   assert.match(prompt, /不把人当笑点/);
-  assert.match(prompt, /不否定对方整个人/);
+  assert.match(prompt, /羞辱对方/);
   assert.match(prompt, /智力或长相/);
   assert.doesNotMatch(prompt, /毒舌损友/);
   assert.doesNotMatch(prompt, /日常可以讽刺、可以损/);
   assert.doesNotMatch(prompt, /这轮可以更冲一点/);
+});
+
+test('each behavioural rule is stated once instead of repeated across sections', () => {
+  const prompt = buildProductionPrompt();
+  const occurrences = (needle) => prompt.split(needle).length - 1;
+
+  for (const rule of [
+    '轻蔑称呼',
+    '心理咨询',
+    '服务式收尾',
+    '揣测动机',
+    '追问最多一个',
+    '不否定对方整个人',
+    '<think>',
+  ]) {
+    assert.equal(occurrences(rule), 1, `${rule} should appear exactly once`);
+  }
+  assert.equal(occurrences('最多追问一个'), 0);
+});
+
+test('the prompt reads as a character sheet rather than a compliance document', () => {
+  const prohibitionLines = (prompt) => prompt
+    .split('\n')
+    .filter((line) => /不要|不得|禁止|默认不|不使用|不写|不把|不用|不复述|不进入|不刷屏|不解释|不编造|不演|不固定|不攻击|不限制|不否定|不连续|不围/.test(line))
+    .length;
+
+  // Before the dedup a standard prompt rendered roughly 45 prohibition clauses,
+  // which crowded out the few lines that actually describe how Yuno sounds.
+  assert.ok(prohibitionLines(buildProductionPrompt()) <= 26, 'private prompt carries too many prohibitions');
+  assert.ok(
+    prohibitionLines(buildProductionPrompt({ event: { chatType: 'group' } })) <= 26,
+    'group prompt carries too many prohibitions'
+  );
+});
+
+test('the internet-tone section gives a concrete inventory and the per-turn emoji budget', () => {
+  const oneEmoji = buildProductionPrompt();
+  assert.match(oneEmoji, /网感用法/);
+  assert.match(oneEmoji, /语气词/);
+  assert.match(oneEmoji, /重复字/);
+  assert.match(oneEmoji, /接梗方式/);
+  assert.match(oneEmoji, /本轮表情额度=1/);
+
+  const twoEmoji = buildProductionPrompt({
+    personalityStrategy: { emojiPolicy: { allowed: true, budget: 2, style: 'internet' }, humor: 'meme' },
+  });
+  assert.match(twoEmoji, /本轮表情额度=2/);
+  assert.match(twoEmoji, /这轮是玩梗轮/);
+
+  const noEmoji = buildProductionPrompt({
+    personalityStrategy: { emojiPolicy: { allowed: false, budget: 0, style: 'internet' } },
+  });
+  assert.match(noEmoji, /本轮表情额度=0/);
+  assert.doesNotMatch(noEmoji, /本轮表情额度=[12]/);
+});
+
+test('human style samples are placed ahead of the strategy fields', () => {
+  const prompt = buildProductionPrompt({
+    replyStyleExamples: [
+      { id: 'a', scene: 'private', intent: 'chat', userText: '在吗', humanReply: '在啊，怎么了。' },
+      { id: 'b', scene: 'private', intent: 'chat', userText: '笑死', humanReply: '这个我确实绷不住了草。' },
+    ],
+  });
+
+  const stylePosition = prompt.indexOf('真人回复风格参考');
+  const strategyPosition = prompt.indexOf('人格策略');
+  assert.ok(stylePosition > 0, 'style samples must be rendered');
+  assert.ok(stylePosition < strategyPosition, 'style samples must come before the strategy fields');
+  assert.match(prompt, /语气、句长、标点和用词密度优先对齐这些样例/);
+});
+
+test('the punchy micro style asks for a short reply that still lands', () => {
+  const punchy = buildProductionPrompt({ personalityStrategy: { microStyle: 'punchy' } });
+  assert.match(punchy, /本轮语气密度=punchy/);
+  assert.match(punchy, /这轮走短促有劲/);
+  assert.doesNotMatch(punchy, /这轮走极简/);
+
+  const terse = buildProductionPrompt({ personalityStrategy: { microStyle: 'terse' } });
+  assert.match(terse, /这轮走极简/);
+  assert.doesNotMatch(terse, /这轮走短促有劲/);
 });
