@@ -97,6 +97,24 @@ test('doctor fails embedding check when provider returns an empty vector set', a
 });
 
 test('doctor marks qdrant as fail when configured endpoint is unreachable', async () => {
+  const result = await runCheck('qdrant', () => checkQdrant({
+    config: {
+      qdrantUrl: 'http://127.0.0.1:6333',
+      qdrantCollection: 'qq_bot_knowledge',
+      qdrantApiKey: '',
+      requestTimeoutMs: 1000,
+    },
+    httpGet: async () => {
+      const error = new Error('bad gateway');
+      error.response = { status: 502 };
+      throw error;
+    },
+  }));
+
+  assert.equal(result.status, 'fail');
+  assert.match(result.detail, /bad gateway/i);
+});
+
 test('doctor validates the SiliconFlow Dense + Rerank retrieval provider', async () => {
   const result = await checkRetrievalProvider({
     config: {
@@ -142,24 +160,6 @@ test('doctor targets the v2 collection when retrieval v2 is enabled', async () =
 
   assert.equal(requestedUrl, 'http://qdrant.invalid/collections/qq_bot_retrieval_v2');
   assert.match(result.detail, /qq_bot_retrieval_v2/);
-});
-
-  const result = await runCheck('qdrant', () => checkQdrant({
-    config: {
-      qdrantUrl: 'http://127.0.0.1:6333',
-      qdrantCollection: 'qq_bot_knowledge',
-      qdrantApiKey: '',
-      requestTimeoutMs: 1000,
-    },
-    httpGet: async () => {
-      const error = new Error('bad gateway');
-      error.response = { status: 502 };
-      throw error;
-    },
-  }));
-
-  assert.equal(result.status, 'fail');
-  assert.match(result.detail, /bad gateway/i);
 });
 
 test('doctor reports invalid qdrant url before making a request', async () => {
