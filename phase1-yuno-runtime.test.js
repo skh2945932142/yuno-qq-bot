@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   dispatchAutomationToolResults,
   getYunoRuntimeStatus,
@@ -210,6 +211,48 @@ test('runtime readiness probes report invalid Qdrant URLs and missing voice conf
   });
   assert.equal(readiness.qdrant.reason, 'invalid-url:missing-protocol');
   assert.equal(readiness.voice.reason, 'tts-config-missing');
+});
+
+test('voice readiness reports a missing silk encoder instead of looking healthy', async () => {
+  const voiceConfig = {
+    qdrantUrl: '',
+    enableVoice: true,
+    ttsProvider: 'mimo',
+    ttsModel: 'mimo-v2.5-tts-voicedesign',
+    ttsVoiceDesign: '年轻女性，声线清亮偏柔。',
+    ttsBaseUrl: 'https://tts.invalid/v1/chat/completions',
+    ttsApiKey: 'tts-key',
+  };
+
+  // silk-sdk is an optionalDependency, so a failed node-gyp build leaves it absent.
+  const missing = await probeRuntimeReadiness(voiceConfig, {
+    resolveFfmpegPath: async () => '/usr/bin/ffmpeg',
+    isSilkEncoderAvailable: async () => false,
+  });
+  assert.equal(missing.voice.enabled, true);
+  assert.equal(missing.voice.ready, false);
+  assert.equal(missing.voice.reason, 'silk-encoder-unavailable');
+
+  const present = await probeRuntimeReadiness(voiceConfig, {
+    resolveFfmpegPath: async () => '/usr/bin/ffmpeg',
+    isSilkEncoderAvailable: async () => true,
+  });
+  assert.equal(present.voice.ready, true);
+  assert.equal(present.voice.reason, 'ok');
+
+  // ffmpeg is still checked first, and its own failure keeps its own reason.
+  const noFfmpeg = await probeRuntimeReadiness(voiceConfig, {
+    resolveFfmpegPath: async () => '',
+    isSilkEncoderAvailable: async () => true,
+  });
+  assert.equal(noFfmpeg.voice.reason, 'ffmpeg-unavailable');
+});
+
+test('silk-sdk stays an optional dependency so a failed native build cannot break the image', async () => {
+  const manifest = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
+
+  assert.equal('silk-sdk' in (manifest.optionalDependencies || {}), true);
+  assert.equal('silk-sdk' in (manifest.dependencies || {}), false);
 });
 
 

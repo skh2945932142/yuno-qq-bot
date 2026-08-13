@@ -16,6 +16,18 @@ async function getSilkEncode() {
   return _silkEncode;
 }
 
+// silk-sdk is an optionalDependency: its node-gyp build downloads Node headers, so a
+// network failure during install leaves the package absent rather than failing the
+// whole install. Readiness probing uses this so /ready can report voice as degraded
+// instead of letting every voice send fail one at a time.
+export async function isSilkEncoderAvailable() {
+  try {
+    return typeof (await getSilkEncode()) === 'function';
+  } catch {
+    return false;
+  }
+}
+
 async function fileExists(targetPath) {
   try {
     await access(targetPath);

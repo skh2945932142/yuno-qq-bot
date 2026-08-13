@@ -50,8 +50,10 @@
     "node-cron": "^4.2.1",
     "openai": "^6.27.0",
     "semver": "7.7.4",
-    "silk-sdk": "^0.2.2",
     "ws": "8.21.1"
+  },
+  "optionalDependencies": {
+    "silk-sdk": "^0.2.2"
   },
   "devDependencies": {
     "c8": "12.0.0"

@@ -8,7 +8,7 @@ import { runYunoConversation } from './yuno-core.js';
 import { createQueueManager } from './queue-manager.js';
 import { initializeTelemetry, shutdownTelemetry } from './telemetry.js';
 import { getRuntimeServices, resetRuntimeServices, setRuntimeServices } from './runtime-services.js';
-import { resolveFfmpegPath } from './services/audio.js';
+import { isSilkEncoderAvailable, resolveFfmpegPath } from './services/audio.js';
 import { buildDeliveryKey, createDeliveryLedger } from './delivery-ledger.js';
 import { getActiveConversationCount, waitForConversationsIdle } from './conversation-executor.js';
 import { getRetrievalProviderStatus } from './retrieval-gateway.js';
@@ -154,7 +154,7 @@ function probeRetrievalReadiness(runtimeConfig = config) {
   };
 }
 
-async function probeVoiceReadiness(runtimeConfig = config) {
+async function probeVoiceReadiness(runtimeConfig = config, deps = {}) {
   if (!runtimeConfig.enableVoice) {
     return { enabled: false, ready: true, reason: 'disabled' };
   }
@@ -168,17 +168,26 @@ async function probeVoiceReadiness(runtimeConfig = config) {
     return { enabled: true, ready: false, reason: 'tts-config-missing' };
   }
 
-  const ffmpegPath = await resolveFfmpegPath({ skipCache: true });
-  return ffmpegPath
+  const ffmpegPath = await (deps.resolveFfmpegPath || resolveFfmpegPath)({ skipCache: true });
+  if (!ffmpegPath) {
+    return { enabled: true, ready: false, reason: 'ffmpeg-unavailable' };
+  }
+
+  // silk-sdk is optional because its node-gyp build needs network access for Node
+  // headers, so a failed install leaves it absent instead of breaking the image. Without
+  // this check /ready would report voice as ok while every send logged "Voice encoding
+  // failed" one at a time.
+  const silkAvailable = await (deps.isSilkEncoderAvailable || isSilkEncoderAvailable)();
+  return silkAvailable
     ? { enabled: true, ready: true, reason: 'ok', ffmpegPath }
-    : { enabled: true, ready: false, reason: 'ffmpeg-unavailable' };
+    : { enabled: true, ready: false, reason: 'silk-encoder-unavailable', ffmpegPath };
 }
 
-export async function probeRuntimeReadiness(runtimeConfig = config) {
+export async function probeRuntimeReadiness(runtimeConfig = config, deps = {}) {
   const [qdrant, retrievalGateway, voice] = await Promise.all([
     probeQdrantReadiness(runtimeConfig),
     probeRetrievalReadiness(runtimeConfig),
-    probeVoiceReadiness(runtimeConfig),
+    probeVoiceReadiness(runtimeConfig, deps),
   ]);
   return { qdrant, retrievalGateway, voice };
 }
